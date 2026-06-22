@@ -1,0 +1,11 @@
+# Poll the Proxmox API and append to the SQLite store. Triggered by metrics-collect.timer.
+# Install to /etc/systemd/system/ on the collector host (runs as the agent user). See ../README.md.
+[Unit]
+Description=Collect Proxmox metrics into SQLite (long-term)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=youruser
+EnvironmentFile=/etc/metrics/metrics.env
+ExecStart=/usr/bin/python3 %h/moprox-tooling/services/metrics/collect.py

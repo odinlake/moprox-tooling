@@ -1,0 +1,11 @@
+# Daily snapshot of the backup inventory (what's held + logical sizes). Triggered by
+# metrics-backups.timer. Install to /etc/systemd/system/ on the collector host. See ../README.md.
+[Unit]
+Description=Snapshot Proxmox/PBS backup inventory
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=youruser
+EnvironmentFile=/etc/metrics/metrics.env
+ExecStart=/usr/bin/python3 %h/moprox-tooling/services/metrics/collect.py backups

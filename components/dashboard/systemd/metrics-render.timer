@@ -1,0 +1,10 @@
+# Re-render charts hourly. `systemctl enable --now metrics-render.timer` on the collector host.
+[Unit]
+Description=Render metrics charts hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

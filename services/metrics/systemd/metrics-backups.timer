@@ -1,0 +1,12 @@
+# Snapshot the backup inventory once a day (backups change daily). Enable on the collector host:
+# systemctl enable --now metrics-backups.timer
+[Unit]
+Description=Daily backup-inventory snapshot
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

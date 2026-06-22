@@ -1,0 +1,14 @@
+# Render charts from the SQLite store into the static site (and optionally publish).
+# Triggered by metrics-render.timer. Install to /etc/systemd/system/ on the collector host.
+[Unit]
+Description=Render long-term metrics charts
+
+[Service]
+Type=oneshot
+User=youruser
+EnvironmentFile=/etc/metrics/metrics.env
+ExecStart=/usr/bin/python3 %h/moprox-tooling/components/dashboard/render.py
+# To publish to GitHub Pages, point METRICS_SITE at a checked-out Pages repo and add a
+# second ExecStart that commits + pushes it, e.g.:
+#   ExecStart=/usr/bin/git -C %h/projects/metrics-site commit -am "metrics %i" --quiet
+#   ExecStart=/usr/bin/git -C %h/projects/metrics-site push --quiet

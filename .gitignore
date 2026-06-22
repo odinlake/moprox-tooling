@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Local config / secrets — never commit
+*.env
+!*.env.example
+*.db
+secrets/
+
+# Rendered site output
+site/
+
+# OS / editor noise
+.DS_Store
+*.swp
