@@ -43,11 +43,13 @@
   <div class="tabs">
     <button data-tab="system" class="active">System</button>
     <button data-tab="training">Training</button>
+    <button data-tab="dns">DNS</button>
   </div>
 </header>
 <main>
   <section id="system"></section>
   <section id="training" hidden></section>
+  <section id="dns" hidden></section>
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
@@ -170,15 +172,49 @@ function showDetail(s){
     ${repTable}`;
 }
 
+// ================= DNS =================
+async function loadDNS(){
+  const data = await J("data/dns/blocked.json");
+  const days = data.blocked_days || [];     // sorted newest-first by the exporter
+  const render = x => {
+    const win = days.slice(0, x);
+    const agg = {};
+    win.forEach(d=>d.domains.forEach(o=>agg[o.domain]=(agg[o.domain]||0)+o.count));
+    const list = Object.entries(agg).sort((a,b)=>b[1]-a[1]);
+    const total = list.reduce((a,e)=>a+e[1],0), max = list.length?list[0][1]:1;
+    $("#dnssum").textContent = `${total} blocks · ${list.length} distinct domains · last ${x} day${x>1?'s':''} (have ${days.length})`;
+    $("#dnslist").innerHTML = list.length ? list.map(([dom,c])=>`<tr>
+      <td style="word-break:break-all">${dom}</td><td style="text-align:right">${c}</td>
+      <td style="width:38%"><div class="bar"><i style="width:${(100*c/max).toFixed(1)}%;background:#f85149"></i></div></td></tr>`).join("")
+      : `<tr><td colspan="3" class="muted">No blocked queries in this window.</td></tr>`;
+  };
+  $("#dns").innerHTML = `
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+        <h2>Blocked DNS</h2>
+        <label class="muted" style="white-space:nowrap">Last <b id="dnsx">7</b> days
+          <input id="dnsrange" type="range" min="1" max="30" value="7" style="vertical-align:middle;width:160px"></label>
+      </div>
+      <div class="muted" id="dnssum" style="margin:.3rem 0"></div>
+      <div style="max-height:600px;overflow:auto"><table>
+        <tr><th>domain</th><th style="text-align:right">blocks</th><th></th></tr>
+        <tbody id="dnslist"></tbody></table></div>
+    </div>`;
+  const r=$("#dnsrange"); r.oninput=()=>{ $("#dnsx").textContent=r.value; render(+r.value); };
+  render(7);
+}
+
 // ---- tabs / boot ----
+const TABS=["system","training","dns"];
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("active"));
   b.classList.add("active");
   const t=b.dataset.tab;
-  $("#system").hidden = t!=="system"; $("#training").hidden = t!=="training";
+  TABS.forEach(id=>$("#"+id).hidden = t!==id);
 });
 loadSystem().catch(e=>$("#system").innerHTML=`<div class="panel">System data unavailable: ${e.message}</div>`);
 loadTraining().catch(e=>$("#training").innerHTML=`<div class="panel">Training data unavailable: ${e.message}</div>`);
+loadDNS().catch(e=>$("#dns").innerHTML=`<div class="panel">DNS data unavailable: ${e.message}</div>`);
 </script>
 </body>
 </html>

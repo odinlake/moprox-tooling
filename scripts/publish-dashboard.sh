@@ -12,6 +12,7 @@ WHAT="${1:-all}"
 STAGE="$(mktemp -d)"; DASH="$STAGE/dashboard"
 PVE_ENV="${PVE_ENV:-$HOME/.config/proxmox/pve-metrics.env}"
 POLAR_RAW="${POLAR_RAW:-$HOME/projects/private-data/polar/raw}"
+DNS_EXPORTER="${DNS_EXPORTER:-http://10.10.10.3:9153/}"   # on-subnet HTTP — survives the egress cutover
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$DASH/data"
@@ -24,6 +25,21 @@ if [[ "$WHAT" == all || "$WHAT" == system ]]; then
 fi
 if [[ "$WHAT" == all || "$WHAT" == training ]]; then
   POLAR_RAW="$POLAR_RAW" OUT="$DASH/data/training/sessions.json" python3 "$REPO/services/training/build.py"
+fi
+if [[ "$WHAT" == all || "$WHAT" == dns ]]; then
+  mkdir -p "$DASH/data/dns"
+  if curl -fsS --max-time 10 "$DNS_EXPORTER" -o "$STAGE/dns-raw.json" 2>/dev/null; then
+    python3 - "$STAGE/dns-raw.json" "$DASH/data/dns/blocked.json" <<'PY'
+import sys, json, time
+d = json.load(open(sys.argv[1]))
+# publish only blocked-by-day + totals — NOT the per-client IPs the exporter also exposes
+out = {"generated": int(time.time()), "totals": d.get("totals", {}), "blocked_days": d.get("blocked_days", [])}
+json.dump(out, open(sys.argv[2], "w"), separators=(",", ":"))
+PY
+    echo "wrote $DASH/data/dns/blocked.json"
+  else
+    echo "WARN: DNS exporter unreachable ($DNS_EXPORTER) — skipping dns data"
+  fi
 fi
 
 # --- publish to gh-pages/dashboard via a worktree, flat history ---
