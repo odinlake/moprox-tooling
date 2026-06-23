@@ -24,6 +24,8 @@
   table{width:100%;border-collapse:collapse;font-size:.9rem}
   th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--bd)}
   th{color:var(--mut);font-weight:500;font-size:.8rem}
+  table.compact th,table.compact td{padding:.16rem .45rem;font-size:.82rem}
+  .spark{display:block}
   .badge{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.75rem;font-weight:600;color:#0d1117}
   .bar{height:8px;border-radius:4px;background:#21262d;overflow:hidden}.bar>i{display:block;height:100%;background:var(--accent)}
   .row{display:flex;gap:1rem;flex-wrap:wrap}
@@ -131,9 +133,11 @@ function drawSysCharts(tf){
 function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));return t.getUTCFullYear()+"-W"+String(Math.ceil(((t-ys)/86400000+1)/7)).padStart(2,"0");}
 async function loadTraining(){
   const data = await J("data/training/sessions.json");
-  const S = data.sessions;
-  const counts={}; S.forEach(s=>counts[s.cat]=(counts[s.cat]||0)+1);
+  const all = data.sessions;
+  const cutoff = Date.now() - 365*86400*1000;          // last 12 months
+  const S = all.filter(s => new Date(s.date).getTime() >= cutoff);
   const order=["easy","tempo","trail","vo2max","speed"];
+  const counts={}; S.forEach(s=>counts[s.cat]=(counts[s.cat]||0)+1);
   const legend = order.map(c=>`<span class="seg"><i style="background:${CAT[c]}"></i>${c} ${counts[c]||0}</span>`).join("");
   // weekly stacked counts, last 18 weeks
   const weeks={}; S.forEach(s=>{const w=isoWeek(new Date(s.date));(weeks[w]=weeks[w]||{}); weeks[w][s.cat]=(weeks[w][s.cat]||0)+1;});
@@ -141,23 +145,34 @@ async function loadTraining(){
   const wmax=Math.max(1,...wk.map(w=>order.reduce((a,c)=>a+(weeks[w][c]||0),0)));
   const bars = wk.map(w=>{let y=0,seg="";order.forEach(c=>{const v=weeks[w][c]||0;if(v){const h=100*v/wmax;seg+=`<rect x="0" y="${(100-y-h).toFixed(1)}" width="100" height="${h.toFixed(1)}" fill="${CAT[c]}"/>`;y+=h;}});
     return `<div style="flex:1;text-align:center"><svg viewBox="0 0 100 100" preserveAspectRatio="none" style="height:90px">${seg}</svg><div class="axis" style="font-size:9px;color:var(--mut)">${w.slice(2)}</div></div>`;}).join("");
+  const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const spark = tr => {                                 // tiny inline HR sparkline (subsampled)
+    const n=Math.min(tr.length,48), step=tr.length/n, v=[];
+    for(let i=0;i<n;i++) v.push(tr[Math.floor(i*step)]);
+    let lo=Math.min(...v), hi=Math.max(...v); if(lo===hi)hi=lo+1; const W=88,H=20;
+    let d=""; v.forEach((y,i)=>{ d+=(i?"L":"M")+(W*i/(n-1)).toFixed(1)+" "+(H-1-(H-2)*(y-lo)/(hi-lo)).toFixed(1)+" "; });
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`;
+  };
   $("#training").innerHTML = `
     <div class="grid cards">
-      <div class="panel"><h2>Sessions</h2><div class="stat">${data.count}</div><div class="muted">${S[S.length-1].date.slice(0,10)} → ${S[0].date.slice(0,10)}</div></div>
+      <div class="panel"><h2>Sessions (12 mo)</h2><div class="stat">${S.length}</div><div class="muted">of ${all.length} since ${all[all.length-1].date.slice(0,10)}</div></div>
       <div class="panel" style="grid-column:span 2"><h2>By type</h2><div class="row">${legend}</div>
-        <div class="muted" style="margin-top:.5rem">≥30 min running sessions, HR-classified</div></div>
+        <div class="muted" style="margin-top:.5rem">≥30 min running sessions, HR-classified · last 12 months</div></div>
     </div>
     <div class="panel" style="margin-top:1rem"><h2>Last 18 weeks (sessions by type)</h2><div class="row" style="align-items:flex-end;gap:2px">${bars}</div></div>
     <div class="row" style="margin-top:1rem">
-      <div class="panel" style="flex:1;min-width:300px"><h2>Sessions</h2>
-        <div style="max-height:520px;overflow:auto"><table id="slist"><tr><th>date</th><th>type</th><th>min</th><th>avg</th><th>max</th><th>reps</th></tr>
-        ${S.slice(0,200).map((s,i)=>`<tr class="sessrow" data-i="${i}"><td>${s.date.slice(0,10)}</td>
+      <div class="panel" style="flex:1;min-width:330px"><h2>Sessions · last 12 months</h2>
+        <div style="max-height:560px;overflow:auto"><table class="compact" id="slist">
+        <tr><th>day</th><th>type</th><th>min</th><th>avg</th><th>HR</th></tr>
+        ${S.map((s,i)=>{const dt=new Date(s.date);return `<tr class="sessrow" data-i="${i}">
+          <td style="white-space:nowrap">${WD[dt.getDay()]} <span class="muted">${s.date.slice(5,10)}</span></td>
           <td><span class="badge" style="background:${CAT[s.cat]}">${s.cat}</span></td>
-          <td>${s.dur_min.toFixed(0)}</td><td>${s.hr_avg}</td><td>${s.hr_max}</td><td>${s.nint||""}</td></tr>`).join("")}</table></div></div>
+          <td>${s.dur_min.toFixed(0)}</td><td>${s.hr_avg}</td>
+          <td style="color:${CAT[s.cat]}">${spark(s.trace)}</td></tr>`;}).join("")}</table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Session detail</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
   $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(S[+r.dataset.i]));
-  showDetail(S[0]);
+  if(S.length) showDetail(S[0]);
 }
 function showDetail(s){
   const tr=s.trace, t=tr.map((_,i)=>i);
