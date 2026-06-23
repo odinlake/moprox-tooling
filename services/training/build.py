@@ -106,15 +106,22 @@ def build(raw_dir, out_path):
             rough = round(st.pstdev([a-b for a,b in zip(sm,slow)]),1) if len(sm)>120 else 0.0
             max5 = round(rolling_mean_max(hr,300)); dur = len(hr)/60.0
             reps = intervals(sm, REP_MAXHR_FRAC*maxhr)
-            cat = classify(dur, len(reps), rough, max5)
-            if cat == "dropped": continue
+            sdate = d.get("startTime","")[:19]
+            # Only 2026+ sessions of >=30 min get HR-classified; everything older or shorter is
+            # 'other' (the pre-2026 history has different gear/profiles the classifier isn't tuned
+            # for, and short sessions aren't real training). Previously these were dropped.
+            if sdate[:4] < "2026" or dur < MIN_DURATION_MIN:
+                cat = "other"
+            else:
+                cat = classify(dur, len(reps), rough, max5)
+            tp = 60 if cat == "other" else TRACE_POINTS   # coarse trace for the uncategorised history
             sessions.append(dict(
                 id=(d.get("identifier") or {}).get("id","")[:8],
-                date=d.get("startTime","")[:19], sport=sid, cat=cat,
+                date=sdate, sport=sid, cat=cat,
                 dur_min=round(dur,1), hr_avg=round(st.mean(hr)), hr_max=round(max(hr)),
-                max5=max5, rough=rough, nint=len(reps),
-                reps=[{"t":round(r["at"]/len(hr),3),"peak":r["peak"],"trough":r["trough"],"work_s":r["work_s"]} for r in reps],
-                trace=downsample(hr, TRACE_POINTS), trace_step_s=round(len(hr)/min(len(hr),TRACE_POINTS)),
+                max5=max5, rough=rough, nint=len(reps) if cat != "other" else 0,
+                reps=[{"t":round(r["at"]/len(hr),3),"peak":r["peak"],"trough":r["trough"],"work_s":r["work_s"]} for r in reps] if cat != "other" else [],
+                trace=downsample(hr, tp), trace_step_s=round(len(hr)/min(len(hr),tp)),
             ))
     sessions.sort(key=lambda s: s["date"], reverse=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
