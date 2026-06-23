@@ -137,12 +137,20 @@ async function loadTraining(){
   const order=["easy","tempo","trail","vo2max","speed","other"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const WINS=[[30,"1 mo"],[90,"3 mo"],[180,"6 mo"],[365,"12 mo"],[730,"2 y"],[1825,"5 y"],[1e12,"all"]];
-  const spark = tr => {                                 // tiny inline HR sparkline (subsampled)
-    const n=Math.min(tr.length,48), step=tr.length/n, v=[];
-    for(let i=0;i<n;i++) v.push(tr[Math.floor(i*step)]);
-    let lo=Math.min(...v), hi=Math.max(...v); if(lo===hi)hi=lo+1; const W=88,H=20;
-    let d=""; v.forEach((y,i)=>{ d+=(i?"L":"M")+(W*i/(n-1)).toFixed(1)+" "+(H-1-(H-2)*(y-lo)/(hi-lo)).toFixed(1)+" "; });
-    return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`;
+  // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 5..55 (left-aligned, so
+  // width ∝ duration; >55 min gets a red overflow tick), y = 120..180 bpm (out-of-range clamps to
+  // flat lines at the edges). Faint floor line = 120 bpm reference.
+  const spark = s => {
+    const tr=s.trace, step=s.trace_step_s, W=104, H=22, T0=300, T1=3300, Y0=120, Y1=180;
+    const stride=Math.max(1,Math.round(tr.length/60));
+    const xt=t=>(t-T0)/(T1-T0)*W, yh=h=>H-1-(H-2)*(Math.max(Y0,Math.min(Y1,h))-Y0)/(Y1-Y0);
+    let d="",pen=false;
+    for(let i=0;i<tr.length;i+=stride){ const t=i*step; if(t<T0)continue; if(t>T1)break;
+      d+=(pen?"L":"M")+xt(t).toFixed(1)+" "+yh(tr[i]).toFixed(1)+" "; pen=true; }
+    const over = tr.length*step>T1 ? `<path d="M${W-3} 1 L${W} 1 L${W-1.5} 5 Z" fill="#f85149"/>` : "";
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="none">`
+      +`<line x1="0" y1="${H-1}" x2="${W}" y2="${H-1}" stroke="#30363d" stroke-width="0.5"/>`
+      +`<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.2"/>${over}</svg>`;
   };
   $("#training").innerHTML = `
     <div class="grid cards">
@@ -182,7 +190,7 @@ async function loadTraining(){
       <td style="white-space:nowrap">${WD[dt.getDay()]} <span class="muted">${s.date.slice(2,10)}</span></td>
       <td><span class="badge" style="background:${CAT[s.cat]}">${s.cat}</span></td>
       <td>${s.dur_min.toFixed(0)}</td><td>${s.hr_avg}</td>
-      <td style="color:${CAT[s.cat]}">${spark(s.trace)}</td></tr>`;}).join("");
+      <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;}).join("");
     $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(S[+r.dataset.i]));
     if(S.length) showDetail(S[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions in this window.</p>';
   };
