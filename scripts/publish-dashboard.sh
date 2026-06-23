@@ -3,20 +3,25 @@
 # under /dashboard (served at https://odinlake.github.io/moprox-tooling/dashboard/).
 #
 # Runs on claude-dev (reads the Proxmox token + the private Polar export). Idempotent; safe to
-# re-run on a timer. Keeps gh-pages history flat by amending a single "publish" commit.
+# re-run on a timer. Builds DIRECTLY into the gh-pages checkout and overwrites only the files it
+# rebuilds, so a partial publish (e.g. 'dns') leaves the other tabs' data intact.
 #
-#   scripts/publish-dashboard.sh [system|training|all]   (default: all)
+#   scripts/publish-dashboard.sh [system|training|dns|all]   (default: all)
 set -Eeuo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WHAT="${1:-all}"
-STAGE="$(mktemp -d)"; DASH="$STAGE/dashboard"
 PVE_ENV="${PVE_ENV:-$HOME/.config/proxmox/pve-metrics.env}"
 POLAR_RAW="${POLAR_RAW:-$HOME/projects/private-data/polar/raw}"
 DNS_EXPORTER="${DNS_EXPORTER:-http://10.10.10.3:9153/}"   # on-subnet HTTP — survives the egress cutover
-trap 'rm -rf "$STAGE"' EXIT
+TMP="$(mktemp -d)"; WT="$(mktemp -d)"
+cleanup(){ git -C "$REPO" worktree remove --force "$WT" 2>/dev/null || true; rm -rf "$TMP" "$WT"; }
+trap cleanup EXIT
 
-mkdir -p "$DASH/data"
-cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"
+# Check out gh-pages and build straight into it — existing files (other tabs' data, the OAuth
+# page, the root index) are preserved; we only overwrite what we rebuild below.
+git -C "$REPO" worktree add -q --force "$WT" gh-pages
+DASH="$WT/dashboard"; mkdir -p "$DASH/data"
+cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"     # shell is cheap; always refresh
 
 if [[ "$WHAT" == all || "$WHAT" == system ]]; then
   [[ -f "$PVE_ENV" ]] || { echo "no $PVE_ENV"; exit 1; }
@@ -28,8 +33,8 @@ if [[ "$WHAT" == all || "$WHAT" == training ]]; then
 fi
 if [[ "$WHAT" == all || "$WHAT" == dns ]]; then
   mkdir -p "$DASH/data/dns"
-  if curl -fsS --max-time 10 "$DNS_EXPORTER" -o "$STAGE/dns-raw.json" 2>/dev/null; then
-    python3 - "$STAGE/dns-raw.json" "$DASH/data/dns/blocked.json" <<'PY'
+  if curl -fsS --max-time 10 "$DNS_EXPORTER" -o "$TMP/dns-raw.json" 2>/dev/null; then
+    python3 - "$TMP/dns-raw.json" "$DASH/data/dns/blocked.json" <<'PY'
 import sys, json, time
 d = json.load(open(sys.argv[1]))
 # publish only blocked-by-day + totals — NOT the per-client IPs the exporter also exposes
@@ -42,18 +47,12 @@ PY
   fi
 fi
 
-# --- publish to gh-pages/dashboard via a worktree, flat history ---
-WT="$(mktemp -d)"
-git -C "$REPO" worktree add -q --force "$WT" gh-pages
-rm -rf "$WT/dashboard"; mkdir -p "$WT/dashboard"
-cp -r "$DASH/." "$WT/dashboard/"
 git -C "$WT" add -A
 if git -C "$WT" diff --cached --quiet; then
   echo "no changes to publish"
 else
-  git -C "$WT" commit -q -m "publish dashboard ($(date -u +%Y-%m-%dT%H:%MZ))" \
+  git -C "$WT" commit -q -m "publish dashboard ${WHAT} ($(date -u +%Y-%m-%dT%H:%MZ))" \
     --author="dashboard-bot <noreply@odinlake.net>"
   git -C "$WT" push -q origin gh-pages
-  echo "published -> https://odinlake.github.io/moprox-tooling/dashboard/"
+  echo "published ($WHAT) -> https://odinlake.github.io/moprox-tooling/dashboard/"
 fi
-git -C "$REPO" worktree remove --force "$WT"
