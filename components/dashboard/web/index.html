@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moprox dashboard</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
+        --easy:#3fb950;--tempo:#d29922;--vo2max:#f85149;--speed:#a371f7;--trail:#58a6ff;--accent:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
+  header{display:flex;align-items:center;gap:1rem;padding:.8rem 1rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--bg);z-index:5}
+  header h1{font-size:1.05rem;margin:0;font-weight:600}
+  .tabs{display:flex;gap:.25rem;margin-left:auto}
+  .tabs button{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer}
+  .tabs button.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
+  main{padding:1rem;max-width:1100px;margin:0 auto}
+  .grid{display:grid;gap:1rem}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .panel{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:1rem}
+  .panel h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);margin:0 0 .6rem}
+  .stat{font-size:1.6rem;font-weight:600}.stat small{font-size:.85rem;color:var(--mut);font-weight:400}
+  .muted{color:var(--mut);font-size:.85rem}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--bd)}
+  th{color:var(--mut);font-weight:500;font-size:.8rem}
+  .badge{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.75rem;font-weight:600;color:#0d1117}
+  .bar{height:8px;border-radius:4px;background:#21262d;overflow:hidden}.bar>i{display:block;height:100%;background:var(--accent)}
+  .row{display:flex;gap:1rem;flex-wrap:wrap}
+  .seg{display:flex;gap:.25rem;align-items:center;font-size:.8rem;color:var(--mut)}
+  .seg i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .sessrow{cursor:pointer}.sessrow:hover{background:#1c2128}
+  .toggle button{background:#21262d;border:1px solid var(--bd);color:var(--mut);padding:.25rem .6rem;border-radius:6px;cursor:pointer;font-size:.8rem}
+  .toggle button.active{color:var(--fg);background:#30363d}
+  svg{display:block;width:100%;height:auto}
+  .axis{fill:var(--mut);font-size:10px}.grid line{stroke:#21262d}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🖥️ moprox</h1>
+  <div class="tabs">
+    <button data-tab="system" class="active">System</button>
+    <button data-tab="training">Training</button>
+  </div>
+</header>
+<main>
+  <section id="system"></section>
+  <section id="training" hidden></section>
+  <p class="muted" id="foot" style="margin-top:2rem"></p>
+</main>
+<script>
+const CAT = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail:"#58a6ff"};
+const $ = s => document.querySelector(s);
+const gib = b => (b/1073741824);
+const fmtDur = s => { s=Math.round(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600); return d?`${d}d ${h}h`:`${h}h ${Math.floor(s%3600/60)}m`; };
+async function J(p){ const r=await fetch(p,{cache:"no-store"}); if(!r.ok) throw new Error(p+" "+r.status); return r.json(); }
+
+// ---- tiny SVG line chart (horizontal axis labels only — house style) ----
+function lineChart(t, lines, opts={}){
+  const W=opts.w||760, H=opts.h||180, padL=44, padR=10, padB=22, padT=8;
+  const xs=t, n=xs.length;
+  let lo=Infinity, hi=-Infinity;
+  lines.forEach(l=>l.vals.forEach(v=>{ if(v!=null){lo=Math.min(lo,v);hi=Math.max(hi,v);} }));
+  if(!isFinite(lo)){lo=0;hi=1;} if(lo===hi)hi=lo+1;
+  if(opts.y0)lo=Math.min(lo,0);
+  const px=i=> padL+(W-padL-padR)*(i/(n-1||1));
+  const py=v=> padT+(H-padT-padB)*(1-(v-lo)/(hi-lo));
+  const path=vals=>{let d="",pen=false;vals.forEach((v,i)=>{if(v==null){pen=false;return;}d+=(pen?"L":"M")+px(i).toFixed(1)+" "+py(v).toFixed(1)+" ";pen=true;});return d;};
+  let g="";
+  for(let k=0;k<=3;k++){const v=lo+(hi-lo)*k/3,y=py(v);g+=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"/>`;
+    g+=`<text class="axis" x="2" y="${(y+3).toFixed(1)}">${(opts.yfmt?opts.yfmt(v):v.toFixed(0))}</text>`;}
+  let xl="";const nlab=Math.min(5,n);
+  for(let k=0;k<nlab;k++){const i=Math.round((n-1)*k/(nlab-1||1));xl+=`<text class="axis" x="${px(i).toFixed(1)}" y="${H-6}" text-anchor="${k===0?'start':k===nlab-1?'end':'middle'}">${opts.xfmt?opts.xfmt(xs[i]):xs[i]}</text>`;}
+  const paths=lines.map(l=>`<path d="${path(l.vals)}" fill="none" stroke="${l.color}" stroke-width="1.6"/>`).join("");
+  const dots=(opts.marks||[]).map(m=>`<circle cx="${px(m.i).toFixed(1)}" cy="${py(m.v).toFixed(1)}" r="3" fill="${m.c||'#fff'}"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}${dots}</svg>`;
+}
+const hm = ts => { const d=new Date(ts*1000); return d.getHours().toString().padStart(2,'0')+":"+d.getMinutes().toString().padStart(2,'0'); };
+const md = ts => { const d=new Date(ts*1000); return (d.getMonth()+1)+"/"+d.getDate(); };
+
+// ================= SYSTEM =================
+let sysData={};
+async function loadSystem(){
+  const [now,day,month] = await Promise.all([J("data/system/now.json"),J("data/system/day.json"),J("data/system/month.json")]);
+  sysData={now,day,month};
+  const g = now.guests.map(x=>`<tr><td>${x.vmid}</td><td>${x.name||'—'}</td><td class="muted">${x.kind}</td>
+     <td>${x.status==='running'?'🟢':'⚪'} ${x.status}</td><td>${x.cpu_pct.toFixed(1)}%</td>
+     <td>${x.mem?gib(x.mem).toFixed(1):'—'} GB</td></tr>`).join("");
+  const stg = now.storage.map(s=>`<div style="margin:.4rem 0"><div class="row" style="justify-content:space-between"><span>${s.storage} <span class="muted">${s.type}</span></span>
+     <span class="muted">${gib(s.used).toFixed(0)}/${gib(s.total).toFixed(0)} GB</span></div>
+     <div class="bar"><i style="width:${(100*s.used/s.total).toFixed(1)}%"></i></div></div>`).join("");
+  $("#system").innerHTML = `
+    <div class="grid cards">
+      <div class="panel"><h2>CPU</h2><div class="stat">${now.cpu_pct.toFixed(1)}<small>% of ${now.cpus}t</small></div><div class="muted">load ${now.load?now.load[0]:'—'}</div></div>
+      <div class="panel"><h2>Memory</h2><div class="stat">${gib(now.mem_used).toFixed(1)}<small>/${gib(now.mem_total).toFixed(0)} GB</small></div></div>
+      <div class="panel"><h2>Uptime</h2><div class="stat">${fmtDur(now.uptime_s)}</div><div class="muted">PVE ${now.pve_version}</div></div>
+      <div class="panel"><h2>Host</h2><div style="font-size:1rem;font-weight:600">${now.model||now.node}</div></div>
+    </div>
+    <div class="grid" style="grid-template-columns:1fr;margin-top:1rem">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between"><h2>Node metrics</h2>
+          <span class="toggle"><button data-tf="day" class="active">24h</button><button data-tf="month">30d</button></span></div>
+        <div id="syscharts"></div>
+      </div>
+      <div class="row">
+        <div class="panel" style="flex:2;min-width:280px"><h2>Guests</h2><table><tr><th>id</th><th>name</th><th>type</th><th>status</th><th>cpu</th><th>mem</th></tr>${g}</table></div>
+        <div class="panel" style="flex:1;min-width:220px"><h2>Storage</h2>${stg}</div>
+      </div>
+    </div>`;
+  $("#syscharts").parentElement.querySelectorAll(".toggle button").forEach(b=>b.onclick=()=>{
+    $("#syscharts").parentElement.querySelectorAll(".toggle button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); drawSysCharts(b.dataset.tf);});
+  drawSysCharts("day");
+}
+function drawSysCharts(tf){
+  const d=sysData[tf], xf = tf==="day"?hm:md;
+  const chart=(title,lines,opts)=>`<div style="margin:.8rem 0"><div class="muted">${title}</div>${lineChart(d.t,lines,Object.assign({xfmt:xf,w:760,h:150},opts))}</div>`;
+  $("#syscharts").innerHTML =
+    chart("CPU %", [{vals:d.cpu_pct,color:"#58a6ff"},{vals:d.iowait_pct,color:"#f85149"}], {y0:true,yfmt:v=>v.toFixed(0)+"%"}) +
+    chart("Memory used (GB)", [{vals:d.mem_used.map(v=>v==null?null:gib(v)),color:"#3fb950"}], {y0:true,yfmt:v=>v.toFixed(0)}) +
+    chart("Load average", [{vals:d.load,color:"#d29922"}], {y0:true}) +
+    chart("Network (KB/s, in green / out blue)", [{vals:d.netin.map(v=>v==null?null:v/1024),color:"#3fb950"},{vals:d.netout.map(v=>v==null?null:v/1024),color:"#58a6ff"}], {y0:true});
+  $("#foot").textContent = "system data generated " + new Date(sysData.now.generated*1000).toLocaleString();
+}
+
+// ================= TRAINING =================
+function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));return t.getUTCFullYear()+"-W"+String(Math.ceil(((t-ys)/86400000+1)/7)).padStart(2,"0");}
+async function loadTraining(){
+  const data = await J("data/training/sessions.json");
+  const S = data.sessions;
+  const counts={}; S.forEach(s=>counts[s.cat]=(counts[s.cat]||0)+1);
+  const order=["easy","tempo","trail","vo2max","speed"];
+  const legend = order.map(c=>`<span class="seg"><i style="background:${CAT[c]}"></i>${c} ${counts[c]||0}</span>`).join("");
+  // weekly stacked counts, last 18 weeks
+  const weeks={}; S.forEach(s=>{const w=isoWeek(new Date(s.date));(weeks[w]=weeks[w]||{}); weeks[w][s.cat]=(weeks[w][s.cat]||0)+1;});
+  const wk=Object.keys(weeks).sort().slice(-18);
+  const wmax=Math.max(1,...wk.map(w=>order.reduce((a,c)=>a+(weeks[w][c]||0),0)));
+  const bars = wk.map(w=>{let y=0,seg="";order.forEach(c=>{const v=weeks[w][c]||0;if(v){const h=100*v/wmax;seg+=`<rect x="0" y="${(100-y-h).toFixed(1)}" width="100" height="${h.toFixed(1)}" fill="${CAT[c]}"/>`;y+=h;}});
+    return `<div style="flex:1;text-align:center"><svg viewBox="0 0 100 100" preserveAspectRatio="none" style="height:90px">${seg}</svg><div class="axis" style="font-size:9px;color:var(--mut)">${w.slice(2)}</div></div>`;}).join("");
+  $("#training").innerHTML = `
+    <div class="grid cards">
+      <div class="panel"><h2>Sessions</h2><div class="stat">${data.count}</div><div class="muted">${S[S.length-1].date.slice(0,10)} → ${S[0].date.slice(0,10)}</div></div>
+      <div class="panel" style="grid-column:span 2"><h2>By type</h2><div class="row">${legend}</div>
+        <div class="muted" style="margin-top:.5rem">≥30 min running sessions, HR-classified</div></div>
+    </div>
+    <div class="panel" style="margin-top:1rem"><h2>Last 18 weeks (sessions by type)</h2><div class="row" style="align-items:flex-end;gap:2px">${bars}</div></div>
+    <div class="row" style="margin-top:1rem">
+      <div class="panel" style="flex:1;min-width:300px"><h2>Sessions</h2>
+        <div style="max-height:520px;overflow:auto"><table id="slist"><tr><th>date</th><th>type</th><th>min</th><th>avg</th><th>max</th><th>reps</th></tr>
+        ${S.slice(0,200).map((s,i)=>`<tr class="sessrow" data-i="${i}"><td>${s.date.slice(0,10)}</td>
+          <td><span class="badge" style="background:${CAT[s.cat]}">${s.cat}</span></td>
+          <td>${s.dur_min.toFixed(0)}</td><td>${s.hr_avg}</td><td>${s.hr_max}</td><td>${s.nint||""}</td></tr>`).join("")}</table></div></div>
+      <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Session detail</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
+    </div>`;
+  $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(S[+r.dataset.i]));
+  showDetail(S[0]);
+}
+function showDetail(s){
+  const tr=s.trace, t=tr.map((_,i)=>i);
+  const marks=s.reps.map(r=>({i:Math.round(r.t*(tr.length-1)),v:r.peak,c:CAT[s.cat]}));
+  const repTable = s.reps.length ? `<table style="margin-top:.6rem"><tr><th>#</th><th>peak</th><th>recovery↓</th><th>work</th></tr>
+     ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
+  $("#detail").innerHTML = `<h2>Session detail</h2>
+    <div class="row" style="justify-content:space-between"><span><span class="badge" style="background:${CAT[s.cat]}">${s.cat}</span> ${s.date.replace('T',' ')}</span>
+      <span class="muted">${s.dur_min.toFixed(0)} min · avg ${s.hr_avg} · max ${s.hr_max} · max5 ${s.max5} · rough ${s.rough}</span></div>
+    ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
+    ${s.nint?`<div class="muted">${s.nint} work reps detected (dots = peaks)</div>`:""}
+    ${repTable}`;
+}
+
+// ---- tabs / boot ----
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  const t=b.dataset.tab;
+  $("#system").hidden = t!=="system"; $("#training").hidden = t!=="training";
+});
+loadSystem().catch(e=>$("#system").innerHTML=`<div class="panel">System data unavailable: ${e.message}</div>`);
+loadTraining().catch(e=>$("#training").innerHTML=`<div class="panel">Training data unavailable: ${e.message}</div>`);
+</script>
+</body>
+</html>

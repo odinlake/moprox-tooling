@@ -15,7 +15,7 @@ POLAR_RAW="${POLAR_RAW:-$HOME/projects/private-data/polar/raw}"
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$DASH/data"
-cp "$REPO/components/dashboard/site/index.html" "$DASH/index.html"
+cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"
 
 if [[ "$WHAT" == all || "$WHAT" == system ]]; then
   [[ -f "$PVE_ENV" ]] || { echo "no $PVE_ENV"; exit 1; }
