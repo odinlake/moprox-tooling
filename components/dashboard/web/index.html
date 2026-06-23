@@ -213,33 +213,55 @@ function showDetail(s){
 // ================= DNS =================
 async function loadDNS(){
   const data = await J("data/dns/blocked.json");
-  const days = data.blocked_days || [];     // sorted newest-first by the exporter
-  const render = x => {
-    const win = days.slice(0, x);
-    const agg = {};
-    win.forEach(d=>d.domains.forEach(o=>agg[o.domain]=(agg[o.domain]||0)+o.count));
-    const list = Object.entries(agg).sort((a,b)=>b[1]-a[1]);
-    const total = list.reduce((a,e)=>a+e[1],0), max = list.length?list[0][1]:1;
-    $("#dnssum").textContent = `${total} blocks · ${list.length} distinct domains · last ${x} day${x>1?'s':''} (have ${days.length})`;
-    $("#dnslist").innerHTML = list.length ? list.map(([dom,c])=>`<tr>
-      <td style="word-break:break-all">${dom}</td><td style="text-align:right">${c}</td>
-      <td style="width:38%"><div class="bar"><i style="width:${(100*c/max).toFixed(1)}%;background:#f85149"></i></div></td></tr>`).join("")
-      : `<tr><td colspan="3" class="muted">No blocked queries in this window.</td></tr>`;
+  const days = data.blocked_days || [];                 // [{date,total,clients:{ip:{domain:count}}}]
+  const ips = [...new Set(days.flatMap(d=>Object.keys(d.clients||{})))].sort();
+  const aggFor = (win, pred) => {                        // sum domain counts over win for matching IPs
+    const agg={};
+    win.forEach(d=>Object.entries(d.clients||{}).forEach(([ip,doms])=>{ if(!pred(ip))return;
+      for(const [dom,c] of Object.entries(doms)) agg[dom]=(agg[dom]||0)+c; }));
+    return Object.entries(agg).sort((a,b)=>b[1]-a[1]);
+  };
+  const tableFor = list => {
+    if(!list.length) return {total:0, html:'<p class="muted">No blocked queries.</p>'};
+    const max=list[0][1], total=list.reduce((a,e)=>a+e[1],0);
+    return {total, html:`<table><tr><th>domain</th><th style="text-align:right">blocks</th><th></th></tr>`+
+      list.map(([dom,c])=>`<tr><td style="word-break:break-all">${dom}</td><td style="text-align:right">${c}</td>
+        <td style="width:36%"><div class="bar"><i style="width:${(100*c/max).toFixed(1)}%;background:#f85149"></i></div></td></tr>`).join("")+`</table>`};
+  };
+  const render = () => {
+    const x=+$("#dnsrange").value, sel=$("#dnssel").value; $("#dnsx").textContent=x;
+    const win=days.slice(0,x);
+    if(sel==="__group"){
+      let body="", tot=0;
+      ips.forEach(ip=>{ const list=aggFor(win,p=>p===ip); if(!list.length)return; const t=tableFor(list); tot+=t.total;
+        body+=`<h3 style="margin:1rem 0 .3rem;font-size:.92rem">${ip} <span class="muted" style="font-weight:400">· ${t.total} blocks · ${list.length} domains</span></h3>${t.html}`; });
+      $("#dnssum").textContent=`grouped by IP · ${tot} blocks · last ${x} day${x>1?'s':''} · ${ips.length} client(s)`;
+      $("#dnsbody").innerHTML=body||'<p class="muted">No blocked queries in this window.</p>';
+    } else {
+      const t=tableFor(sel==="__all" ? aggFor(win,()=>true) : aggFor(win,p=>p===sel));
+      $("#dnssum").textContent=`${t.total} blocks · last ${x} day${x>1?'s':''} · ${sel==="__all"?"all IPs":sel}`;
+      $("#dnsbody").innerHTML=t.html;
+    }
   };
   $("#dns").innerHTML = `
     <div class="panel">
-      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+      <div class="row" style="justify-content:space-between;align-items:center;gap:.8rem;flex-wrap:wrap">
         <h2>Blocked DNS</h2>
-        <label class="muted" style="white-space:nowrap">Last <b id="dnsx">7</b> days
-          <input id="dnsrange" type="range" min="1" max="30" value="7" style="vertical-align:middle;width:160px"></label>
+        <div class="row" style="gap:.8rem;align-items:center">
+          <select id="dnssel" style="background:#21262d;color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:.35rem">
+            <option value="__all">All IPs (aggregate)</option>
+            <option value="__group">Group by IP</option>
+            ${ips.map(ip=>`<option value="${ip}">${ip}</option>`).join("")}
+          </select>
+          <label class="muted" style="white-space:nowrap">last <b id="dnsx">7</b>d
+            <input id="dnsrange" type="range" min="1" max="30" value="7" style="vertical-align:middle;width:150px"></label>
+        </div>
       </div>
       <div class="muted" id="dnssum" style="margin:.3rem 0"></div>
-      <div style="max-height:600px;overflow:auto"><table>
-        <tr><th>domain</th><th style="text-align:right">blocks</th><th></th></tr>
-        <tbody id="dnslist"></tbody></table></div>
+      <div id="dnsbody" style="max-height:600px;overflow:auto"></div>
     </div>`;
-  const r=$("#dnsrange"); r.oninput=()=>{ $("#dnsx").textContent=r.value; render(+r.value); };
-  render(7);
+  $("#dnsrange").oninput=render; $("#dnssel").onchange=render;
+  render();
 }
 
 // ---- tabs / boot ----
