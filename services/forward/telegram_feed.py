@@ -8,25 +8,17 @@ hand). Creds come from ~/.config/claude-dev/telegram.env (TELEGRAM_BOT_TOKEN, TE
   telegram_feed.py demo                 # plot + send the latest session from the dashboard data
   telegram_feed.py session <file.json>  # plot + send one session dict (build.py's shape)
 """
-import io, json, os, sys, urllib.request
+import io, json, sys
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import tg   # the shared transport (handles creds, multipart, #agent tagging)
+
 CAT = {"easy": "#3fb950", "tempo": "#d29922", "vo2max": "#f85149",
        "speed": "#a371f7", "trail": "#58a6ff", "other": "#6e7681"}
-TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
-
-def _creds():
-    tok = os.environ.get("TELEGRAM_BOT_TOKEN"); chat = os.environ.get("TELEGRAM_CHAT_ID")
-    if (not tok or not chat) and TG_ENV.exists():
-        for ln in TG_ENV.read_text().splitlines():
-            if ln.startswith("TELEGRAM_BOT_TOKEN="): tok = ln.split("=", 1)[1].strip()
-            if ln.startswith("TELEGRAM_CHAT_ID="): chat = ln.split("=", 1)[1].strip()
-    if not tok or not chat: sys.exit("missing telegram creds (TELEGRAM_BOT_TOKEN/CHAT_ID)")
-    return tok, chat
 
 def plot_session(s):
     tr = s["trace"]; step = s.get("trace_step_s", 1)
@@ -51,20 +43,8 @@ def caption(s):
         s.get("cat", "?"), s.get("date", "")[:10], round(s.get("dur_min", 0)),
         s.get("hr_avg", 0), s.get("hr_max", 0), reps)
 
-def send_photo(png, cap, tok=None, chat=None):
-    if tok is None: tok, chat = _creds()
-    boundary = "----moprox%d" % os.getpid()
-    body = b""
-    for k, v in (("chat_id", chat), ("caption", cap)):
-        body += ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % (boundary, k, v)).encode()
-    body += ("--%s\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"hr.png\"\r\nContent-Type: image/png\r\n\r\n" % boundary).encode()
-    body += png + ("\r\n--%s--\r\n" % boundary).encode()
-    req = urllib.request.Request("https://api.telegram.org/bot%s/sendPhoto" % tok, data=body,
-                                 headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
-    return json.load(urllib.request.urlopen(req, timeout=30))
-
-def send_session(s):
-    r = send_photo(plot_session(s), caption(s))
+def send_session(s, agent="coach"):
+    r = tg.send_photo(plot_session(s), caption(s), agent=agent)
     return bool(r.get("ok"))
 
 def _latest_from_dashboard():

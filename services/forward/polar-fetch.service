@@ -8,4 +8,5 @@ Wants=network-online.target
 Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/polar_fetch.py

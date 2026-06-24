@@ -97,7 +97,8 @@ def main():
     if fp != state.get("training_fp"):
         t0 = time.monotonic()
         sp.run([sys.executable, str(REPO / "services/training/build.py")],
-               env={**os.environ, "POLAR_RAW": str(POLAR_RAW), "OUT": str(DATA / "training/sessions.json")},
+               env={**os.environ, "POLAR_RAW": str(POLAR_RAW), "POLAR_IN": str(POLAR_RAW.parent / "incoming"),
+                    "OUT": str(DATA / "training/sessions.json")},
                check=True, capture_output=True)
         timings["training"] = (round((time.monotonic() - t0) * 1000), (DATA / "training/sessions.json").stat().st_size)
         state["training_fp"] = fp

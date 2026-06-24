@@ -14,9 +14,19 @@ Why: `claude-dev` stays inbound-isolated (only the worker is public), the relay 
 Add the worker host to the Squid allowlist. ~30 lines of worker code + rework the Polar fetcher to
 poll the breadcrumb. **Needs:** a Cloudflare account / API token.
 
-## Agent architecture (under discussion)
-A specialised **training agent** (own context: goals, history, session-type playbooks) generates the
-per-type chart + commentary on each new workout and handles training replies; a **steward/triage
-agent** receives all Telegram inbound (`telegram_poll.py` inbox) and routes to training vs dev vs
-other. The generic dev agent (Claude Code on claude-dev) stays separate. Pattern + persistence/
-durability decision pending — see the session discussion.
+## Agent architecture (built)
+A specialised **coach agent** generates the per-type chart + commentary on each new workout
+(`services/forward/polar_fetch.py`) and handles training replies; a **steward** triages all Telegram
+inbound and routes to coach / dev / chat; the generic **dev agent** stays separate. The poller
+(`telegram_poll.py`) only captures to the inbox; the **dispatcher** (`dispatcher.py`) does triage +
+routing with a per-agent single-flight queue (an agent is never re-invoked while still running; new
+messages queue). All agents run on the Max plan via `services/agents/run.py`; all outbound goes
+through `tg.py`, which tags each message with the agent's `#handle`. Contexts live in
+`private-data/agents/{coach,steward,dev}`.
+
+## Context durability across a VM rebuild (future work)
+If `claude-dev` is rebuilt, agent **memory** (`~/.claude/.../memory/`) and the relocated secrets
+(`~/.config/claude-dev/*.env`: Polar + Telegram tokens) are lost — the agent *contexts* survive
+because they're in `private-data` (git), but accumulated memory and creds don't. Plan: back these up
+into `private-data` (encrypted for the secrets) and restore them from cloud-init on rebuild. Deferred
+by operator decision (2026-06-24) — not a concern right now.

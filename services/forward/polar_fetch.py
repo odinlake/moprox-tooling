@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward")
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
 from run import run_agent
 import telegram_feed
-import route
+import tg
 from analysis import Athlete, analyse_safe
 
 POLAR_ENV = Path.home() / ".config/claude-dev/polar.env"
@@ -89,8 +89,8 @@ def handle_exercise(uid, ex_url, tok):
                 trace_step_s=round(len(block)/n), dur_min=round(dur_min, 1),
                 hr_avg=round(float(np.mean(block))), hr_max=round(float(np.max(block))),
                 max5=round(float(m5)) if m5 == m5 else 0, nint=cls.n_work_bouts, reps=reps)
-    # chart
-    telegram_feed.send_photo(telegram_feed.plot_session(sess), telegram_feed.caption(sess))
+    # chart (caption is #coach-tagged by the shared transport)
+    telegram_feed.send_session(sess, agent="coach")
     # coach commentary on the analysis
     summary = {k: sess[k] for k in ("cat", "date", "dur_min", "hr_avg", "hr_max", "max5", "nint")}
     summary["above_lt2"] = bool(cls.above_lt2); summary["clamp"] = bool(cls.hr_clamp_suspected)
@@ -98,15 +98,18 @@ def handle_exercise(uid, ex_url, tok):
         "New session just came in. Here is its computed analysis:\n%s\nWrite the session read in "
         "your voice (type + plan-match, the numbers, hedged interpretation, 1-2 takeaways)." % json.dumps(summary),
         timeout=420)
-    route.send(commentary)          # the coach's session read as a follow-up message
+    tg.send(commentary, agent="coach")     # the coach's session read as a follow-up message
     return ("posted", eid)
 
 def main():
     e = env(); tok = e["POLAR_ACCESS_TOKEN"]; uid = e["POLAR_USER_ID"]
     st, tx = api("/v3/users/%s/exercise-transactions" % uid, tok, method="POST")
-    if st == 204 or not tx:
-        return                                   # nothing new — fast exit
+    if st == 204:
+        print("polar: no new exercises (204)"); return          # nothing new — fast, expected
+    if st != 200 or not tx:
+        print("polar: transaction POST returned %s (check token/scope)" % st); return
     tid = tx.get("transaction-id") or tx.get("resource-uri", "").rstrip("/").split("/")[-1]
+    print("polar: transaction %s opened" % tid)
     st2, ex_list = api("/v3/users/%s/exercise-transactions/%s" % (uid, tid), tok)
     for ex_url in (ex_list or {}).get("exercises", []):
         try:

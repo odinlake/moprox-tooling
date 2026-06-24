@@ -12,7 +12,8 @@ from pathlib import Path
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
 INBOX  = Path(os.environ.get("TELEGRAM_INBOX", Path.home() / ".local/share/moprox/telegram-inbox.jsonl"))
 STATE  = Path.home() / ".local/share/moprox/telegram-offset"
-import route   # same dir; the steward router (triage + act)
+# capture-only: the dispatcher service tails this inbox and does triage + routing (single-flight
+# per agent), so a long agent run never blocks message pickup here.
 
 def creds():
     tok = chat = None
@@ -47,10 +48,6 @@ def main():
                    "reply_to": (m.get("reply_to_message") or {}).get("message_id")}
             with open(INBOX, "a") as f: f.write(json.dumps(rec) + "\n")
             print("inbox <-", rec["from"], repr(rec["text"][:80]))
-            try:
-                route.process_message(rec)          # triage + act (steward agent)
-            except Exception as e:
-                print("route error:", e)
         if r.get("result"): STATE.write_text(str(offset))
 
 if __name__ == "__main__":
