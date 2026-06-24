@@ -45,6 +45,20 @@ def router_worker():
         finally:
             Q["router"].task_done()
 
+def compactor_worker():
+    """High-water-mark compaction, decoupled so it never blocks replies: when the live log grows past
+    its limit, roll old turns to the archive and fold an LLM summary into the digest."""
+    while True:
+        time.sleep(300)
+        try:
+            if convo.over_highwater():
+                old = convo.harvest()
+                if old.strip():
+                    convo.add_digest(route.summarize_for_digest(old))
+                    print("compacted: archived old turns + updated digest")
+        except Exception as e:
+            print("compactor error:", e)
+
 def our_chat(rec):
     _, chat = tg.creds()
     return str(rec.get("chat_id")) == str(chat)
@@ -54,6 +68,7 @@ def main():
     # resume from saved offset; first ever run starts at EOF so we don't replay captured history
     off = int(OFFSET.read_text()) if OFFSET.exists() else INBOX.stat().st_size
     threading.Thread(target=router_worker, daemon=True).start()
+    threading.Thread(target=compactor_worker, daemon=True).start()
     for name in ("coach", "dev", "steward"):
         threading.Thread(target=agent_worker, args=(name,), daemon=True).start()
     print("dispatcher up; offset=%d" % off)

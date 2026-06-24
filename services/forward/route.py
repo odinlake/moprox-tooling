@@ -77,6 +77,14 @@ def handle(agent, rec):
         tg.send(reply, agent="steward", reply_to=reply_to)
     return agent
 
+def summarize_for_digest(old_text):
+    """Compact archived conversation turns into a terse digest (the LLM 'compaction' step)."""
+    return run_agent("steward",
+        "These older Telegram conversation turns are being archived to keep context manageable. "
+        "Summarise them into 5-12 terse bullets capturing durable facts, decisions made, open threads, "
+        "and anything an agent might need to recall later. No fluff — just the bullets.\n\n%s" % old_text,
+        timeout=300)
+
 def process_message(rec):
     """Convenience for the CLI: decide + log + handle inline (the dispatcher splits these)."""
     text = (rec.get("text") or "").strip()
