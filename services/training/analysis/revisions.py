@@ -11,7 +11,10 @@ additions are auditable.
 """
 
 import numpy as np
-import part_a_logic as A
+try:
+    from . import engine as A          # imported as a package (analysis.revisions)
+except ImportError:
+    import engine as A                 # run standalone from this dir
 
 
 # ---- R1: reject pre-binned input -------------------------------------

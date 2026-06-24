@@ -1,96 +1,44 @@
 #!/usr/bin/env python3
 """Build public-safe training data for the dashboard from a Polar Flow export.
 
-Reads the raw export ZIP straight from the PRIVATE store (never extracts GPS/names into the
-output), classifies each running session, and writes ONE public-safe JSON: per-session category,
-HR stats, interval structure, and a downsampled pure-HR trace. Pure stdlib.
+Reads the raw export ZIP from the PRIVATE store and classifies each running session with the
+shared analysis library (services/training/analysis) on the FULL per-second HR — never the
+downsampled trace. Emits ONE public-safe JSON: per-session physiological type, HR stats, interval
+structure, and a downsampled pure-HR trace (no GPS/names).
 
   POLAR_RAW   dir holding the Polar export *.zip   (default: ../private-data/polar/raw)
   OUT         output JSON path                     (default: ./dist/data/training/sessions.json)
-
-Categories (HR-driven, first cut — thresholds at top, tune freely):
-  drop <30min; intervals = repeated swings reaching ~82% maxHR (>=7 reps speed, else vo2max);
-  else high HR-roughness -> trail; else max-5min-avg <160 -> easy; else tempo.
 """
-import glob, io, json, os, statistics as st, sys, time, zipfile
+import glob, json, os, sys, time, zipfile
+import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from analysis import Athlete, analyse_safe   # the validated engine
 
 RUN_SPORTS = {1, 17, 83}
-MIN_DURATION_MIN = 30
-EASY_MAX5 = 160
-TRAIL_ROUGHNESS = 4.5
-SWING_AMP = 14
-REP_HIGH_FRAC = 0.55
-REP_MAXHR_FRAC = 0.82
-INT_MIN_REPS = 3
-SPEED_MIN_REPS = 7
-TRACE_POINTS = 240          # downsample each HR trace to ~this many points for the chart
-
-def median_filter(x, w=5):
-    h = w//2
-    return [st.median(x[max(0,i-h):i+h+1]) for i in range(len(x))]
-def ma(x, w):
-    if w<=1 or len(x)<w: return x[:]
-    half, out = w//2, []
-    for i in range(len(x)):
-        lo, hi = max(0,i-half), min(len(x), i-half+w); out.append(sum(x[lo:hi])/(hi-lo))
-    return out
-def pct(x, p):
-    if not x: return 0.0
-    s=sorted(x); k=(len(s)-1)*p/100.0; f=int(k)
-    return s[f] if f+1>=len(s) else s[f]+(k-f)*(s[f+1]-s[f])
-def rolling_mean_max(x, w):
-    if len(x)<w: return sum(x)/len(x) if x else 0
-    s=sum(x[:w]); best=s/w
-    for i in range(w,len(x)): s+=x[i]-x[i-w]; best=max(best,s/w)
-    return best
-def downsample(x, n):
-    if len(x)<=n: return [round(v) for v in x]
-    step=len(x)/n
-    return [round(sum(x[int(i*step):int((i+1)*step)])/max(1,int((i+1)*step)-int(i*step))) for i in range(n)]
-
-def zigzag(sm, amp):
-    if len(sm)<3: return []
-    piv=[]; direction=0; hi=lo=0
-    for i,v in enumerate(sm):
-        if v>sm[hi]: hi=i
-        if v<sm[lo]: lo=i
-        if direction>=0 and v<=sm[hi]-amp: piv.append(("H",hi,sm[hi])); direction=-1; lo=i
-        elif direction<=0 and v>=sm[lo]+amp: piv.append(("L",lo,sm[lo])); direction=1; hi=i
-    return piv
-
-def intervals(sm, abs_high):
-    base, peak = pct(sm,20), pct(sm,95)
-    if peak-base < 18: return []
-    high = max(abs_high, base + REP_HIGH_FRAC*(peak-base))
-    piv = zigzag(sm, SWING_AMP); reps=[]
-    for k,(t,idx,val) in enumerate(piv):
-        if t=="H" and val>=high:
-            prev_l = next((p for p in reversed(piv[:k]) if p[0]=="L"), None)
-            next_l = next((p for p in piv[k+1:] if p[0]=="L"), None)
-            lo_i = prev_l[1] if prev_l else 0; hi_i = next_l[1] if next_l else len(sm)-1
-            work = sum(1 for v in sm[lo_i:hi_i] if v >= val-SWING_AMP)
-            reps.append(dict(at=idx, peak=round(val), trough=round(prev_l[2]) if prev_l else round(base), work_s=work))
-    return reps
+ATH = Athlete()                  # max_hr=202, resting=45, lt1=155, lt2=180 (calibrated in-chat)
+TRACE_POINTS = 120               # classified sessions (detail chart; the rich chart is the Telegram one)
+TRACE_POINTS_THIN = 50           # unknown / very short
 
 def hr_series(d):
-    ex=(d.get("exercises") or [{}])[0]; best=[]
+    ex = (d.get("exercises") or [{}])[0]
+    best = []
     for s in (ex.get("samples") or {}).get("samples", []):
-        if s.get("type")=="HEART_RATE":
-            vals=[v for v in (s.get("values") or []) if v]
-            if len(vals)>len(best): best=[float(v) for v in vals]
+        if s.get("type") == "HEART_RATE":
+            vals = [float(v) for v in (s.get("values") or []) if v and 30 < v < 220]
+            if len(vals) > len(best): best = vals
     return best
 
-def classify(dur, nint, rough, max5):
-    if dur < MIN_DURATION_MIN: return "dropped"
-    if nint >= INT_MIN_REPS: return "speed" if nint >= SPEED_MIN_REPS else "vo2max"
-    if rough >= TRAIL_ROUGHNESS: return "trail"
-    return "easy" if max5 < EASY_MAX5 else "tempo"
+def downsample(x, n):
+    x = np.asarray(x, float)
+    if len(x) <= n: return [round(float(v)) for v in x]
+    step = len(x) / n
+    return [round(float(np.mean(x[int(i*step):max(int(i*step)+1, int((i+1)*step))]))) for i in range(n)]
 
 def build(raw_dir, out_path):
     zips = sorted(glob.glob(os.path.join(raw_dir, "*.zip")))
     if not zips: sys.exit(f"no export zip in {raw_dir}")
     sessions = []
-    with zipfile.ZipFile(zips[-1]) as z:                      # newest export wins
+    with zipfile.ZipFile(zips[-1]) as z:
         for nm in z.namelist():
             if "training-session_" not in nm or not nm.endswith(".json"): continue
             try: d = json.loads(z.read(nm))
@@ -98,39 +46,48 @@ def build(raw_dir, out_path):
             try: sid = int((d.get("sport") or {}).get("id"))
             except Exception: continue
             if sid not in RUN_SPORTS: continue
-            raw = hr_series(d)
-            if len(raw) < 60: continue
-            hr = median_filter([min(205.0, max(40.0, v)) for v in raw])
-            maxhr = ((d.get("physicalInformation") or {}).get("maximumHeartRate")) or 200
-            sm, slow = ma(hr,15), ma(hr,120)
-            rough = round(st.pstdev([a-b for a,b in zip(sm,slow)]),1) if len(sm)>120 else 0.0
-            max5 = round(rolling_mean_max(hr,300)); dur = len(hr)/60.0
-            reps = intervals(sm, REP_MAXHR_FRAC*maxhr)
-            sdate = d.get("startTime","")[:19]
-            # Only 2026+ sessions of >=30 min get HR-classified; everything older or shorter is
-            # 'other' (the pre-2026 history has different gear/profiles the classifier isn't tuned
-            # for, and short sessions aren't real training). Previously these were dropped.
-            if sdate[:4] < "2026" or dur < MIN_DURATION_MIN:
-                cat = "other"
-            else:
-                cat = classify(dur, len(reps), rough, max5)
-            tp = 60 if cat == "other" else TRACE_POINTS   # coarse trace for the uncategorised history
+            hr = hr_series(d)
+            if len(hr) < 60: continue
+            sport = d.get("name") or ""
+            try:
+                res = analyse_safe(hr, len(hr) / 60.0, ATH, sport)
+            except Exception:
+                continue
+            cls = res["classification"]
+            block = np.asarray(res["block"], float)
+            block = np.clip(block, 40, 210)                  # display-clean the trace only
+            cat = cls.session_type
+            m5 = res.get("five_min_max")
+            max5 = round(float(m5)) if m5 == m5 else round(float(np.nanmax(block)))  # m5!=m5 => NaN
+
+            reps = []
+            if cat in ("speed", "vo2max") and len(res.get("peaks_min", [])):
+                blen = max(1.0, len(block))
+                troughs = list(zip(res.get("troughs_min", []), res.get("troughs_hr", [])))
+                for pm, ph in zip(res["peaks_min"], res["peaks_hr"]):
+                    pt = pm * 60.0
+                    before = [th for tm, th in troughs if tm < pm]
+                    reps.append({"t": round(pt / blen, 3), "peak": round(float(ph)),
+                                 "trough": round(float(before[-1])) if before else round(float(np.min(block))),
+                                 "work_s": 0})
+            tp = TRACE_POINTS if cat in ("easy", "tempo", "speed", "vo2max", "trail_easy") else TRACE_POINTS_THIN
             sessions.append(dict(
-                id=(d.get("identifier") or {}).get("id","")[:8],
-                date=sdate, sport=sid, cat=cat,
-                dur_min=round(dur,1), hr_avg=round(st.mean(hr)), hr_max=round(max(hr)),
-                max5=max5, rough=rough, nint=len(reps) if cat != "other" else 0,
-                reps=[{"t":round(r["at"]/len(hr),3),"peak":r["peak"],"trough":r["trough"],"work_s":r["work_s"]} for r in reps] if cat != "other" else [],
-                trace=downsample(hr, tp), trace_step_s=round(len(hr)/min(len(hr),tp)),
+                id=(d.get("identifier") or {}).get("id", "")[:8],
+                date=d.get("startTime", "")[:19], sport=sid, cat=cat,
+                dur_min=round(len(hr) / 60.0, 1), hr_avg=round(float(np.mean(block))),
+                hr_max=round(float(np.max(block))), max5=max5, nint=cls.n_work_bouts,
+                above_lt2=bool(cls.above_lt2), clamp=bool(cls.hr_clamp_suspected),
+                reps=reps,
+                trace=downsample(block, tp), trace_step_s=round(len(block) / min(len(block), tp)),
             ))
     sessions.sort(key=lambda s: s["date"], reverse=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     json.dump({"generated": int(time.time()), "count": len(sessions), "sessions": sessions},
-              open(out_path,"w"), separators=(",",":"))
-    by={}
-    for s in sessions: by[s["cat"]]=by.get(s["cat"],0)+1
+              open(out_path, "w"), separators=(",", ":"))
+    by = {}
+    for s in sessions: by[s["cat"]] = by.get(s["cat"], 0) + 1
     print(f"wrote {len(sessions)} sessions -> {out_path}")
-    print("  " + "  ".join(f"{k}:{v}" for k,v in sorted(by.items())))
+    print("  " + "  ".join(f"{k}:{v}" for k, v in sorted(by.items())))
 
 if __name__ == "__main__":
     raw = os.environ.get("POLAR_RAW", os.path.expanduser("~/projects/private-data/polar/raw"))

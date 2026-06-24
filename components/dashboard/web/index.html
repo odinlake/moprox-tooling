@@ -52,7 +52,7 @@
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
-const CAT = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail:"#58a6ff",other:"#6e7681"};
+const CAT = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681"};
 const $ = s => document.querySelector(s);
 const gib = b => (b/1073741824);
 const fmtDur = s => { s=Math.round(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600); return d?`${d}d ${h}h`:`${h}h ${Math.floor(s%3600/60)}m`; };
@@ -131,7 +131,7 @@ function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.get
 async function loadTraining(){
   const data = await J(DATA+"training/sessions.json");
   const all = data.sessions;
-  const order=["easy","tempo","trail","vo2max","speed","other"];
+  const order=["easy","tempo","trail_easy","vo2max","speed","unknown"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const WINS=[[30,"1 mo"],[90,"3 mo"],[180,"6 mo"],[365,"12 mo"],[730,"2 y"],[1825,"5 y"],[1e12,"all"]];
   // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 0..50 (left-aligned, so
