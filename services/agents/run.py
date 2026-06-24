@@ -25,11 +25,14 @@ CLAUDE = shutil.which("claude") or str(LOCAL_BIN / "claude")
 DEV_DENY = ",".join("Bash(%s)" % p for p in (
     "git push:*", "git reset --hard:*", "git clean:*", "sudo:*", "rm:*",
     "reboot:*", "shutdown:*", "dd:*", "mkfs:*", "gh:*"))   # service mutation needs sudo (denied); read-only systemctl ok
+TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
 AGENT_FLAGS = {
     "dev": ["--permission-mode", "acceptEdits",
             "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob",
             "--disallowedTools", DEV_DENY,
             "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK)],  # variadic: keep last
+    # coach: read-only access to the classified session history so it can compare/trend
+    "coach": ["--allowedTools", "Read,Grep,Glob", "--add-dir", str(TRAINING_DATA)],
 }
 
 def run_agent(agent, prompt, timeout=600):
