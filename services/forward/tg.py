@@ -9,7 +9,7 @@ goes through here. Two reasons:
 
 Creds from ~/.config/claude-dev/telegram.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID).
 """
-import json, os, urllib.parse, urllib.request
+import html, json, os, re, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
@@ -30,11 +30,58 @@ def tag(text, agent):
     h = "#" + str(agent).lstrip("#")
     return text if (text or "").lstrip().startswith(h) else "%s %s" % (h, text)
 
+def _table(rows_raw):
+    """A markdown table block -> an aligned monospace <pre> (Telegram has no real tables)."""
+    rows = []
+    for ln in rows_raw:
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if re.fullmatch(r"[\s:\-|]+", ln.strip()): continue      # the |---|---| separator row
+        rows.append(cells)
+    if not rows: return ""
+    ncol = max(len(r) for r in rows); rows = [r + [""] * (ncol - len(r)) for r in rows]
+    w = [max(len(r[i]) for r in rows) for i in range(ncol)]
+    body = "\n".join(" │ ".join(c.ljust(w[i]) for i, c in enumerate(r)) for r in rows)
+    return "<pre>" + html.escape(body) + "</pre>"
+
+def md_to_html(text):
+    """Convert the agents' markdown to the subset of HTML Telegram renders. Headings -> bold,
+    tables -> monospace block, plus bold/italic/code; everything else is escaped to literal text."""
+    holds = []
+    def hold(frag): holds.append(frag); return "\x00%d\x00" % (len(holds) - 1)
+    text = re.sub(r"```[^\n]*\n(.*?)```", lambda m: hold("<pre>" + html.escape(m.group(1).rstrip("\n")) + "</pre>"),
+                  text, flags=re.S)
+    # group consecutive '|' lines that include a separator row into one table block
+    lines = text.split("\n"); out = []; i = 0
+    while i < len(lines):
+        if "|" in lines[i]:
+            j = i
+            while j < len(lines) and "|" in lines[j]: j += 1
+            run = lines[i:j]
+            if len(run) >= 2 and any(re.fullmatch(r"[\s:\-|]+", r.strip()) for r in run):
+                out.append(hold(_table(run))); i = j; continue
+        out.append(lines[i]); i += 1
+    text = "\n".join(out)
+    text = re.sub(r"`([^`]+)`", lambda m: hold("<code>" + html.escape(m.group(1)) + "</code>"), text)
+    text = html.escape(text)                                     # escape the remaining plain text
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*$", r"<b>\1</b>", text)   # ATX headings -> bold
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"(?m)^(\s*)[-*]\s+", r"\1• ", text)           # bullets
+    text = re.sub(r"\x00(\d+)\x00", lambda m: holds[int(m.group(1))], text)
+    return text
+
+def _post(tok, method, params):
+    return json.load(urllib.request.urlopen(API % (tok, method) + "?" + urllib.parse.urlencode(params), timeout=20))
+
 def send(text, agent=None, reply_to=None):
     tok, chat = creds()
-    p = {"chat_id": chat, "text": tag(text, agent)[:4000]}
+    body = tag(text, agent)
+    p = {"chat_id": chat, "text": md_to_html(body)[:4096], "parse_mode": "HTML"}
     if reply_to: p["reply_to_message_id"] = reply_to
-    return json.load(urllib.request.urlopen(API % (tok, "sendMessage") + "?" + urllib.parse.urlencode(p), timeout=20))
+    try:
+        return _post(tok, "sendMessage", p)
+    except urllib.error.HTTPError:                               # bad HTML -> deliver as plain text
+        p.pop("parse_mode", None); p["text"] = body[:4096]
+        return _post(tok, "sendMessage", p)
 
 def send_photo(png, caption="", agent=None):
     tok, chat = creds()
