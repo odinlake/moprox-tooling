@@ -22,6 +22,9 @@ trap cleanup EXIT
 git -C "$REPO" worktree add -q --force "$WT" gh-pages
 DASH="$WT/dashboard"; mkdir -p "$DASH/data"
 cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"     # shell is cheap; always refresh
+# Per-tab endpoints (dashboard/system/, /dns/, /training/) — same app; it reads the URL to pick
+# the tab and fetches from the shared dashboard/data/. So reload/bookmark land on the right tab.
+for t in system training dns; do mkdir -p "$DASH/$t"; cp "$DASH/index.html" "$DASH/$t/index.html"; done
 
 if [[ "$WHAT" == all || "$WHAT" == system ]]; then
   [[ -f "$PVE_ENV" ]] || { echo "no $PVE_ENV"; exit 1; }

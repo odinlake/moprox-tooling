@@ -12,8 +12,8 @@
   header{display:flex;align-items:center;gap:1rem;padding:.8rem 1rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--bg);z-index:5}
   header h1{font-size:1.05rem;margin:0;font-weight:600}
   .tabs{display:flex;gap:.25rem;margin-left:auto}
-  .tabs button{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer}
-  .tabs button.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
+  .tabs a{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer;text-decoration:none}
+  .tabs a.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
   main{padding:1rem;max-width:1100px;margin:0 auto}
   .grid{display:grid;gap:1rem}
   .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
@@ -42,11 +42,7 @@
 <body>
 <header>
   <h1>🖥️ moprox</h1>
-  <div class="tabs">
-    <button data-tab="system" class="active">System</button>
-    <button data-tab="training">Training</button>
-    <button data-tab="dns">DNS</button>
-  </div>
+  <div class="tabs" id="tabs"></div>
 </header>
 <main>
   <section id="system"></section>
@@ -87,7 +83,7 @@ const md = ts => { const d=new Date(ts*1000); return (d.getMonth()+1)+"/"+d.getD
 // ================= SYSTEM =================
 let sysData={};
 async function loadSystem(){
-  const [now,day,month] = await Promise.all([J("data/system/now.json"),J("data/system/day.json"),J("data/system/month.json")]);
+  const [now,day,month] = await Promise.all([J(DATA+"system/now.json"),J(DATA+"system/day.json"),J(DATA+"system/month.json")]);
   sysData={now,day,month};
   const g = now.guests.map(x=>`<tr><td>${x.vmid}</td><td>${x.name||'—'}</td><td class="muted">${x.kind}</td>
      <td>${x.status==='running'?'🟢':'⚪'} ${x.status}</td><td>${x.cpu_pct.toFixed(1)}%</td>
@@ -132,7 +128,7 @@ function drawSysCharts(tf){
 // ================= TRAINING =================
 function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));return t.getUTCFullYear()+"-W"+String(Math.ceil(((t-ys)/86400000+1)/7)).padStart(2,"0");}
 async function loadTraining(){
-  const data = await J("data/training/sessions.json");
+  const data = await J(DATA+"training/sessions.json");
   const all = data.sessions;
   const order=["easy","tempo","trail","vo2max","speed","other"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -212,7 +208,7 @@ function showDetail(s){
 
 // ================= DNS =================
 async function loadDNS(){
-  const data = await J("data/dns/blocked.json");
+  const data = await J(DATA+"dns/blocked.json");
   const days = data.blocked_days || [];                 // [{date,total,clients:{ip:{domain:count}}}]
   const ips = [...new Set(days.flatMap(d=>Object.keys(d.clients||{})))].sort();
   const aggFor = (win, pred) => {                        // sum domain counts over win for matching IPs
@@ -264,17 +260,21 @@ async function loadDNS(){
   render();
 }
 
-// ---- tabs / boot ----
-const TABS=["system","training","dns"];
-document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("active"));
-  b.classList.add("active");
-  const t=b.dataset.tab;
-  TABS.forEach(id=>$("#"+id).hidden = t!==id);
-});
-loadSystem().catch(e=>$("#system").innerHTML=`<div class="panel">System data unavailable: ${e.message}</div>`);
-loadTraining().catch(e=>$("#training").innerHTML=`<div class="panel">Training data unavailable: ${e.message}</div>`);
-loadDNS().catch(e=>$("#dns").innerHTML=`<div class="panel">DNS data unavailable: ${e.message}</div>`);
+// ---- endpoints / boot ----
+// Each tab is served from its own dir (dashboard/system/, /dns/, /training/) so reload &
+// bookmarks land on the right tab. Derive the active tab + the data base from the URL; load
+// only that tab. Works at .../dashboard/ (defaults to system) or behind a custom domain.
+let _p = location.pathname.replace(/index\.html$/,""); if(!_p.endsWith("/")) _p+="/";
+const _seg = _p.replace(/\/$/,"").split("/").pop();
+const _isTab = ["system","training","dns"].includes(_seg);
+const TAB  = _isTab ? _seg : "system";
+const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
+const DATA = ROOT + "data/";
+$("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"]]
+  .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
+["system","training","dns"].forEach(id=>$("#"+id).hidden = id!==TAB);
+({system:loadSystem,training:loadTraining,dns:loadDNS}[TAB])()
+  .catch(e=>$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`);
 </script>
 </body>
 </html>
