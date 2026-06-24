@@ -91,8 +91,9 @@ def from_incoming(in_dir):
         except Exception: continue
         ex = d.get("summary") or {}; sport = str(ex.get("sport") or "")
         if "RUN" not in sport.upper() and "JOG" not in sport.upper(): continue   # runs only on the dash
+        date = ex.get("start_time") or ex.get("start-time") or ""   # /v3/exercises vs transaction shape
         s = make_session([h for h in (d.get("hr") or []) if 30 < h < 220], sport,
-                         ex.get("start-time", ""), 1, ex.get("id", ""))
+                         date, 1, ex.get("id", ""))
         if s: out.append(s)
     return out
 
