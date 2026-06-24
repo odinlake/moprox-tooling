@@ -26,13 +26,18 @@ DEV_DENY = ",".join("Bash(%s)" % p for p in (
     "git push:*", "git reset --hard:*", "git clean:*", "sudo:*", "rm:*",
     "reboot:*", "shutdown:*", "dd:*", "mkfs:*", "gh:*"))   # service mutation needs sudo (denied); read-only systemctl ok
 TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
+CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
 AGENT_FLAGS = {
+    # dev already has broad Bash (can run convo directly); the rest get the convo helper as their one
+    # way to read/search the shared conversation on demand.
     "dev": ["--permission-mode", "acceptEdits",
             "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob",
             "--disallowedTools", DEV_DENY,
             "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK)],  # variadic: keep last
-    # coach: read-only access to the classified session history so it can compare/trend
-    "coach": ["--allowedTools", "Read,Grep,Glob", "--add-dir", str(TRAINING_DATA)],
+    # coach: read-only session history + the convo helper (search/tail the conversation)
+    "coach": ["--allowedTools", "Read,Grep,Glob,%s" % CONVO_TOOL, "--add-dir", str(TRAINING_DATA)],
+    # steward: only the convo helper, to investigate routing history when answering meta questions
+    "steward": ["--allowedTools", CONVO_TOOL],
 }
 
 def run_agent(agent, prompt, timeout=600):

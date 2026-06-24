@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Thin wrapper so agents can run `convo tail|search ...` (stable command name for the permission
+# allowlist — no path/python3/~ matching pitfalls). Mirrors to ~/.local/bin/convo.
+exec python3 /home/mikael/projects/moprox-tooling/services/forward/convo.py "$@"

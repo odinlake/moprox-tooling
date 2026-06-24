@@ -46,32 +46,34 @@ def decide(rec):
     route = d.get("route") if d.get("route") in ("coach", "dev", "steward") else last
     return route, d.get("reason", "steward judgement")
 
+# How an agent pulls conversation history on demand (it is NOT force-fed the transcript).
+HISTORY_NOTE = ("You are given only this latest message. You usually need no more — rely on your own "
+                "context. If THIS message refers to earlier conversation, run `convo tail [N]` (recent "
+                "turns, default 12) or `convo search <regex>` to pull just what you need.")
+
 def handle(agent, rec):
-    """Run the chosen agent with the full conversation transcript and send its reply."""
-    tx = convo.transcript(16)
+    """Run the chosen agent on the routed message. History is optional — the agent reads it on demand."""
+    text = (rec.get("text") or "").strip()
     reply_to = rec.get("msg_id") or None        # thread our reply under the operator's message
     if agent == "coach":
         reply = run_agent("coach",
-            "You (#coach) are in a Telegram conversation with the athlete. Full transcript so far "
-            "(newest last):\n%s\n\nReply to the latest operator message concisely, in your voice. You "
-            "can see the whole exchange above — use it for context." % tx, timeout=420)
+            "The athlete sent you (#coach) this on Telegram:\n%r\n\n%s\n\nReply concisely, in your voice."
+            % (text, HISTORY_NOTE), timeout=420)
         tg.send(reply, agent="coach", reply_to=reply_to)
     elif agent == "dev":
         DEV_INBOX.parent.mkdir(parents=True, exist_ok=True)
         reply = run_agent("dev",
-            "You (#dev) are in a Telegram conversation with the operator. Full transcript so far "
-            "(newest last):\n%s\n\nAct on the latest operator message per your autonomy rules: if it's "
-            "simple and reversible, DO it now (edit / build / local commit) and reply describing exactly "
-            "what you changed; if it's risky / irreversible / outward-facing / complex, do NOT do it — "
-            "append a one-line JSON entry to the book of works at %s and say you've queued it. Reply "
-            "concisely for Telegram, starting with #dev." % (tx, DEV_INBOX), timeout=900)
+            "The operator sent you (#dev) this on Telegram:\n%r\n\n%s\n\nAct per your autonomy rules: if "
+            "it's simple and reversible, DO it now (edit / build / local commit) and reply describing "
+            "exactly what you changed; if it's risky / irreversible / outward-facing / complex, do NOT do "
+            "it — append a one-line JSON entry to the book of works at %s and say you've queued it. Reply "
+            "concisely for Telegram, starting with #dev." % (text, HISTORY_NOTE, DEV_INBOX), timeout=900)
         tg.send(reply, agent="dev", reply_to=reply_to)
     elif agent == "steward":
         reply = run_agent("steward",
-            "The operator is talking to YOU (#steward) — usually about how messages are being routed, "
-            "or the agent setup. Full transcript so far (newest last):\n%s\n\nAnswer the latest operator "
-            "message directly and briefly. This is a normal conversational reply, NOT routing JSON. "
-            "Start with #steward." % tx, timeout=120)
+            "The operator is talking to YOU (#steward) — usually about how messages are routed or the "
+            "agent setup. Their message:\n%r\n\n%s\n\nAnswer directly and briefly (normal prose, NOT "
+            "routing JSON), starting with #steward." % (text, HISTORY_NOTE), timeout=120)
         tg.send(reply, agent="steward", reply_to=reply_to)
     return agent
 

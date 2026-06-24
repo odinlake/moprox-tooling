@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """The shared conversation log — one append-only transcript of every message in and out, across all
-agents. This is the "shared state store" of the supervisor pattern: the sender is always recorded,
-the steward marks each inbound message with the agent it routed to, and the WHOLE conversation is
-available to any agent for context (so nobody is blind to what was just said).
+agents. The "shared state store" of the supervisor pattern: the sender is always recorded, the router
+marks each inbound message with the agent it routed to, and the whole history is searchable.
 
   ~/.local/share/moprox/conversation.jsonl
   in :  {"ts","dir":"in","from":"operator","to":<agent|null>,"msg_id","reply_to","text"}
   out:  {"ts","dir":"out","from":<agent>,"msg_id","text"}
 
-Outbound msg_ids are logged so a Telegram reply-to can be mapped back to the agent that spoke
-(deterministic handoff). Volume is tiny (one operator), so we just scan the file.
+Agents do NOT get the transcript force-fed — they have their own standing context (CLAUDE.md +
+memory) and are handed the routed message. Reading more is OPTIONAL and on demand, via this module's
+helpers / CLI:
+
+  convo.py tail [N=12]            # the last N turns (windowed read, sensible default)
+  convo.py search REGEX [LIM=20]  # every turn whose text matches the regex (last LIM)
+
+Volume is tiny (one operator), so we just scan the file.
 """
-import json, time
+import json, re, sys, time
 from pathlib import Path
 
 LOG = Path.home() / ".local/share/moprox/conversation.jsonl"
@@ -53,13 +58,33 @@ def last_agent():
             return r.get("from")
     return None
 
-def transcript(n=14):
-    """The last n turns as a plain-text transcript for an agent's context."""
+def _fmt(rows):
     out = []
-    for r in _read(n):
+    for r in rows:
+        t = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("ts", 0)))
         if r.get("dir") == "in":
             who = "operator" + ((" -> %s" % r["to"]) if r.get("to") else "")
         else:
             who = r.get("from") or "?"
-        out.append("[%s] %s" % (who, (r.get("text") or "").strip()))
+        out.append("%s [%s] %s" % (t, who, (r.get("text") or "").strip()))
     return "\n".join(out)
+
+def transcript(n=12):
+    """The last n turns as a plain-text transcript (windowed read, sensible default)."""
+    return _fmt(_read(n))
+
+def search(pattern, limit=20, ignore_case=True):
+    """Every turn whose text matches `pattern` (regex), most recent `limit`."""
+    try: rx = re.compile(pattern, re.I if ignore_case else 0)
+    except re.error as e: return "bad regex: %s" % e
+    hits = [r for r in _read() if rx.search(r.get("text") or "")]
+    return _fmt(hits[-limit:]) if hits else "(no matches for %r)" % pattern
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "tail"
+    if cmd == "tail":
+        print(transcript(int(sys.argv[2]) if len(sys.argv) > 2 else 12))
+    elif cmd == "search" and len(sys.argv) > 2:
+        print(search(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 20))
+    else:
+        print("usage: convo.py [tail N | search REGEX [LIMIT]]")
