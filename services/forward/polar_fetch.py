@@ -90,7 +90,8 @@ def post_session(ex, hr):
                 trace_step_s=round(len(block)/n), dur_min=round(dur_min, 1),
                 hr_avg=round(float(np.mean(block))), hr_max=round(float(np.max(block))),
                 max5=round(float(m5)) if m5 == m5 else 0, nint=cls.n_work_bouts, reps=reps)
-    telegram_feed.send_session(sess, agent="coach")          # chart (caption #coach-tagged)
+    if not telegram_feed.send_session(sess, agent="coach"):   # chart (caption #coach-tagged)
+        print("polar: WARN chart send failed for %s — commentary still posting" % (ex.get("id") or "?"))
     summary = {k: sess[k] for k in ("cat", "date", "dur_min", "hr_avg", "hr_max", "max5", "nint")}
     summary["above_lt2"] = bool(cls.above_lt2); summary["clamp"] = bool(cls.hr_clamp_suspected)
     commentary = run_agent("coach",

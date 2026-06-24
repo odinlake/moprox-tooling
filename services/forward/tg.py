@@ -94,4 +94,15 @@ def send_photo(png, caption="", agent=None):
     body += png + ("\r\n--%s--\r\n" % boundary).encode()
     req = urllib.request.Request(API % (tok, "sendPhoto"), data=body,
                                  headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
-    return json.load(urllib.request.urlopen(req, timeout=30))
+    # One retry: a photo is the only thing the athlete actually sees, and a transient blip behind
+    # Squid (timeout / 5xx) shouldn't drop it silently the way it did on 2026-06-24.
+    last = {"ok": False, "description": "send_photo: not attempted"}
+    for attempt in (1, 2):
+        try:
+            return json.load(urllib.request.urlopen(req, timeout=30))
+        except urllib.error.HTTPError as e:
+            try: last = json.load(e)
+            except Exception: last = {"ok": False, "description": "HTTP %s" % e.code}
+        except Exception as e:
+            last = {"ok": False, "description": "%s: %s" % (type(e).__name__, e)}
+    return last
