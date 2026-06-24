@@ -1,0 +1,14 @@
+# Rebuild the dashboard's data feeds and publish only what changed to gh-pages. Runs as the
+# agent user on claude-dev; reads the read-only PVE token + the private Polar data, fetches the
+# DNS exporter, and force-pushes a single flat commit. Triggered by dashboard-update.timer.
+# Install to /etc/systemd/system/.
+[Unit]
+Description=moprox dashboard updater (publish changed feeds to gh-pages)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/update.py

@@ -48,6 +48,7 @@
   <section id="system"></section>
   <section id="training" hidden></section>
   <section id="dns" hidden></section>
+  <section id="stats" hidden></section>
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
@@ -260,20 +261,38 @@ async function loadDNS(){
   render();
 }
 
+// ================= STATS =================
+async function loadStats(){
+  const d = await J(DATA+"stats.json");
+  const s = d.sources||{};
+  const rel = ts => { const m=Math.floor((Date.now()/1000-ts)/60); return m<1?"just now":m<60?m+" min ago":m<1440?Math.floor(m/60)+" h ago":Math.floor(m/1440)+" d ago"; };
+  const kb = b => b>=1048576 ? (b/1048576).toFixed(2)+" MB" : (b/1024).toFixed(0)+" KB";
+  const rows = ["system","training","dns"].filter(k=>s[k]).map(k=>`<tr>
+    <td>${k}</td><td>${rel(s[k].updated)}</td>
+    <td style="text-align:right">${s[k].ms} ms</td><td style="text-align:right">${kb(s[k].bytes)}</td></tr>`).join("");
+  const totBytes = ["system","training","dns"].reduce((a,k)=>a+(s[k]?.bytes||0),0);
+  $("#stats").innerHTML = `<div class="panel"><h2>Updater stats</h2>
+    <p class="muted">Each feed runs on a 5-minute timer but only republishes — and updates these
+    numbers — when its data actually changed; an idle tick exits without doing anything.</p>
+    <table><tr><th>feed</th><th>last updated</th><th style="text-align:right">build time</th><th style="text-align:right">payload</th></tr>
+      ${rows||'<tr><td colspan="4" class="muted">no stats yet</td></tr>'}</table>
+    <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>`;
+}
+
 // ---- endpoints / boot ----
 // Each tab is served from its own dir (dashboard/system/, /dns/, /training/) so reload &
 // bookmarks land on the right tab. Derive the active tab + the data base from the URL; load
 // only that tab. Works at .../dashboard/ (defaults to system) or behind a custom domain.
 let _p = location.pathname.replace(/index\.html$/,""); if(!_p.endsWith("/")) _p+="/";
 const _seg = _p.replace(/\/$/,"").split("/").pop();
-const _isTab = ["system","training","dns"].includes(_seg);
+const _isTab = ["system","training","dns","stats"].includes(_seg);
 const TAB  = _isTab ? _seg : "system";
 const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
 const DATA = ROOT + "data/";
-$("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"]]
+$("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"],["stats","Stats"]]
   .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
-["system","training","dns"].forEach(id=>$("#"+id).hidden = id!==TAB);
-({system:loadSystem,training:loadTraining,dns:loadDNS}[TAB])()
+["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = id!==TAB);
+({system:loadSystem,training:loadTraining,dns:loadDNS,stats:loadStats}[TAB])()
   .catch(e=>$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`);
 </script>
 </body>

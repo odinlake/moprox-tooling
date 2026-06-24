@@ -1,0 +1,12 @@
+# Run the dashboard updater every 5 minutes (aligned to :00/:05/:10...). The updater itself
+# exits fast when nothing changed, so an idle tick is cheap. `systemctl enable --now
+# dashboard-update.timer` on claude-dev. Install to /etc/systemd/system/.
+[Unit]
+Description=Run the moprox dashboard updater every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
