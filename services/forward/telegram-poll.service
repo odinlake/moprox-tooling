@@ -1,0 +1,17 @@
+# Long-poll Telegram for inbound messages and capture them to the inbox JSONL. Continuous loop
+# (Restart=always). The router/steward consumes the inbox. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox Telegram inbound poller (capture to inbox)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/telegram_poll.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
