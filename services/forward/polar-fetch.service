@@ -1,0 +1,11 @@
+# Pull new Polar exercises; for >=10 min HR sessions, run the coach + post chart/commentary to
+# Telegram. Triggered by polar-fetch.timer. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox Polar fetcher (new exercises -> coach -> Telegram)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/polar_fetch.py
