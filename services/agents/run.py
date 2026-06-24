@@ -16,6 +16,7 @@ AGENTS = {
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
+SHARED_MEM = HOME / ".claude/projects/-home-mikael/memory"    # the dev agent shares THIS session's memory
 LOCAL_BIN = HOME / ".local/bin"
 # Resolve the CLI absolutely: under systemd the service PATH is minimal and won't find ~/.local/bin.
 CLAUDE = shutil.which("claude") or str(LOCAL_BIN / "claude")
@@ -33,7 +34,8 @@ AGENT_FLAGS = {
     "dev": ["--permission-mode", "acceptEdits",
             "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob",
             "--disallowedTools", DEV_DENY,
-            "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK)],  # variadic: keep last
+            # shares THIS session's memory (also symlinked into the dev project dir so it auto-loads);
+            "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK), str(SHARED_MEM)],  # variadic: keep last
     # coach: reads session history + convo helper, and can WRITE its own semantic memory (its cwd is
     # its context dir — coach-memory.md, athlete.json) so it learns durably as the athlete evolves.
     "coach": ["--permission-mode", "acceptEdits",
