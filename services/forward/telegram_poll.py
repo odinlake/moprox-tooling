@@ -12,8 +12,19 @@ from pathlib import Path
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
 INBOX  = Path(os.environ.get("TELEGRAM_INBOX", Path.home() / ".local/share/moprox/telegram-inbox.jsonl"))
 STATE  = Path.home() / ".local/share/moprox/telegram-offset"
+LOCATION = Path.home() / ".local/share/moprox/location.json"   # freshest fix from a shared/live location
 # capture-only: the dispatcher service tails this inbox and does triage + routing (single-flight
-# per agent), so a long agent run never blocks message pickup here.
+# per agent), so a long agent run never blocks message pickup here. Location pins / Live Location
+# updates are captured separately to LOCATION (latest wins) for the valet's "where am I" check.
+
+def capture_location(loc):
+    rec = {"lat": loc["latitude"], "lon": loc["longitude"], "ts": int(time.time()),
+           "accuracy": loc.get("horizontal_accuracy"), "live_period": loc.get("live_period"),
+           "heading": loc.get("heading")}
+    if loc.get("live_period"): rec["until"] = rec["ts"] + loc["live_period"]
+    LOCATION.parent.mkdir(parents=True, exist_ok=True)
+    LOCATION.write_text(json.dumps(rec))
+    print("location <-", rec["lat"], rec["lon"], "(live)" if loc.get("live_period") else "(pin)")
 
 def creds():
     tok = chat = None
@@ -35,13 +46,16 @@ def main():
     while True:
         try:
             r = api(tok, "getUpdates", {"offset": offset, "timeout": 30,
-                                        "allowed_updates": json.dumps(["message"])})
+                                        "allowed_updates": json.dumps(["message", "edited_message"])})
         except Exception as e:
             print("poll error:", e); time.sleep(5); continue
         for u in r.get("result", []):
             offset = u["update_id"] + 1
-            m = u.get("message")
+            m = u.get("message") or u.get("edited_message")    # live location streams as edited_message
             if not m: continue
+            if m.get("location"):                              # a pin or Live Location update
+                capture_location(m["location"]); continue
+            if "message" not in u: continue                    # ignore edits to text; only new messages route
             rec = {"ts": int(time.time()), "update_id": u["update_id"], "chat_id": m["chat"]["id"],
                    "msg_id": m.get("message_id"),
                    "from": (m.get("from") or {}).get("username") or (m.get("from") or {}).get("first_name"),
