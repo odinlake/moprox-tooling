@@ -56,6 +56,21 @@ class Athlete:
     # HRR-based ("Karvonen") was explicitly chosen over %max in this chat.
     # Zone fractions are the standard 5-zone Karvonen cut points. JUDGEMENT
     # on exact edges; tune per athlete.
+    @classmethod
+    def load(cls, path=None):
+        """Load the canonical physiology from a JSON file (the single source of truth the coach
+        owns and edits), falling back to defaults. So a threshold change in one file re-tunes the
+        whole classifier. Reads ATHLETE_JSON from the env if no path is given."""
+        import json, os
+        p = path or os.environ.get("ATHLETE_JSON")
+        if p and os.path.exists(p):
+            try:
+                d = json.load(open(p))
+                return cls(**{k: float(d[k]) for k in ("max_hr", "resting_hr", "lt1_hr", "lt2_hr")
+                              if k in d})
+            except Exception:
+                pass
+        return cls()
     def hrr(self) -> float:
         return self.max_hr - self.resting_hr
     def karvonen(self, frac: float) -> float:

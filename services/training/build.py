@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from analysis import Athlete, analyse_safe   # the validated engine
 
 RUN_SPORTS = {1, 17, 83}
-ATH = Athlete()                  # max_hr=202, resting=45, lt1=155, lt2=180 (calibrated in-chat)
+ATHLETE_JSON = os.path.expanduser("~/projects/private-data/agents/coach/athlete.json")
+ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls back to defaults)
 TRACE_POINTS = 120               # classified sessions (detail chart; the rich chart is the Telegram one)
 TRACE_POINTS_THIN = 50           # unknown / very short
 

@@ -34,8 +34,10 @@ AGENT_FLAGS = {
             "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob",
             "--disallowedTools", DEV_DENY,
             "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK)],  # variadic: keep last
-    # coach: read-only session history + the convo helper (search/tail the conversation)
-    "coach": ["--allowedTools", "Read,Grep,Glob,%s" % CONVO_TOOL, "--add-dir", str(TRAINING_DATA)],
+    # coach: reads session history + convo helper, and can WRITE its own semantic memory (its cwd is
+    # its context dir — coach-memory.md, athlete.json) so it learns durably as the athlete evolves.
+    "coach": ["--permission-mode", "acceptEdits",
+              "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL, "--add-dir", str(TRAINING_DATA)],
     # steward: only the convo helper, to investigate routing history when answering meta questions
     "steward": ["--allowedTools", CONVO_TOOL],
 }

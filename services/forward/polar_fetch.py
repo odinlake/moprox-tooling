@@ -30,7 +30,8 @@ SEEN      = Path.home() / ".local/share/moprox/polar-seen.json"
 MIN_HR_SECONDS = 600          # 10 min — the coach gate
 FRESH_WINDOW_H = 6            # only post exercises uploaded within this many hours (no history spam)
 BASE = "https://www.polaraccesslink.com"
-ATH = Athlete()
+ATHLETE_JSON = Path.home() / "projects/private-data/agents/coach/athlete.json"
+ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls back to defaults)
 
 def env():
     d = {}
