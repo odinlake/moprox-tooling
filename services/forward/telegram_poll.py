@@ -43,6 +43,7 @@ def main():
             m = u.get("message")
             if not m: continue
             rec = {"ts": int(time.time()), "update_id": u["update_id"], "chat_id": m["chat"]["id"],
+                   "msg_id": m.get("message_id"),
                    "from": (m.get("from") or {}).get("username") or (m.get("from") or {}).get("first_name"),
                    "text": m.get("text", ""),
                    "reply_to": (m.get("reply_to_message") or {}).get("message_id")}

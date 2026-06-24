@@ -1,64 +1,90 @@
 #!/usr/bin/env python3
-"""Steward routing logic: triage one inbound message, then act on the decision.
+"""Routing: decide which agent handles an inbound message, then run it with full conversation context.
 
-Split in two so the dispatcher can triage cheaply on the main thread and run the (slow) target
-agent on that agent's own single-flight worker:
-  triage(text)        -> {"route": coach|dev|chat|ignore, "reason", "context"}   (runs the steward)
-  handle(decision, rec)-> coach reply | dev task log + ack | steward chat reply  (runs the target)
+Signal priority (deterministic first — the lesson from production multi-agent systems is to only fall
+back to an LLM when there's genuine ambiguity):
+  1. explicit address      — message starts with #steward / coach: / @dev ...        -> that agent
+  2. telegram reply-to      — operator swipe-replied to an agent's message            -> that agent
+  3. steward judgement       — no signal: steward picks, told the last speaker so it can default to
+                              the recency/last-speaker continuation unless content says otherwise.
 
-All agents run on the Max plan via run_agent; all output goes out through tg with an #agent tag.
+Every agent is invoked with the recent shared transcript (convo.transcript), so none of them is ever
+blind to "my previous message". The steward can also be the destination — it answers the operator
+directly about routing / the agent setup.
 """
 import json, re, sys
 from pathlib import Path
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 from run import run_agent
-import tg
+import tg, convo
 
 DEV_INBOX = Path.home() / ".local/share/moprox/dev-requests.jsonl"
+ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev)\b[\s:,>\-]*", re.I)   # explicit address at the start
 
 def _json(s):
     m = re.search(r"\{.*\}", s or "", re.S)
     try: return json.loads(m.group(0)) if m else None
     except Exception: return None
 
-def triage(text):
-    prompt = ("Triage this inbound Telegram message from the athlete and output ONLY the routing "
-              "JSON object (no prose, no code fence).\n\nMESSAGE: %s" % text)
-    return _json(run_agent("steward", prompt, timeout=120)) or {"route": "ignore", "reason": "unparsed"}
-
-def handle(decision, rec):
-    """Act on a triage decision. Returns the chosen route (for logging)."""
+def decide(rec):
+    """Return (agent, reason). Deterministic signals win; steward LLM only for true ambiguity."""
     text = (rec.get("text") or "").strip()
-    route = decision.get("route", "ignore"); ctx = decision.get("context", "")
-    if route == "coach":
+    m = ADDR.match(text)
+    if m: return m.group(1).lower(), "explicit address"
+    a = convo.agent_for_msg(rec.get("reply_to"))
+    if a: return a, "reply-to %s" % rec.get("reply_to")
+    last = convo.last_agent() or "coach"
+    prompt = ("Route the operator's new Telegram message to ONE agent. Output ONLY "
+              '{"route":"coach|dev|steward","reason":"<short>"}.\n'
+              "The most recent agent to speak was '%s' — if the new message reads as a continuation, "
+              "affirmation, thanks, or short follow-up, route it THERE. Otherwise route by content: "
+              "training / workouts / the plan / how a session went -> coach; homelab / dashboard / "
+              "infra / code / 'the bot is broken' -> dev; questions about message routing or the agent "
+              "setup itself -> steward.\n\nRecent conversation:\n%s\n\nNEW MESSAGE: %s"
+              % (last, convo.transcript(12), text))
+    d = _json(run_agent("steward", prompt, timeout=120)) or {}
+    route = d.get("route") if d.get("route") in ("coach", "dev", "steward") else last
+    return route, d.get("reason", "steward judgement")
+
+def handle(agent, rec):
+    """Run the chosen agent with the full conversation transcript and send its reply."""
+    tx = convo.transcript(16)
+    reply_to = rec.get("msg_id") or None        # thread our reply under the operator's message
+    if agent == "coach":
         reply = run_agent("coach",
-            "The athlete sent this via Telegram: %r\nContext: %s\nReply concisely, in your voice." % (text, ctx),
-            timeout=420)
-        tg.send(reply, agent="coach", reply_to=rec.get("reply_to") or None)
-    elif route == "dev":
+            "You (#coach) are in a Telegram conversation with the athlete. Full transcript so far "
+            "(newest last):\n%s\n\nReply to the latest operator message concisely, in your voice. You "
+            "can see the whole exchange above — use it for context." % tx, timeout=420)
+        tg.send(reply, agent="coach", reply_to=reply_to)
+    elif agent == "dev":
         DEV_INBOX.parent.mkdir(parents=True, exist_ok=True)
         reply = run_agent("dev",
-            "The operator messaged you (#dev) via Telegram:\n%r\nContext: %s\n\n"
-            "Act per your autonomy rules: if it's simple and reversible, DO it now (edit / build / "
-            "local commit) and reply describing exactly what you changed. If it's risky, irreversible, "
-            "outward-facing (push / deploy / delete / infra) or complex, do NOT do it — append a "
-            "one-line JSON entry to the book of works at %s and tell the operator you've queued it. "
-            "Reply concisely for Telegram, starting with #dev." % (text, ctx, DEV_INBOX),
-            timeout=900)
-        tg.send(reply, agent="dev", reply_to=rec.get("reply_to") or None)
-    elif route == "chat":
-        tg.send(ctx or "👍", agent="steward")
-    # ignore -> nothing
-    return route
+            "You (#dev) are in a Telegram conversation with the operator. Full transcript so far "
+            "(newest last):\n%s\n\nAct on the latest operator message per your autonomy rules: if it's "
+            "simple and reversible, DO it now (edit / build / local commit) and reply describing exactly "
+            "what you changed; if it's risky / irreversible / outward-facing / complex, do NOT do it — "
+            "append a one-line JSON entry to the book of works at %s and say you've queued it. Reply "
+            "concisely for Telegram, starting with #dev." % (tx, DEV_INBOX), timeout=900)
+        tg.send(reply, agent="dev", reply_to=reply_to)
+    elif agent == "steward":
+        reply = run_agent("steward",
+            "The operator is talking to YOU (#steward) — usually about how messages are being routed, "
+            "or the agent setup. Full transcript so far (newest last):\n%s\n\nAnswer the latest operator "
+            "message directly and briefly. This is a normal conversational reply, NOT routing JSON. "
+            "Start with #steward." % tx, timeout=120)
+        tg.send(reply, agent="steward", reply_to=reply_to)
+    return agent
 
 def process_message(rec):
-    """Convenience: triage + handle inline (used by the CLI; the dispatcher calls the two halves)."""
+    """Convenience for the CLI: decide + log + handle inline (the dispatcher splits these)."""
     text = (rec.get("text") or "").strip()
     if not text: return "empty"
     try:
-        return handle(triage(text), rec)
+        agent, reason = decide(rec)
+        convo.log_in(text, rec.get("msg_id"), rec.get("reply_to"), to=agent)
+        return handle(agent, rec)
     except Exception as e:
-        tg.send("(steward error: %s)" % str(e)[:150], agent="steward"); return "error"
+        tg.send("(routing error: %s)" % str(e)[:150], agent="steward"); return "error"
 
 if __name__ == "__main__":
     print("route:", process_message({"text": " ".join(sys.argv[1:])}))

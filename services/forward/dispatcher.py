@@ -4,47 +4,46 @@ single-flight execution: an agent is never invoked while a previous invocation o
 running — further messages queue and run in order. Different agents run concurrently, so a long
 coach session never blocks triage/pickup of the next message.
 
-  inbox.jsonl --(tail)--> [steward queue] --steward worker: triage--> [coach queue] | dev ack | chat
-                                                            [coach queue] --coach worker--> reply
+  inbox.jsonl --(tail)--> [router] --decide(signals)--> [coach|dev|steward queue] --worker--> reply
+                                     logs the inbound to the shared transcript, marked with its target
 
 telegram_poll only *captures* to the inbox (fast, never blocks); this service does all the work.
 Only messages from the operator's own chat_id are acted on.
 """
 import json, queue, threading, time
 from pathlib import Path
-import route, tg
+import route, tg, convo
 
 INBOX  = Path.home() / ".local/share/moprox/telegram-inbox.jsonl"
 OFFSET = Path.home() / ".local/share/moprox/dispatcher-offset"     # byte offset into the inbox
 
-Q = {"steward": queue.Queue(), "coach": queue.Queue(), "dev": queue.Queue()}
+Q = {"router": queue.Queue(), "coach": queue.Queue(), "dev": queue.Queue(), "steward": queue.Queue()}
 
 def agent_worker(name):
-    """Single-flight worker for a slow agent (coach / dev): one job at a time, rest queue."""
+    """Single-flight worker for one agent: one invocation at a time, the rest queue (in order)."""
     while True:
-        decision, rec = Q[name].get()
+        rec = Q[name].get()
         try:
-            print("%s <-" % name, (rec.get("text") or "")[:50]); route.handle(decision, rec)
+            print("%s <-" % name, (rec.get("text") or "")[:50]); route.handle(name, rec)
         except Exception as e:
             print("%s error:" % name, e); tg.send("(%s error: %s)" % (name, str(e)[:150]), agent=name)
         finally:
             Q[name].task_done()
 
-def steward_worker():
+def router_worker():
+    """Decide the target (deterministic signals, else steward judgement), record the inbound message
+    in the shared transcript marked with its target, then hand to that agent's single-flight queue."""
     while True:
-        rec = Q["steward"].get()
+        rec = Q["router"].get()
         try:
-            d = route.triage((rec.get("text") or "").strip())
-            r = d.get("route", "ignore")
-            print("route:", r, "|", (rec.get("text") or "")[:50])
-            if r in ("coach", "dev"):
-                Q[r].put((d, rec))                # hand slow agent work to its single-flight worker
-            else:
-                route.handle(d, rec)              # chat reply / ignore — cheap, inline
+            agent, reason = route.decide(rec)
+            print("route:", agent, "(%s) |" % reason, (rec.get("text") or "")[:50])
+            convo.log_in((rec.get("text") or "").strip(), rec.get("msg_id"), rec.get("reply_to"), to=agent)
+            Q[agent].put(rec)
         except Exception as e:
-            print("steward error:", e); tg.send("(steward error: %s)" % str(e)[:150], agent="steward")
+            print("router error:", e); tg.send("(routing error: %s)" % str(e)[:150], agent="steward")
         finally:
-            Q["steward"].task_done()
+            Q["router"].task_done()
 
 def our_chat(rec):
     _, chat = tg.creds()
@@ -54,9 +53,9 @@ def main():
     INBOX.parent.mkdir(parents=True, exist_ok=True); INBOX.touch(exist_ok=True)
     # resume from saved offset; first ever run starts at EOF so we don't replay captured history
     off = int(OFFSET.read_text()) if OFFSET.exists() else INBOX.stat().st_size
-    threading.Thread(target=steward_worker, daemon=True).start()
-    threading.Thread(target=agent_worker, args=("coach",), daemon=True).start()
-    threading.Thread(target=agent_worker, args=("dev",), daemon=True).start()
+    threading.Thread(target=router_worker, daemon=True).start()
+    for name in ("coach", "dev", "steward"):
+        threading.Thread(target=agent_worker, args=(name,), daemon=True).start()
     print("dispatcher up; offset=%d" % off)
     while True:
         try:
@@ -69,7 +68,7 @@ def main():
                     try: rec = json.loads(raw.decode())
                     except Exception: continue
                     if (rec.get("text") or "").strip() and our_chat(rec):
-                        Q["steward"].put(rec)
+                        Q["router"].put(rec)
                 off += nl + 1
                 OFFSET.write_text(str(off))
         except Exception as e:

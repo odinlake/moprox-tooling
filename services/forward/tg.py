@@ -12,6 +12,8 @@ Creds from ~/.config/claude-dev/telegram.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_
 import html, json, os, re, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
+import convo   # shared conversation log (records every outbound message + its msg_id)
+
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
 API = "https://api.telegram.org/bot%s/%s"
 
@@ -76,12 +78,17 @@ def send(text, agent=None, reply_to=None):
     tok, chat = creds()
     body = tag(text, agent)
     p = {"chat_id": chat, "text": md_to_html(body)[:4096], "parse_mode": "HTML"}
-    if reply_to: p["reply_to_message_id"] = reply_to
+    if reply_to:
+        p["reply_to_message_id"] = reply_to
+        p["allow_sending_without_reply"] = "true"               # stale/deleted target -> still send
     try:
-        return _post(tok, "sendMessage", p)
-    except urllib.error.HTTPError:                               # bad HTML -> deliver as plain text
-        p.pop("parse_mode", None); p["text"] = body[:4096]
-        return _post(tok, "sendMessage", p)
+        r = _post(tok, "sendMessage", p)
+    except urllib.error.HTTPError:                               # bad HTML -> plain text, drop the reply target
+        for k in ("parse_mode", "reply_to_message_id"): p.pop(k, None)
+        p["text"] = body[:4096]
+        r = _post(tok, "sendMessage", p)
+    convo.log_out(agent or "system", body, (r.get("result") or {}).get("message_id"))
+    return r
 
 def send_photo(png, caption="", agent=None):
     tok, chat = creds()
@@ -99,7 +106,9 @@ def send_photo(png, caption="", agent=None):
     last = {"ok": False, "description": "send_photo: not attempted"}
     for attempt in (1, 2):
         try:
-            return json.load(urllib.request.urlopen(req, timeout=30))
+            r = json.load(urllib.request.urlopen(req, timeout=30))
+            convo.log_out(agent or "system", cap or "[chart]", (r.get("result") or {}).get("message_id"))
+            return r
         except urllib.error.HTTPError as e:
             try: last = json.load(e)
             except Exception: last = {"ok": False, "description": "HTTP %s" % e.code}
