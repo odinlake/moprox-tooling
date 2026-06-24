@@ -37,10 +37,15 @@ def handle(decision, rec):
         tg.send(reply, agent="coach", reply_to=rec.get("reply_to") or None)
     elif route == "dev":
         DEV_INBOX.parent.mkdir(parents=True, exist_ok=True)
-        with open(DEV_INBOX, "a") as f:
-            f.write(json.dumps({"ts": rec.get("ts"), "text": text, "context": ctx}) + "\n")
-        tg.send("🛠️ Logged as a dev task — I'll pick it up in the next dev session.\n• " + (ctx or text),
-                agent="dev")
+        reply = run_agent("dev",
+            "The operator messaged you (#dev) via Telegram:\n%r\nContext: %s\n\n"
+            "Act per your autonomy rules: if it's simple and reversible, DO it now (edit / build / "
+            "local commit) and reply describing exactly what you changed. If it's risky, irreversible, "
+            "outward-facing (push / deploy / delete / infra) or complex, do NOT do it — append a "
+            "one-line JSON entry to the book of works at %s and tell the operator you've queued it. "
+            "Reply concisely for Telegram, starting with #dev." % (text, ctx, DEV_INBOX),
+            timeout=900)
+        tg.send(reply, agent="dev", reply_to=rec.get("reply_to") or None)
     elif route == "chat":
         tg.send(ctx or "👍", agent="steward")
     # ignore -> nothing

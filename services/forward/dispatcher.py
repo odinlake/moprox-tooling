@@ -17,17 +17,18 @@ import route, tg
 INBOX  = Path.home() / ".local/share/moprox/telegram-inbox.jsonl"
 OFFSET = Path.home() / ".local/share/moprox/dispatcher-offset"     # byte offset into the inbox
 
-Q = {"steward": queue.Queue(), "coach": queue.Queue()}
+Q = {"steward": queue.Queue(), "coach": queue.Queue(), "dev": queue.Queue()}
 
-def coach_worker():
+def agent_worker(name):
+    """Single-flight worker for a slow agent (coach / dev): one job at a time, rest queue."""
     while True:
-        decision, rec = Q["coach"].get()
+        decision, rec = Q[name].get()
         try:
-            print("coach <-", (rec.get("text") or "")[:50]); route.handle(decision, rec)
+            print("%s <-" % name, (rec.get("text") or "")[:50]); route.handle(decision, rec)
         except Exception as e:
-            print("coach error:", e); tg.send("(coach error: %s)" % str(e)[:150], agent="coach")
+            print("%s error:" % name, e); tg.send("(%s error: %s)" % (name, str(e)[:150]), agent=name)
         finally:
-            Q["coach"].task_done()
+            Q[name].task_done()
 
 def steward_worker():
     while True:
@@ -36,10 +37,10 @@ def steward_worker():
             d = route.triage((rec.get("text") or "").strip())
             r = d.get("route", "ignore")
             print("route:", r, "|", (rec.get("text") or "")[:50])
-            if r == "coach":
-                Q["coach"].put((d, rec))          # hand the slow work to coach's single-flight worker
+            if r in ("coach", "dev"):
+                Q[r].put((d, rec))                # hand slow agent work to its single-flight worker
             else:
-                route.handle(d, rec)              # dev ack / chat reply / ignore — all cheap
+                route.handle(d, rec)              # chat reply / ignore — cheap, inline
         except Exception as e:
             print("steward error:", e); tg.send("(steward error: %s)" % str(e)[:150], agent="steward")
         finally:
@@ -54,7 +55,8 @@ def main():
     # resume from saved offset; first ever run starts at EOF so we don't replay captured history
     off = int(OFFSET.read_text()) if OFFSET.exists() else INBOX.stat().st_size
     threading.Thread(target=steward_worker, daemon=True).start()
-    threading.Thread(target=coach_worker, daemon=True).start()
+    threading.Thread(target=agent_worker, args=("coach",), daemon=True).start()
+    threading.Thread(target=agent_worker, args=("dev",), daemon=True).start()
     print("dispatcher up; offset=%d" % off)
     while True:
         try:

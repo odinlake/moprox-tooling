@@ -8,21 +8,37 @@ Telegram router (steward / coach / dev).
 import os, shutil, subprocess, sys
 from pathlib import Path
 
+HOME = Path.home()
 AGENTS = {
-    "coach":   Path.home() / "projects/private-data/agents/coach",
-    "steward": Path.home() / "projects/private-data/agents/steward",
-    "dev":     Path.home() / "projects/moprox-homelab",
+    "coach":   HOME / "projects/private-data/agents/coach",
+    "steward": HOME / "projects/private-data/agents/steward",
+    "dev":     HOME / "projects/private-data/agents/dev",     # the persona dir (loads its CLAUDE.md)
 }
-LOCAL_BIN = Path.home() / ".local/bin"
+REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
+BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
+LOCAL_BIN = HOME / ".local/bin"
 # Resolve the CLI absolutely: under systemd the service PATH is minimal and won't find ~/.local/bin.
 CLAUDE = shutil.which("claude") or str(LOCAL_BIN / "claude")
+
+# The dev agent acts on simple, reversible work (operator's chosen autonomy). Irreversible / outward /
+# privileged commands are denied at the TOOL layer here; the persona handles the nuance + book-of-works.
+DEV_DENY = ",".join("Bash(%s)" % p for p in (
+    "git push:*", "git reset --hard:*", "git clean:*", "sudo:*", "rm:*",
+    "reboot:*", "shutdown:*", "dd:*", "mkfs:*", "gh:*"))   # service mutation needs sudo (denied); read-only systemctl ok
+AGENT_FLAGS = {
+    "dev": ["--permission-mode", "acceptEdits",
+            "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob",
+            "--disallowedTools", DEV_DENY,
+            "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK)],  # variadic: keep last
+}
 
 def run_agent(agent, prompt, timeout=600):
     cwd = AGENTS[agent]
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
     env["PATH"] = "%s:%s" % (LOCAL_BIN, env.get("PATH", "/usr/bin:/bin"))   # claude shells out to node
-    r = subprocess.run([CLAUDE, "-p", prompt], cwd=str(cwd), env=env,
+    cmd = [CLAUDE, "-p", prompt] + AGENT_FLAGS.get(agent, [])               # prompt before variadic flags
+    r = subprocess.run(cmd, cwd=str(cwd), env=env,
                        capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError("agent %s failed: %s" % (agent, (r.stderr or r.stdout)[:300]))
