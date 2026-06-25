@@ -148,7 +148,7 @@ async function loadTraining(){
   const all = data.sessions;
   const order=["easy","tempo","trail_easy","vo2max","speed","unknown"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const WINS=[[90,"3m"],[365,"1y"],[1095,"3y"],[1e12,"all"]], WIN_DEFAULT=1;
+  const WINS=[[90,"3m"],[365,"1y"],[1095,"3y"],[1e12,"all"]], WIN_DEFAULT=0;
   // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 0..50 (left-aligned, so
   // width ∝ duration; >50 min gets a red overflow tick), y = 120..180 bpm (out-of-range clamps to
   // flat lines at the edges). Faint floor line = 120 bpm reference.
