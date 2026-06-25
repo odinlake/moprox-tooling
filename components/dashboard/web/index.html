@@ -42,7 +42,7 @@
 </head>
 <body>
 <header>
-  <h1>🖥️ moprox</h1>
+  <h1>moprox</h1>
   <div class="tabs" id="tabs"></div>
 </header>
 <main>
@@ -165,18 +165,14 @@ async function loadTraining(){
       +`<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.2"/>${over}</svg>`;
   };
   $("#training").innerHTML = `
-    <div class="grid cards">
-      <div class="panel"><h2>Sessions <span class="muted" id="twin"></span></h2><div class="stat" id="tcount">—</div>
-        <div class="muted">of ${all.length} since ${all[all.length-1].date.slice(0,10)}</div></div>
-      <div class="panel" style="grid-column:span 2"><h2>By type <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· click to filter</span></h2><div class="row" id="tlegend"></div>
-        <div class="muted" style="margin-top:.5rem">HR-classified where the data allows; inferior-device / older / shorter = <span style="color:${CAT.unknown}">other</span></div></div>
-    </div>
-    <div class="panel" style="margin-top:1rem">
-      <div class="row" style="justify-content:space-between;align-items:center">
-        <h2>Window</h2>
-        <label class="muted" style="white-space:nowrap">show <b id="winlbl">12 mo</b>
-          <input id="winrange" type="range" min="0" max="${WINS.length-1}" value="3" style="width:200px;vertical-align:middle"></label>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:baseline">
+        <h2>Sessions <span class="muted" id="twin"></span> <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem">— tap a type to filter</span></h2>
+        <span class="muted"><b id="tcount" style="color:var(--fg)">—</b> of ${all.length} since ${all[all.length-1].date.slice(0,10)}</span>
       </div>
+      <div class="row" id="tlegend" style="margin:.5rem 0 .2rem"></div>
+      <label class="muted" style="white-space:nowrap;display:block;text-align:right">show <b id="winlbl">12 mo</b>
+        <input id="winrange" type="range" min="0" max="${WINS.length-1}" value="3" style="width:180px;vertical-align:middle"></label>
       <div style="margin-top:.4rem" id="tbars"></div>
     </div>
     <div class="row" style="margin-top:1rem">
@@ -317,13 +313,11 @@ function renderAgents(a){
   const blocks = (_ag.windows[_agWin]||[]).map(r=>`
     <div style="padding:.45rem 0;border-bottom:1px solid #21262d">
       <div><b>${r.agent}</b> <span class="muted">— ${r.statement||'—'}</span></div>
-      <div class="muted" style="margin-top:.15rem">${r.calls} calls · ${k(r.tokens)} tok ·
+      <div style="margin-top:.15rem;font-size:.85rem">${r.calls} calls · ${k(r.tokens)} tok ·
         ${r.cache_pct}% cache · ${sec(r.avg_ms)} avg${r.fails?' · <span style="color:#f85149">'+r.fails+' fails</span>':''}</div>
     </div>`).join("");
   const tog = w => `<a href="#" onclick="_agWin='${w}';renderAgents();return false" style="${w===_agWin?'font-weight:700':'opacity:.55'}">${w}</a>`;
-  document.getElementById("agents-panel").innerHTML = `<h2>Agents</h2>
-    <p class="muted">Each agent is a fresh, stateless run — context per call is ~constant (its CLAUDE.md
-    + memory), so tokens scale with how often it's invoked, not a growing chat. Window: ${tog('24h')} · ${tog('30d')}</p>
+  document.getElementById("agents-panel").innerHTML = `<h2>Agents <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${tog('24h')} · ${tog('30d')}</span></h2>
     ${blocks||'<p class="muted">no calls in window</p>'}
     <p class="muted" style="margin-top:.5rem">snapshot ${_ag.generated?new Date(_ag.generated*1000).toLocaleString():'—'}</p>`;
 }
@@ -336,10 +330,8 @@ async function loadStats(){
     <td>${k}</td><td>${rel(s[k].updated)}</td>
     <td style="text-align:right">${s[k].ms} ms</td><td style="text-align:right">${kb(s[k].bytes)}</td></tr>`).join("");
   const totBytes = ["system","training","dns"].reduce((a,k)=>a+(s[k]?.bytes||0),0);
-  $("#stats").innerHTML = `<div class="panel" id="agents-panel"></div>
+  $("#stats").innerHTML = `<div class="panel" id="agents-panel" style="margin-bottom:1rem"></div>
     <div class="panel"><h2>Updater stats</h2>
-    <p class="muted">Each feed runs on a 5-minute timer but only republishes — and updates these
-    numbers — when its data actually changed; an idle tick exits without doing anything.</p>
     <table><tr><th>feed</th><th>last updated</th><th style="text-align:right">build time</th><th style="text-align:right">payload</th></tr>
       ${rows||'<tr><td colspan="4" class="muted">no stats yet</td></tr>'}</table>
     <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>`;
