@@ -133,14 +133,16 @@ function drawSysCharts(tf){
 function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));return t.getUTCFullYear()+"-W"+String(Math.ceil(((t-ys)/86400000+1)/7)).padStart(2,"0");}
 // Stacked weekly histogram as ONE svg, rendered at measured px width so gaps are pixel-consistent:
 // fixed gap (1-2px by bar width), integer bar widths, leftover px distributed +1 across the first bars.
-function histBars(data, W, wmax){
+function histBars(data, W, wmax, active){
   const n=data.length; if(!n) return '<span class="muted">no sessions in this window</span>';
   const BH=84, H=BH+15, gap=(W/n)>=14?2:1;
   let bw=Math.floor((W-gap*(n-1))/n); if(bw<1)bw=1;
   let rem=Math.max(0,(W-gap*(n-1))-bw*n);
   let x=0, r="";
   data.forEach(b=>{ const w=bw+(rem>0?1:0); if(rem>0)rem--;
-    let y=BH; b.segs.forEach(s=>{ const h=BH*s.n/wmax; y-=h; r+=`<rect x="${x}" y="${y.toFixed(1)}" width="${w}" height="${h.toFixed(1)}" fill="${s.color}"/>`; });
+    let y=BH, segs=""; b.segs.forEach(s=>{ const h=BH*s.n/wmax; y-=h; segs+=`<rect x="${x}" y="${y.toFixed(1)}" width="${w}" height="${h.toFixed(1)}" fill="${s.color}"/>`; });
+    if(b.segs.length){ const off=active&&!active.has(b.key);   // clickable bucket; fade when a selection excludes it
+      r+=`<g data-bk="${b.key}" opacity="${off?0.28:1}" style="cursor:pointer"><rect x="${x}" y="0" width="${w+gap}" height="${BH}" fill="transparent" pointer-events="all"/>${segs}</g>`; }
     if(b.lab) r+=`<text x="${(x+w/2).toFixed(1)}" y="${BH+11}" text-anchor="middle" fill="#8b949e" font-size="10">${b.lab}</text>`;
     x+=w+gap; });
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;max-width:100%">${r}</svg>`;
@@ -205,7 +207,7 @@ async function loadTraining(){
         <tbody id="slist"></tbody></table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Selected session details</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
-  let S=[], wcounts={}, activeCats=null, curCut=0;        // window sessions, per-type counts, filter (null=all), window start
+  let S=[], wcounts={}, activeCats=null, curCut=0, activeBuckets=null, nBuckets=0;   // + time-bucket selection (null=all)
   const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
   const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
     return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};
@@ -213,7 +215,7 @@ async function loadTraining(){
     curCut=Date.now()-WINS[idx][0]*86400*1000;
     S=all.filter(s=>new Date(s.date).getTime()>=curCut);
     wcounts={}; S.forEach(s=>wcounts[s.cat]=(wcounts[s.cat]||0)+1);
-    activeCats=null;                                      // window change resets the type filter
+    activeCats=null; activeBuckets=null;                  // window change resets both filters
     paint();
   };
   const toggleCat = c => {                                // first click isolates to one type; then toggles; empty/full -> all
@@ -223,9 +225,14 @@ async function loadTraining(){
       if(!activeCats.size||activeCats.size===avail) activeCats=null; }
     paint();
   };
+  const toggleBucket = key => {                            // first click isolates a bucket; then toggles; empty/full -> all
+    if(!activeBuckets) activeBuckets=new Set([key]);
+    else { activeBuckets.has(key)?activeBuckets.delete(key):activeBuckets.add(key);
+      if(!activeBuckets.size||activeBuckets.size===nBuckets) activeBuckets=null; }
+    paint();
+  };
   const paint = () => {
-    const Sf = activeCats ? S.filter(s=>activeCats.has(s.cat)) : S;
-    $("#tfoot").textContent=`${Sf.length} of ${all.length} since ${all[all.length-1].date.slice(0,10)}`;
+    const Stype = activeCats ? S.filter(s=>activeCats.has(s.cat)) : S;   // type filter drives the histogram
     $("#tlegend").innerHTML=order.filter(c=>wcounts[c]).map(c=>{const on=!activeCats||activeCats.has(c);
       return `<span class="seg legpick" data-c="${c}" style="cursor:pointer;user-select:none;${on?'':'opacity:.3'}"><i style="background:${CAT[c]}"></i>${c} ${wcounts[c]}</span>`;}).join("")||'<span class="muted">none</span>';
     $("#tlegend").querySelectorAll(".legpick").forEach(el=>el.onclick=()=>toggleCat(el.dataset.c));
@@ -235,7 +242,7 @@ async function loadTraining(){
     const keyOf = G==='w' ? (d=>isoWeek(new Date(d)))
                 : G==='m' ? (d=>{d=new Date(d);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');})
                 : (d=>String(new Date(d).getFullYear()));
-    const buk={}; Sf.forEach(s=>{const k=keyOf(s.date);(buk[k]=buk[k]||{})[s.cat]=(buk[k][s.cat]||0)+1;});
+    const buk={}; Stype.forEach(s=>{const k=keyOf(s.date);(buk[k]=buk[k]||{})[s.cat]=(buk[k][s.cat]||0)+1;});
     const bars=[];
     if(G==='w'){ const last=weekStart(Date.now()); last.setDate(last.getDate()-7);   // drop the partial current week
       for(let d=weekStart(start); d<=last; d.setDate(d.getDate()+7)) bars.push(new Date(d)); }
@@ -244,16 +251,21 @@ async function loadTraining(){
     else { const ny=new Date().getFullYear();
       for(let y=new Date(start).getFullYear(); y<=ny; y++) bars.push(new Date(y,0,1)); }
     const wmax=Math.max(1,...bars.map(d=>{const c=buk[keyOf(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
+    nBuckets=bars.filter(d=>buk[keyOf(d)]).length;        // non-empty buckets (for the all/none reset)
     let plab=null;
-    const barData=bars.map(d=>{const c=buk[keyOf(d)]||{};
-      const segs=order.map(k=>({color:CAT[k],n:c[k]||0})).filter(x=>x.n>0);
+    const barData=bars.map(d=>{const k=keyOf(d), c=buk[k]||{};
+      const segs=order.map(x=>({color:CAT[x],n:c[x]||0})).filter(x=>x.n>0);
       let lab="";
       if(G==='y') lab="'"+String(d.getFullYear()).slice(2);
       else if(G==='m'){ const y=d.getFullYear(); if(y!==plab){lab=String(y);plab=y;} }
-      else { const key=d.getFullYear()*12+d.getMonth(); if(key!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=key;} }
-      return {segs,lab};});
+      else { const kk=d.getFullYear()*12+d.getMonth(); if(kk!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=kk;} }
+      return {segs,lab,key:k};});
     const cont=$("#tbars"), W=Math.max(280, Math.floor(cont.getBoundingClientRect().width)||760);
-    cont.innerHTML = histBars(barData, W, wmax);
+    cont.innerHTML = histBars(barData, W, wmax, activeBuckets);
+    cont.querySelectorAll("g[data-bk]").forEach(gel=>gel.onclick=()=>toggleBucket(gel.dataset.bk));
+    // bucket selection filters everything below
+    const Sf = activeBuckets ? Stype.filter(s=>activeBuckets.has(keyOf(s.date))) : Stype;
+    $("#tfoot").textContent=`${Sf.length} of ${all.length} since ${all[all.length-1].date.slice(0,10)}`;
     let cmy=null,html="";                                 // month-grouped table (filtered)
     Sf.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
       if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="6">${my}</td></tr>`;}
