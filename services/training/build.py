@@ -98,12 +98,29 @@ def from_incoming(in_dir):
         if s: out.append(s)
     return out
 
-def build(raw_dir, out_path, in_dir=None):
+def from_apple_health(csv_path):
+    """Inferred sessions from an Apple Health HR CSV (inferior devices; kept as 'unknown')."""
+    if not csv_path or not os.path.exists(csv_path): return []
+    try:
+        import apple_health
+        return apple_health.sessions(csv_path)
+    except Exception as e:
+        print("apple-health: %s" % e); return []
+
+def build(raw_dir, out_path, in_dir=None, ah_csv=None):
+    import datetime
     sessions = from_export(raw_dir)
     seen = {s["date"][:16] for s in sessions}        # dedup incoming vs export by minute-stamp
     for s in (from_incoming(in_dir) if in_dir else []):
         if s["date"][:16] not in seen:
             sessions.append(s); seen.add(s["date"][:16])
+    # Apple Health fills the device gap; it's lower quality, so it only fills where Polar has NOTHING
+    # within 45 min (Polar wins any overlap).
+    starts = [datetime.datetime.fromisoformat(s["date"]) for s in sessions]
+    for s in from_apple_health(ah_csv):
+        st = datetime.datetime.fromisoformat(s["date"])
+        if any(abs((st - e).total_seconds()) < 2700 for e in starts): continue
+        sessions.append(s); starts.append(st)
     if not sessions: sys.exit(f"no sessions from export ({raw_dir}) or incoming ({in_dir})")
     sessions.sort(key=lambda s: s["date"], reverse=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -117,5 +134,7 @@ def build(raw_dir, out_path, in_dir=None):
 if __name__ == "__main__":
     raw = os.environ.get("POLAR_RAW", os.path.expanduser("~/projects/private-data/polar/raw"))
     inc = os.environ.get("POLAR_IN", os.path.expanduser("~/projects/private-data/polar/incoming"))
+    ah  = os.environ.get("APPLE_HEALTH") or next(iter(sorted(
+            glob.glob(os.path.expanduser("~/projects/private-data/apple-health/*.csv")))[-1:]), None)
     out = os.environ.get("OUT", "dist/data/training/sessions.json")
-    build(raw, out, inc)
+    build(raw, out, inc, ah)

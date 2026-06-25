@@ -52,6 +52,9 @@ def training_fp():
     inc = POLAR_RAW.parent / "incoming"
     if inc.exists():
         files += sorted(f for f in inc.rglob("*") if f.is_file())
+    ah = POLAR_RAW.parent.parent / "apple-health"            # Apple Health CSVs (device-gap fill)
+    if ah.exists():
+        files += sorted(f for f in ah.glob("*.csv") if f.is_file())
     return hashlib.sha1("|".join(f"{f}:{f.stat().st_size}:{f.stat().st_mtime_ns}" for f in files).encode()).hexdigest()
 
 def main():
