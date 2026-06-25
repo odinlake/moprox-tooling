@@ -148,8 +148,8 @@ function histBars(data, W, wmax){
 function lerpColor(a,b,t){const f=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));const A=f(a),B=f(b);
   return "rgb("+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(",")+")";}
 // Overlay every HR curve of one type, aligned at t=0; recent in the type colour, older fading to grey.
-function overlayChart(sess, cat){
-  const arr=[...sess].sort((p,q)=>p.date<q.date?-1:1);          // oldest -> newest
+function overlayChart(sess){
+  const arr=[...sess].sort((p,q)=>p.date<q.date?-1:1).slice(-50);   // oldest -> newest, cap 50 most recent
   const W=760,H=220,pL=34,pR=8,pT=10,pB=22, xmax=Math.max(1,...arr.map(s=>s.dur_min));
   let lo=Infinity,hi=-Infinity; arr.forEach(s=>s.trace.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v);}));
   if(!isFinite(lo)){lo=100;hi=180;} lo=Math.floor(lo/10)*10; hi=Math.ceil(hi/10)*10; if(hi<=lo)hi=lo+10;
@@ -159,7 +159,7 @@ function overlayChart(sess, cat){
   const GRAY="#586273";
   const paths=arr.map((s,i)=>{const f=arr.length>1?i/(arr.length-1):1; let d="";
     s.trace.forEach((v,j)=>{const m=j*s.trace_step_s/60;d+=(j?"L":"M")+px(m).toFixed(1)+" "+py(v).toFixed(1)+" ";});
-    return `<path d="${d}" fill="none" stroke="${lerpColor(GRAY,CAT[cat],f)}" stroke-width="${f>0.96?1.8:1}" stroke-opacity="${(0.2+0.8*f).toFixed(2)}"/>`;}).join("");
+    return `<path d="${d}" fill="none" stroke="${lerpColor(GRAY,CAT[s.cat],f)}" stroke-width="${f>0.96?1.8:1}" stroke-opacity="${(0.2+0.8*f).toFixed(2)}"/>`;}).join("");
   return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}</svg>`;
 }
 async function loadTraining(){
@@ -193,6 +193,7 @@ async function loadTraining(){
       <div id="tbars"></div>
       <div class="muted" id="tfoot" style="font-size:.75rem;margin-top:.35rem"></div>
     </div>
+    <div class="panel" id="ovpanel" style="margin-top:1rem"></div>
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px"><h2>Sessions</h2>
         <div style="max-height:560px;overflow:auto"><table class="compact">
@@ -249,11 +250,10 @@ async function loadTraining(){
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
     $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
-    if(activeCats && activeCats.size===1 && Sf.length){       // one type isolated -> overlay all its curves
-      const cat=[...activeCats][0];
-      $("#detail").innerHTML=`<h2>All ${cat} <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${Sf.length} sessions · newest in colour → older grey</span></h2>${overlayChart(Sf,cat)}`;
-    } else if(Sf.length) showDetail(Sf[0]);
-    else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions match.</p>';
+    $("#ovpanel").innerHTML = Sf.length                       // combined overlay of the filtered set
+      ? `<h2>Overlay <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${Sf.length>50?'50 most recent of '+Sf.length:Sf.length+' sessions'} · newest in colour → older grey</span></h2>${overlayChart(Sf)}`
+      : '<h2>Overlay</h2><p class="muted">No sessions match.</p>';
+    if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions match.</p>';
   };
   $("#wintoggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{
     $("#wintoggle").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
