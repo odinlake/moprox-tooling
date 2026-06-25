@@ -148,7 +148,7 @@ async function loadTraining(){
   const all = data.sessions;
   const order=["easy","tempo","trail_easy","vo2max","speed","unknown"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const WINS=[[30,"1 mo"],[90,"3 mo"],[180,"6 mo"],[365,"12 mo"],[730,"2 y"],[1825,"5 y"],[1e12,"all"]];
+  const WINS=[[90,"3m"],[365,"1y"],[1095,"3y"],[1e12,"all"]], WIN_DEFAULT=1;
   // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 0..50 (left-aligned, so
   // width ∝ duration; >50 min gets a red overflow tick), y = 120..180 bpm (out-of-range clamps to
   // flat lines at the edges). Faint floor line = 120 bpm reference.
@@ -166,14 +166,13 @@ async function loadTraining(){
   };
   $("#training").innerHTML = `
     <div class="panel">
-      <div class="row" style="justify-content:space-between;align-items:baseline">
-        <h2>Sessions <span class="muted" id="twin"></span> <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem">— tap a type to filter</span></h2>
-        <span class="muted"><b id="tcount" style="color:var(--fg)">—</b> of ${all.length} since ${all[all.length-1].date.slice(0,10)}</span>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2>Sessions <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— tap a type to filter</span></h2>
+        <span class="toggle" id="wintoggle">${WINS.map((w,i)=>`<button data-i="${i}"${i===WIN_DEFAULT?' class="active"':''}>${w[1]}</button>`).join("")}</span>
       </div>
       <div class="row" id="tlegend" style="margin:.5rem 0 .2rem"></div>
-      <label class="muted" style="white-space:nowrap;display:block;text-align:right">show <b id="winlbl">12 mo</b>
-        <input id="winrange" type="range" min="0" max="${WINS.length-1}" value="3" style="width:180px;vertical-align:middle"></label>
-      <div style="margin-top:.4rem" id="tbars"></div>
+      <div id="tbars"></div>
+      <div class="muted" id="tfoot" style="font-size:.75rem;margin-top:.35rem"></div>
     </div>
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px"><h2>Sessions</h2>
@@ -187,8 +186,7 @@ async function loadTraining(){
   const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
     return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};
   const render = idx => {
-    const [winDays,lbl]=WINS[idx]; $("#winlbl").textContent=lbl; $("#twin").textContent="· "+lbl;
-    curCut=Date.now()-winDays*86400*1000;
+    curCut=Date.now()-WINS[idx][0]*86400*1000;
     S=all.filter(s=>new Date(s.date).getTime()>=curCut);
     wcounts={}; S.forEach(s=>wcounts[s.cat]=(wcounts[s.cat]||0)+1);
     activeCats=null;                                      // window change resets the type filter
@@ -203,7 +201,7 @@ async function loadTraining(){
   };
   const paint = () => {
     const Sf = activeCats ? S.filter(s=>activeCats.has(s.cat)) : S;
-    $("#tcount").textContent=Sf.length;
+    $("#tfoot").textContent=`${Sf.length} of ${all.length} since ${all[all.length-1].date.slice(0,10)}`;
     $("#tlegend").innerHTML=order.filter(c=>wcounts[c]).map(c=>{const on=!activeCats||activeCats.has(c);
       return `<span class="seg legpick" data-c="${c}" style="cursor:pointer;user-select:none;${on?'':'opacity:.3'}"><i style="background:${CAT[c]}"></i>${c} ${wcounts[c]}</span>`;}).join("")||'<span class="muted">none</span>';
     $("#tlegend").querySelectorAll(".legpick").forEach(el=>el.onclick=()=>toggleCat(el.dataset.c));
@@ -234,8 +232,11 @@ async function loadTraining(){
     $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
     if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions match.</p>';
   };
-  $("#winrange").oninput=e=>render(+e.target.value);
-  render(3);
+  $("#wintoggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $("#wintoggle").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); render(+b.dataset.i);
+  });
+  render(WIN_DEFAULT);
 }
 function showDetail(s){
   const tr=s.trace, t=tr.map((_,i)=>i);
