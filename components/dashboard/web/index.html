@@ -265,20 +265,19 @@ async function loadDNS(){
 let _ag=null, _agWin="24h";
 function renderAgents(a){
   _ag = a || _ag; if(!_ag) return;
-  const n = x => (x||0).toLocaleString();
-  const rows = (_ag.windows[_agWin]||[]).map(r=>`<tr>
-    <td><b>${r.agent}</b></td><td class="muted">${r.statement||'—'}</td>
-    <td style="text-align:right">${r.calls}</td><td style="text-align:right">${n(r.tokens)}</td>
-    <td style="text-align:right">${r.cache_pct}%</td><td style="text-align:right">${n(r.avg_ms)} ms</td>
-    <td style="text-align:right">${r.fails?'<span style="color:#f85149">'+r.fails+'</span>':0}</td></tr>`).join("");
+  const k   = t  => (t/1000).toFixed(1)+"k";
+  const sec = ms => (ms/1000).toFixed(1)+"s";
+  const blocks = (_ag.windows[_agWin]||[]).map(r=>`
+    <div style="padding:.45rem 0;border-bottom:1px solid #21262d">
+      <div><b>${r.agent}</b> <span class="muted">— ${r.statement||'—'}</span></div>
+      <div class="muted" style="margin-top:.15rem">${r.calls} calls · ${k(r.tokens)} tok ·
+        ${r.cache_pct}% cache · ${sec(r.avg_ms)} avg${r.fails?' · <span style="color:#f85149">'+r.fails+' fails</span>':''}</div>
+    </div>`).join("");
   const tog = w => `<a href="#" onclick="_agWin='${w}';renderAgents();return false" style="${w===_agWin?'font-weight:700':'opacity:.55'}">${w}</a>`;
   document.getElementById("agents-panel").innerHTML = `<h2>Agents</h2>
     <p class="muted">Each agent is a fresh, stateless run — context per call is ~constant (its CLAUDE.md
     + memory), so tokens scale with how often it's invoked, not a growing chat. Window: ${tog('24h')} · ${tog('30d')}</p>
-    <table><tr><th>agent</th><th>statement</th><th style="text-align:right">calls</th>
-      <th style="text-align:right">tokens</th><th style="text-align:right">cache</th>
-      <th style="text-align:right">avg latency</th><th style="text-align:right">fails</th></tr>
-      ${rows||'<tr><td colspan="7" class="muted">no calls in window</td></tr>'}</table>
+    ${blocks||'<p class="muted">no calls in window</p>'}
     <p class="muted" style="margin-top:.5rem">snapshot ${_ag.generated?new Date(_ag.generated*1000).toLocaleString():'—'}</p>`;
 }
 async function loadStats(){
@@ -290,13 +289,13 @@ async function loadStats(){
     <td>${k}</td><td>${rel(s[k].updated)}</td>
     <td style="text-align:right">${s[k].ms} ms</td><td style="text-align:right">${kb(s[k].bytes)}</td></tr>`).join("");
   const totBytes = ["system","training","dns"].reduce((a,k)=>a+(s[k]?.bytes||0),0);
-  $("#stats").innerHTML = `<div class="panel"><h2>Updater stats</h2>
+  $("#stats").innerHTML = `<div class="panel" id="agents-panel"></div>
+    <div class="panel"><h2>Updater stats</h2>
     <p class="muted">Each feed runs on a 5-minute timer but only republishes — and updates these
     numbers — when its data actually changed; an idle tick exits without doing anything.</p>
     <table><tr><th>feed</th><th>last updated</th><th style="text-align:right">build time</th><th style="text-align:right">payload</th></tr>
       ${rows||'<tr><td colspan="4" class="muted">no stats yet</td></tr>'}</table>
-    <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>
-    <div class="panel" id="agents-panel"></div>`;
+    <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>`;
   try { renderAgents(await J(DATA+"stats/agents.json")); }
   catch(e){ document.getElementById("agents-panel").innerHTML = '<p class="muted">agent stats unavailable</p>'; }
 }
