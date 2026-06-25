@@ -26,7 +26,8 @@
   th{color:var(--mut);font-weight:500;font-size:.8rem}
   table.compact th,table.compact td{padding:.16rem .45rem;font-size:.82rem}
   .spark{display:block}
-  .badge{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.75rem;font-weight:600;color:#0d1117}
+  .badge{display:inline-block;padding:.02rem .32rem;border-radius:4px;font-size:.68rem;font-weight:500;letter-spacing:.02em;border:1px solid currentColor;background:transparent;line-height:1.5;vertical-align:middle}
+  tr.mhead td{background:var(--bg);color:var(--mut);font-weight:600;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;padding-top:.55rem;border-bottom:1px solid var(--bd)}
   .bar{height:8px;border-radius:4px;background:#21262d;overflow:hidden}.bar>i{display:block;height:100%;background:var(--accent)}
   .row{display:flex;gap:1rem;flex-wrap:wrap}
   .seg{display:flex;gap:.25rem;align-items:center;font-size:.8rem;color:var(--mut)}
@@ -167,7 +168,7 @@ async function loadTraining(){
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px"><h2>Sessions</h2>
         <div style="max-height:560px;overflow:auto"><table class="compact">
-        <thead><tr><th>day</th><th>type</th><th>min</th><th>avg</th><th>HR</th></tr></thead>
+        <thead><tr><th>day</th><th>type</th><th>dur</th><th>avg</th><th>max</th><th>trace</th></tr></thead>
         <tbody id="slist"></tbody></table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Session detail</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
@@ -178,16 +179,24 @@ async function loadTraining(){
     const counts={}; S.forEach(s=>counts[s.cat]=(counts[s.cat]||0)+1);
     $("#tcount").textContent=S.length;
     $("#tlegend").innerHTML=order.filter(c=>counts[c]).map(c=>`<span class="seg"><i style="background:${CAT[c]}"></i>${c} ${counts[c]}</span>`).join("")||'<span class="muted">none</span>';
-    const weeks={}; S.forEach(s=>{const w=isoWeek(new Date(s.date));(weeks[w]=weeks[w]||{});weeks[w][s.cat]=(weeks[w][s.cat]||0)+1;});
-    const wk=Object.keys(weeks).sort().slice(-26);
+    const curW=isoWeek(new Date());                       // current week is partial -> excluded from bars
+    const weeks={}; S.forEach(s=>{const w=isoWeek(new Date(s.date));const wd=weeks[w]=weeks[w]||{_d:s.date};
+      wd[s.cat]=(wd[s.cat]||0)+1; if(s.date>wd._d)wd._d=s.date;});
+    const wk=Object.keys(weeks).filter(w=>w!==curW).sort().slice(-26);
     const wmax=Math.max(1,...wk.map(w=>order.reduce((a,c)=>a+(weeks[w][c]||0),0)));
+    let pm=null;
     $("#tbars").innerHTML=wk.length?wk.map(w=>{let y=0,seg="";order.forEach(c=>{const v=weeks[w][c]||0;if(v){const h=100*v/wmax;seg+=`<rect x="0" y="${(100-y-h).toFixed(1)}" width="100" height="${h.toFixed(1)}" fill="${CAT[c]}"/>`;y+=h;}});
-      return `<div style="flex:1;text-align:center"><svg viewBox="0 0 100 100" preserveAspectRatio="none" style="height:80px">${seg}</svg><div class="axis" style="font-size:9px;color:var(--mut)">${w.slice(2)}</div></div>`;}).join(""):'<span class="muted">no sessions in this window</span>';
-    $("#slist").innerHTML=S.map((s,i)=>{const dt=new Date(s.date);return `<tr class="sessrow" data-i="${i}">
-      <td style="white-space:nowrap">${WD[dt.getDay()]} <span class="muted">${s.date.slice(2,10)}</span></td>
-      <td><span class="badge" style="background:${CAT[s.cat]}">${s.cat}</span></td>
-      <td>${s.dur_min.toFixed(0)}</td><td>${s.hr_avg}</td>
-      <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;}).join("");
+      const m=new Date(weeks[w]._d).toLocaleString('en-GB',{month:'short'}),lab=m!==pm?m:""; pm=m;   // label months, not weeks
+      return `<div style="flex:1;text-align:center"><svg viewBox="0 0 100 100" preserveAspectRatio="none" style="height:80px">${seg}</svg><div class="axis" style="font-size:9px;color:var(--mut)">${lab}</div></div>`;}).join(""):'<span class="muted">no sessions in this window</span>';
+    const ord=n=>n+(n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th");
+    let cmy=null,html="";                                 // month-grouped table; "Wed 24th" dates
+    S.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
+      if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="6">${my}</td></tr>`;}
+      html+=`<tr class="sessrow" data-i="${i}"><td style="white-space:nowrap">${WD[dt.getDay()]} ${ord(dt.getDate())}</td>
+        <td><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span></td>
+        <td>${s.dur_min.toFixed(0)}m</td><td>${s.hr_avg}</td><td>${s.hr_max}</td>
+        <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
+    $("#slist").innerHTML=html;
     $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(S[+r.dataset.i]));
     if(S.length) showDetail(S[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions in this window.</p>';
   };
@@ -200,8 +209,8 @@ function showDetail(s){
   const repTable = s.reps.length ? `<table style="margin-top:.6rem"><tr><th>#</th><th>peak</th><th>recovery↓</th><th>work</th></tr>
      ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
   $("#detail").innerHTML = `<h2>Session detail</h2>
-    <div class="row" style="justify-content:space-between"><span><span class="badge" style="background:${CAT[s.cat]}">${s.cat}</span> ${s.date.replace('T',' ')}</span>
-      <span class="muted">${s.dur_min.toFixed(0)} min · avg ${s.hr_avg} · max ${s.hr_max} · max5 ${s.max5} · rough ${s.rough}</span></div>
+    <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span> ${s.date.replace('T',' ')}</span>
+      <span class="muted">${s.dur_min.toFixed(0)} min · avg ${s.hr_avg} · max ${s.hr_max} · 5-min max ${s.max5}</span></div>
     ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
     ${s.nint?`<div class="muted">${s.nint} work reps detected (dots = peaks)</div>`:""}
     ${repTable}`;
