@@ -38,10 +38,12 @@ AGENT_FLAGS = {
             "--disallowedTools", DEV_DENY,
             # shares THIS session's memory (also symlinked into the dev project dir so it auto-loads);
             "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK), str(SHARED_MEM)],  # variadic: keep last
-    # coach: reads session history + convo helper, and can WRITE its own semantic memory (its cwd is
-    # its context dir — coach-memory.md, athlete.json) so it learns durably as the athlete evolves.
+    # coach: a real analyst — Python (matplotlib + the analysis engine), can build & SEND charts to
+    # Telegram, do web research (WebSearch/WebFetch), edit its own memory. Catastrophic commands denied.
     "coach": ["--permission-mode", "acceptEdits",
-              "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL, "--add-dir", str(TRAINING_DATA)],
+              "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch",
+              "--disallowedTools", DEV_DENY,
+              "--add-dir", str(REPOS[1]), str(REPOS[2]), str(TRAINING_DATA)],   # tooling + private-data + dash data
     # steward: only the convo helper, to investigate routing history when answering meta questions
     "steward": ["--allowedTools", CONVO_TOOL],
     # valet: writes its own preference memory (learns what to surface) + the convo helper
