@@ -95,6 +95,17 @@ def git_overnight(hours=18):
             out.append({"repo": full, "who": who, "msg": (cm.get("message") or "").splitlines()[0][:100]})
     return out
 
+def tidy(b):
+    """Enforce the dense layout regardless of agent variance: strip a self-written #valet (the
+    transport re-adds it inline → one-line header), un-double bracketed link labels, and collapse
+    blank lines so the brief stays tight."""
+    import re
+    b = (b or "").strip()
+    b = re.sub(r"^#valet\b[:\s]*", "", b)            # transport prepends the tag inline
+    b = re.sub(r"\[\[([^\]]+)\]\]", r"[\1]", b)      # [[BBC]] -> [BBC]
+    b = re.sub(r"\n[ \t]*\n+", "\n", b)              # no blank lines
+    return b.strip()
+
 def main():
     location_pull.pull()                       # refresh from the 3am gist
     loc = location.resolve() or {}
@@ -110,7 +121,7 @@ def main():
               "subtle wink at most; if nothing genuinely earns attention, give a trivia or "
               "word-of-the-day instead of padding. Start with #valet.\n\nDATA:\n%s"
               % json.dumps(bundle, ensure_ascii=False))
-    brief = run_agent("valet", prompt, timeout=300)
+    brief = tidy(run_agent("valet", prompt, timeout=300))
     tg.send(brief, agent="valet")              # tg logs it to the shared conversation
     print("valet: brief sent (%d chars)" % len(brief))
 
