@@ -181,16 +181,16 @@ async function loadTraining(){
     $("#tlegend").innerHTML=order.filter(c=>counts[c]).map(c=>`<span class="seg"><i style="background:${CAT[c]}"></i>${c} ${counts[c]}</span>`).join("")||'<span class="muted">none</span>';
     // continuous weekly buckets across the window (incl. empty weeks); the partial current week is dropped
     const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
-    const counts={}; S.forEach(s=>{const k=isoWeek(new Date(s.date));(counts[k]=counts[k]||{})[s.cat]=(counts[k][s.cat]||0)+1;});
+    const wkc={}; S.forEach(s=>{const k=isoWeek(new Date(s.date));(wkc[k]=wkc[k]||{})[s.cat]=(wkc[k][s.cat]||0)+1;});
     const lastMon=weekStart(Date.now()); lastMon.setDate(lastMon.getDate()-7);          // Monday of the last COMPLETE week
     let startMon=weekStart(cut), firstData=weekStart(new Date(all[all.length-1].date));
     if(startMon<firstData) startMon=firstData;                                          // don't pad before history
     const bars=[]; for(let d=new Date(startMon); d<=lastMon; d.setDate(d.getDate()+7)) bars.push(new Date(d));
-    const wmax=Math.max(1,...bars.map(d=>{const c=counts[isoWeek(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
+    const wmax=Math.max(1,...bars.map(d=>{const c=wkc[isoWeek(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
     const yearTicks = bars.length>1 && (bars[bars.length-1]-bars[0])/86400000>540;      // window >~18mo -> label years
     let plab=null;
     $("#tbars").innerHTML = bars.length ? bars.map(d=>{
-      const c=counts[isoWeek(d)]||{}; let y=0,seg="";
+      const c=wkc[isoWeek(d)]||{}; let y=0,seg="";
       order.forEach(k=>{const v=c[k]||0;if(v){const h=100*v/wmax;seg+=`<rect x="0" y="${(100-y-h).toFixed(1)}" width="100" height="${h.toFixed(1)}" fill="${CAT[k]}"/>`;y+=h;}});
       let lab=""; if(yearTicks){const yr=d.getFullYear(); if(yr!==plab){lab=String(yr);plab=yr;}}
       else{const key=d.getFullYear()*12+d.getMonth(); if(key!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=key;}}
