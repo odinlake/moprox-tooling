@@ -1,0 +1,13 @@
+# Compose + send the valet's morning brief. Triggered 05:15 by valet-brief.timer. Install to
+# /etc/systemd/system/. Needs gh + claude on PATH.
+[Unit]
+Description=moprox valet morning brief (weather + news + git -> Telegram)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/valet_brief.py

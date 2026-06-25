@@ -13,6 +13,7 @@ AGENTS = {
     "coach":   HOME / "projects/private-data/agents/coach",
     "steward": HOME / "projects/private-data/agents/steward",
     "dev":     HOME / "projects/private-data/agents/dev",     # the persona dir (loads its CLAUDE.md)
+    "valet":   HOME / "projects/private-data/agents/valet",
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -42,6 +43,9 @@ AGENT_FLAGS = {
               "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL, "--add-dir", str(TRAINING_DATA)],
     # steward: only the convo helper, to investigate routing history when answering meta questions
     "steward": ["--allowedTools", CONVO_TOOL],
+    # valet: writes its own preference memory (learns what to surface) + the convo helper
+    "valet": ["--permission-mode", "acceptEdits",
+              "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL],
 }
 
 def run_agent(agent, prompt, timeout=600):
