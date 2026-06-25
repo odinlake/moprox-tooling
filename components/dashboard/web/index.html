@@ -149,7 +149,7 @@ function lerpColor(a,b,t){const f=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16))
   return "rgb("+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(",")+")";}
 // Overlay every HR curve of one type, aligned at t=0; recent in the type colour, older fading to grey.
 function overlayChart(sess){
-  const arr=[...sess].sort((p,q)=>p.date<q.date?-1:1).slice(-50);   // oldest -> newest, cap 50 most recent
+  const arr=[...sess].sort((p,q)=>p.date<q.date?-1:1).slice(-100);  // oldest -> newest, cap 100 most recent
   const W=760,H=220,pL=34,pR=8,pT=10,pB=22, xmax=Math.max(1,...arr.map(s=>s.dur_min));
   let lo=Infinity,hi=-Infinity; arr.forEach(s=>s.trace.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v);}));
   if(!isFinite(lo)){lo=100;hi=180;} lo=Math.floor(lo/10)*10; hi=Math.ceil(hi/10)*10; if(hi<=lo)hi=lo+10;
@@ -251,7 +251,7 @@ async function loadTraining(){
     $("#slist").innerHTML=html;
     $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
     $("#ovpanel").innerHTML = Sf.length                       // combined overlay of the filtered set
-      ? `<h2>Overlay <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${Sf.length>50?'50 most recent of '+Sf.length:Sf.length+' sessions'} · newest in colour → older grey</span></h2>${overlayChart(Sf)}`
+      ? `<h2>Overlay <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">${Math.min(Sf.length,100)}/${Sf.length}</span></h2>${overlayChart(Sf)}`
       : '<h2>Overlay</h2><p class="muted">No sessions match.</p>';
     if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions match.</p>';
   };
