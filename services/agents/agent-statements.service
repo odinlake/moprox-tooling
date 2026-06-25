@@ -1,0 +1,11 @@
+[Unit]
+Description=moprox daily agent statements (personality status lines for the dashboard)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/agents/statement.py

@@ -103,6 +103,11 @@ def main():
         timings["training"] = (round((time.monotonic() - t0) * 1000), (DATA / "training/sessions.json").stat().st_size)
         state["training_fp"] = fp
 
+    # agents — token usage + daily statements for the Stats tab (cheap; publishes only when it changes)
+    (DATA / "stats").mkdir(parents=True, exist_ok=True)
+    sp.run([sys.executable, str(REPO / "services/agents/agent_stats.py")],
+           env={**os.environ, "OUT": str(DATA / "stats/agents.json")}, check=False, capture_output=True)
+
     # what changed?
     git("add", "-A")
     changed = git("diff", "--cached", "--name-only").splitlines()

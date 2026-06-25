@@ -50,14 +50,15 @@ AGENT_FLAGS = {
 }
 
 def _log_usage(agent, j):
-    """Append one line of token accounting from the --output-format json result envelope."""
+    """Append one line of token accounting from the --output-format json result envelope (or an
+    {"_error": ...} marker on failure)."""
     u = j.get("usage") or {}
     rec = {"ts": int(time.time()), "agent": agent,
            "in": u.get("input_tokens", 0), "out": u.get("output_tokens", 0),
            "cache_read": u.get("cache_read_input_tokens", 0),
            "cache_write": u.get("cache_creation_input_tokens", 0),
            "cost_usd": j.get("total_cost_usd"), "ms": j.get("duration_ms"),
-           "turns": j.get("num_turns")}
+           "turns": j.get("num_turns"), "error": j.get("_error")}
     try:
         USAGE.parent.mkdir(parents=True, exist_ok=True)
         with open(USAGE, "a") as f: f.write(json.dumps(rec) + "\n")
@@ -71,9 +72,12 @@ def run_agent(agent, prompt, timeout=600):
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
     env["PATH"] = "%s:%s" % (LOCAL_BIN, env.get("PATH", "/usr/bin:/bin"))   # claude shells out to node
     cmd = [CLAUDE, "-p", prompt, "--output-format", "json"] + AGENT_FLAGS.get(agent, [])
-    r = subprocess.run(cmd, cwd=str(cwd), env=env,
-                       capture_output=True, text=True, timeout=timeout)
+    try:
+        r = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _log_usage(agent, {"_error": "timeout"}); raise
     if r.returncode != 0:
+        _log_usage(agent, {"_error": "exit %d" % r.returncode})
         raise RuntimeError("agent %s failed: %s" % (agent, (r.stderr or r.stdout)[:300]))
     try:                                              # json envelope: {result, usage, total_cost_usd, ...}
         j = json.loads(r.stdout)
