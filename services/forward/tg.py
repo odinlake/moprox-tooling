@@ -64,6 +64,9 @@ def md_to_html(text):
         out.append(lines[i]); i += 1
     text = "\n".join(out)
     text = re.sub(r"`([^`]+)`", lambda m: hold("<code>" + html.escape(m.group(1)) + "</code>"), text)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)",         # [label](url) -> <a href>
+                  lambda m: hold('<a href="%s">%s</a>' % (html.escape(m.group(2), quote=True), html.escape(m.group(1)))),
+                  text)
     text = html.escape(text)                                     # escape the remaining plain text
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*$", r"<b>\1</b>", text)   # ATX headings -> bold
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
@@ -77,7 +80,8 @@ def _post(tok, method, params):
 def send(text, agent=None, reply_to=None):
     tok, chat = creds()
     body = tag(text, agent)
-    p = {"chat_id": chat, "text": md_to_html(body)[:4096], "parse_mode": "HTML"}
+    p = {"chat_id": chat, "text": md_to_html(body)[:4096], "parse_mode": "HTML",
+         "disable_web_page_preview": "true"}             # links stay inline; no big preview cards
     if reply_to:
         p["reply_to_message_id"] = reply_to
         p["allow_sending_without_reply"] = "true"               # stale/deleted target -> still send
