@@ -359,7 +359,7 @@ $("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"
   .catch(e=>$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`);
 // auto-reload when a NEW dashboard build is published (version = hash of this shell; data updates don't bump it)
 setInterval(()=>fetch(DATA+"version.txt",{cache:"no-store"}).then(r=>r.ok?r.text():"").then(v=>{
-  if(v.trim() && BUILD!=="__BUILD__" && v.trim()!==BUILD) location.reload();
+  if(v.trim() && BUILD!=="__BUILD__" && v.trim()!==BUILD) location.replace(location.pathname+"?v="+v.trim());
 }).catch(()=>{}), 120000);
 </script>
 </body>
