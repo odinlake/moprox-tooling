@@ -66,6 +66,7 @@ def main():
     load_env(PVE_ENV)
     ensure_worktree()
     DATA.mkdir(parents=True, exist_ok=True)
+    (WT / ".nojekyll").write_text("")        # serve static files as-is; skip GitHub's Jekyll build (it was erroring)
 
     # refresh the shell + per-tab endpoint pages, stamping a build version (hash of the shell source) so
     # the page auto-reloads when new dashboard CODE ships — data-only updates don't change the hash.
