@@ -59,10 +59,10 @@ def resolve():
 
 def label(r=None):
     r = r or resolve()
-    if not r: return "📍 location unknown — set home"
+    if not r: return "@ location unknown — set home"
     when = " (as of %s)" % time.strftime("%H:%M", time.localtime(r["ts"])) if (r["status"] == "away" and r.get("ts")) else ""
     tag = "away —" if r["status"] == "away" else "home"
-    return "📍 %s %s%s" % (tag, r["name"], when)
+    return "@ %s %s%s" % (tag, r["name"], when)
 
 if __name__ == "__main__":
     r = resolve(); print(label(r)); print(json.dumps(r) if r else "(no location and no home set)")

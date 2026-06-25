@@ -5,10 +5,11 @@ Each agent is just a directory with a CLAUDE.md. We strip any inference tokens f
 uses the /login subscription creds (not the metered API). Used by the Polar fetcher (coach) and the
 Telegram router (steward / coach / dev).
 """
-import os, shutil, subprocess, sys
+import json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
 HOME = Path.home()
+USAGE = HOME / ".local/share/moprox/agent-usage.jsonl"   # per-call token ledger (one line per invocation)
 AGENTS = {
     "coach":   HOME / "projects/private-data/agents/coach",
     "steward": HOME / "projects/private-data/agents/steward",
@@ -48,17 +49,38 @@ AGENT_FLAGS = {
               "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL],
 }
 
+def _log_usage(agent, j):
+    """Append one line of token accounting from the --output-format json result envelope."""
+    u = j.get("usage") or {}
+    rec = {"ts": int(time.time()), "agent": agent,
+           "in": u.get("input_tokens", 0), "out": u.get("output_tokens", 0),
+           "cache_read": u.get("cache_read_input_tokens", 0),
+           "cache_write": u.get("cache_creation_input_tokens", 0),
+           "cost_usd": j.get("total_cost_usd"), "ms": j.get("duration_ms"),
+           "turns": j.get("num_turns")}
+    try:
+        USAGE.parent.mkdir(parents=True, exist_ok=True)
+        with open(USAGE, "a") as f: f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+    return rec
+
 def run_agent(agent, prompt, timeout=600):
     cwd = AGENTS[agent]
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
     env["PATH"] = "%s:%s" % (LOCAL_BIN, env.get("PATH", "/usr/bin:/bin"))   # claude shells out to node
-    cmd = [CLAUDE, "-p", prompt] + AGENT_FLAGS.get(agent, [])               # prompt before variadic flags
+    cmd = [CLAUDE, "-p", prompt, "--output-format", "json"] + AGENT_FLAGS.get(agent, [])
     r = subprocess.run(cmd, cwd=str(cwd), env=env,
                        capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError("agent %s failed: %s" % (agent, (r.stderr or r.stdout)[:300]))
-    return r.stdout.strip()
+    try:                                              # json envelope: {result, usage, total_cost_usd, ...}
+        j = json.loads(r.stdout)
+        _log_usage(agent, j)
+        return (j.get("result") or "").strip()
+    except (json.JSONDecodeError, TypeError):         # fall back to raw text if the format ever changes
+        return r.stdout.strip()
 
 if __name__ == "__main__":
     print(run_agent(sys.argv[1], sys.argv[2]))
