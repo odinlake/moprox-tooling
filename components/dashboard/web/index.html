@@ -129,6 +129,20 @@ function drawSysCharts(tf){
 
 // ================= TRAINING =================
 function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));return t.getUTCFullYear()+"-W"+String(Math.ceil(((t-ys)/86400000+1)/7)).padStart(2,"0");}
+// Stacked weekly histogram as ONE svg, rendered at measured px width so gaps are pixel-consistent:
+// fixed gap (1-2px by bar width), integer bar widths, leftover px distributed +1 across the first bars.
+function histBars(data, W, wmax){
+  const n=data.length; if(!n) return '<span class="muted">no sessions in this window</span>';
+  const BH=84, H=BH+15, gap=(W/n)>=14?2:1;
+  let bw=Math.floor((W-gap*(n-1))/n); if(bw<1)bw=1;
+  let rem=Math.max(0,(W-gap*(n-1))-bw*n);
+  let x=0, r="";
+  data.forEach(b=>{ const w=bw+(rem>0?1:0); if(rem>0)rem--;
+    let y=BH; b.segs.forEach(s=>{ const h=BH*s.n/wmax; y-=h; r+=`<rect x="${x}" y="${y.toFixed(1)}" width="${w}" height="${h.toFixed(1)}" fill="${s.color}"/>`; });
+    if(b.lab) r+=`<text x="${(x+w/2).toFixed(1)}" y="${BH+11}" text-anchor="middle" fill="#8b949e" font-size="10">${b.lab}</text>`;
+    x+=w+gap; });
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;max-width:100%">${r}</svg>`;
+}
 async function loadTraining(){
   const data = await J(DATA+"training/sessions.json");
   const all = data.sessions;
@@ -163,7 +177,7 @@ async function loadTraining(){
         <label class="muted" style="white-space:nowrap">show <b id="winlbl">12 mo</b>
           <input id="winrange" type="range" min="0" max="${WINS.length-1}" value="3" style="width:200px;vertical-align:middle"></label>
       </div>
-      <div class="row" style="align-items:flex-end;gap:1px;margin-top:.4rem" id="tbars"></div>
+      <div style="margin-top:.4rem" id="tbars"></div>
     </div>
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px"><h2>Sessions</h2>
@@ -189,14 +203,15 @@ async function loadTraining(){
     const wmax=Math.max(1,...bars.map(d=>{const c=wkc[isoWeek(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
     const yearTicks = bars.length>1 && (bars[bars.length-1]-bars[0])/86400000>540;      // window >~18mo -> label years
     let plab=null;
-    $("#tbars").innerHTML = bars.length ? bars.map(d=>{
-      const c=wkc[isoWeek(d)]||{}; let y=0,seg="";
-      order.forEach(k=>{const v=c[k]||0;if(v){const h=100*v/wmax;seg+=`<rect x="0" y="${(100-y-h).toFixed(1)}" width="100" height="${h.toFixed(1)}" fill="${CAT[k]}"/>`;y+=h;}});
+    const barData = bars.map(d=>{
+      const c=wkc[isoWeek(d)]||{};
+      const segs=order.map(k=>({color:CAT[k],n:c[k]||0})).filter(s=>s.n>0);
       let lab=""; if(yearTicks){const yr=d.getFullYear(); if(yr!==plab){lab=String(yr);plab=yr;}}
       else{const key=d.getFullYear()*12+d.getMonth(); if(key!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=key;}}
-      return `<div style="flex:1 1 0;min-width:0"><svg viewBox="0 0 100 100" preserveAspectRatio="none" style="height:80px;display:block">${seg}</svg>`
-        +`<div class="axis" style="height:11px;line-height:11px;font-size:9px;color:var(--mut);text-align:center;white-space:nowrap;overflow:visible">${lab}</div></div>`;
-    }).join("") : '<span class="muted">no sessions in this window</span>';
+      return {segs,lab};
+    });
+    const cont=$("#tbars"), W=Math.max(280, Math.floor(cont.getBoundingClientRect().width)||760);
+    cont.innerHTML = histBars(barData, W, wmax);
     const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
       return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};   // number smaller/muted, suffix smaller still
     let cmy=null,html="";                                 // month-grouped table; "Wed 24th" dates
