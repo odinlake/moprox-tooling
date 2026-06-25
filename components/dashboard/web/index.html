@@ -168,8 +168,8 @@ async function loadTraining(){
     <div class="grid cards">
       <div class="panel"><h2>Sessions <span class="muted" id="twin"></span></h2><div class="stat" id="tcount">—</div>
         <div class="muted">of ${all.length} since ${all[all.length-1].date.slice(0,10)}</div></div>
-      <div class="panel" style="grid-column:span 2"><h2>By type</h2><div class="row" id="tlegend"></div>
-        <div class="muted" style="margin-top:.5rem">2026+ runs ≥30 min are HR-classified; older / shorter = <span style="color:${CAT.other}">other</span></div></div>
+      <div class="panel" style="grid-column:span 2"><h2>By type <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· click to filter</span></h2><div class="row" id="tlegend"></div>
+        <div class="muted" style="margin-top:.5rem">HR-classified where the data allows; inferior-device / older / shorter = <span style="color:${CAT.unknown}">other</span></div></div>
     </div>
     <div class="panel" style="margin-top:1rem">
       <div class="row" style="justify-content:space-between;align-items:center">
@@ -186,44 +186,57 @@ async function loadTraining(){
         <tbody id="slist"></tbody></table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Session detail</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
+  let S=[], wcounts={}, activeCats=null, curCut=0;        // window sessions, per-type counts, filter (null=all), window start
+  const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
+  const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
+    return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};
   const render = idx => {
     const [winDays,lbl]=WINS[idx]; $("#winlbl").textContent=lbl; $("#twin").textContent="· "+lbl;
-    const cut=Date.now()-winDays*86400*1000;
-    const S=all.filter(s=>new Date(s.date).getTime()>=cut);
-    const counts={}; S.forEach(s=>counts[s.cat]=(counts[s.cat]||0)+1);
-    $("#tcount").textContent=S.length;
-    $("#tlegend").innerHTML=order.filter(c=>counts[c]).map(c=>`<span class="seg"><i style="background:${CAT[c]}"></i>${c} ${counts[c]}</span>`).join("")||'<span class="muted">none</span>';
-    // continuous weekly buckets across the window (incl. empty weeks); the partial current week is dropped
-    const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
-    const wkc={}; S.forEach(s=>{const k=isoWeek(new Date(s.date));(wkc[k]=wkc[k]||{})[s.cat]=(wkc[k][s.cat]||0)+1;});
-    const lastMon=weekStart(Date.now()); lastMon.setDate(lastMon.getDate()-7);          // Monday of the last COMPLETE week
-    let startMon=weekStart(cut), firstData=weekStart(new Date(all[all.length-1].date));
-    if(startMon<firstData) startMon=firstData;                                          // don't pad before history
+    curCut=Date.now()-winDays*86400*1000;
+    S=all.filter(s=>new Date(s.date).getTime()>=curCut);
+    wcounts={}; S.forEach(s=>wcounts[s.cat]=(wcounts[s.cat]||0)+1);
+    activeCats=null;                                      // window change resets the type filter
+    paint();
+  };
+  const toggleCat = c => {                                // first click isolates to one type; then toggles; empty/full -> all
+    if(!activeCats) activeCats=new Set([c]);
+    else { activeCats.has(c)?activeCats.delete(c):activeCats.add(c);
+      const avail=order.filter(x=>wcounts[x]).length;
+      if(!activeCats.size||activeCats.size===avail) activeCats=null; }
+    paint();
+  };
+  const paint = () => {
+    const Sf = activeCats ? S.filter(s=>activeCats.has(s.cat)) : S;
+    $("#tcount").textContent=Sf.length;
+    $("#tlegend").innerHTML=order.filter(c=>wcounts[c]).map(c=>{const on=!activeCats||activeCats.has(c);
+      return `<span class="seg legpick" data-c="${c}" style="cursor:pointer;user-select:none;${on?'':'opacity:.3'}"><i style="background:${CAT[c]}"></i>${c} ${wcounts[c]}</span>`;}).join("")||'<span class="muted">none</span>';
+    $("#tlegend").querySelectorAll(".legpick").forEach(el=>el.onclick=()=>toggleCat(el.dataset.c));
+    // continuous weekly histogram across the window (filtered to active types; partial current week dropped)
+    const wkc={}; Sf.forEach(s=>{const k=isoWeek(new Date(s.date));(wkc[k]=wkc[k]||{})[s.cat]=(wkc[k][s.cat]||0)+1;});
+    const lastMon=weekStart(Date.now()); lastMon.setDate(lastMon.getDate()-7);
+    let startMon=weekStart(curCut), firstData=weekStart(new Date(all[all.length-1].date));
+    if(startMon<firstData) startMon=firstData;
     const bars=[]; for(let d=new Date(startMon); d<=lastMon; d.setDate(d.getDate()+7)) bars.push(new Date(d));
     const wmax=Math.max(1,...bars.map(d=>{const c=wkc[isoWeek(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
-    const yearTicks = bars.length>1 && (bars[bars.length-1]-bars[0])/86400000>540;      // window >~18mo -> label years
+    const yearTicks = bars.length>1 && (bars[bars.length-1]-bars[0])/86400000>540;
     let plab=null;
-    const barData = bars.map(d=>{
-      const c=wkc[isoWeek(d)]||{};
+    const barData = bars.map(d=>{const c=wkc[isoWeek(d)]||{};
       const segs=order.map(k=>({color:CAT[k],n:c[k]||0})).filter(s=>s.n>0);
       let lab=""; if(yearTicks){const yr=d.getFullYear(); if(yr!==plab){lab=String(yr);plab=yr;}}
       else{const key=d.getFullYear()*12+d.getMonth(); if(key!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=key;}}
-      return {segs,lab};
-    });
+      return {segs,lab};});
     const cont=$("#tbars"), W=Math.max(280, Math.floor(cont.getBoundingClientRect().width)||760);
     cont.innerHTML = histBars(barData, W, wmax);
-    const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
-      return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};   // number smaller/muted, suffix smaller still
-    let cmy=null,html="";                                 // month-grouped table; "Wed 24th" dates
-    S.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
+    let cmy=null,html="";                                 // month-grouped table (filtered)
+    Sf.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
       if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="6">${my}</td></tr>`;}
       html+=`<tr class="sessrow" data-i="${i}"><td style="white-space:nowrap">${WD[dt.getDay()]} ${ord(dt.getDate())}</td>
         <td style="text-align:center"><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span></td>
         <td>${s.dur_min.toFixed(0)}m</td><td>${s.hr_avg}</td><td>${s.hr_max}</td>
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
-    $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(S[+r.dataset.i]));
-    if(S.length) showDetail(S[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions in this window.</p>';
+    $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
+    if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions match.</p>';
   };
   $("#winrange").oninput=e=>render(+e.target.value);
   render(3);
