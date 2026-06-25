@@ -59,7 +59,7 @@ def handle(agent, rec):
     if agent == "coach":
         reply = run_agent("coach",
             "The athlete sent you (#coach) this on Telegram:\n%r\n\n%s\n\nReply concisely, in your voice."
-            % (text, HISTORY_NOTE), timeout=420)
+            % (text, HISTORY_NOTE), timeout=600)
         tg.send(reply, agent="coach", reply_to=reply_to)
     elif agent == "dev":
         DEV_INBOX.parent.mkdir(parents=True, exist_ok=True)

@@ -27,7 +27,8 @@ def agent_worker(name):
         try:
             print("%s <-" % name, (rec.get("text") or "")[:50]); route.handle(name, rec)
         except Exception as e:
-            print("%s error:" % name, e); tg.send("(%s error: %s)" % (name, str(e)[:150]), agent=name)
+            print("%s error:" % name, e)
+            tg.send("⚠️ couldn't finish that — %s" % str(e)[:160], agent=name)
         finally:
             Q[name].task_done()
 

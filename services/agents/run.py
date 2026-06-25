@@ -75,7 +75,8 @@ def run_agent(agent, prompt, timeout=600):
     try:
         r = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        _log_usage(agent, {"_error": "timeout"}); raise
+        _log_usage(agent, {"_error": "timeout"})
+        raise RuntimeError("timed out after %ds — too big a task to finish in one go" % timeout)
     if r.returncode != 0:
         _log_usage(agent, {"_error": "exit %d" % r.returncode})
         raise RuntimeError("agent %s failed: %s" % (agent, (r.stderr or r.stdout)[:300]))
