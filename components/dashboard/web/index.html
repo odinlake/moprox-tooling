@@ -229,19 +229,28 @@ async function loadTraining(){
     $("#tlegend").innerHTML=order.filter(c=>wcounts[c]).map(c=>{const on=!activeCats||activeCats.has(c);
       return `<span class="seg legpick" data-c="${c}" style="cursor:pointer;user-select:none;${on?'':'opacity:.3'}"><i style="background:${CAT[c]}"></i>${c} ${wcounts[c]}</span>`;}).join("")||'<span class="muted">none</span>';
     $("#tlegend").querySelectorAll(".legpick").forEach(el=>el.onclick=()=>toggleCat(el.dataset.c));
-    // continuous weekly histogram across the window (filtered to active types; partial current week dropped)
-    const wkc={}; Sf.forEach(s=>{const k=isoWeek(new Date(s.date));(wkc[k]=wkc[k]||{})[s.cat]=(wkc[k][s.cat]||0)+1;});
-    const lastMon=weekStart(Date.now()); lastMon.setDate(lastMon.getDate()-7);
-    let startMon=weekStart(curCut), firstData=weekStart(new Date(all[all.length-1].date));
-    if(startMon<firstData) startMon=firstData;
-    const bars=[]; for(let d=new Date(startMon); d<=lastMon; d.setDate(d.getDate()+7)) bars.push(new Date(d));
-    const wmax=Math.max(1,...bars.map(d=>{const c=wkc[isoWeek(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
-    const yearTicks = bars.length>1 && (bars[bars.length-1]-bars[0])/86400000>540;
+    // adaptive histogram buckets: weekly (<~13mo) -> monthly (<~4y) -> yearly, to keep the bar count sane
+    const dataStart=new Date(all[all.length-1].date).getTime(), start=Math.max(curCut,dataStart);
+    const spanD=(Date.now()-start)/86400000, G=spanD>1500?'y':spanD>400?'m':'w';
+    const keyOf = G==='w' ? (d=>isoWeek(new Date(d)))
+                : G==='m' ? (d=>{d=new Date(d);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');})
+                : (d=>String(new Date(d).getFullYear()));
+    const buk={}; Sf.forEach(s=>{const k=keyOf(s.date);(buk[k]=buk[k]||{})[s.cat]=(buk[k][s.cat]||0)+1;});
+    const bars=[];
+    if(G==='w'){ const last=weekStart(Date.now()); last.setDate(last.getDate()-7);   // drop the partial current week
+      for(let d=weekStart(start); d<=last; d.setDate(d.getDate()+7)) bars.push(new Date(d)); }
+    else if(G==='m'){ const now=new Date(), s0=new Date(start);
+      for(let d=new Date(s0.getFullYear(),s0.getMonth(),1); d<=now; d=new Date(d.getFullYear(),d.getMonth()+1,1)) bars.push(new Date(d)); }
+    else { const ny=new Date().getFullYear();
+      for(let y=new Date(start).getFullYear(); y<=ny; y++) bars.push(new Date(y,0,1)); }
+    const wmax=Math.max(1,...bars.map(d=>{const c=buk[keyOf(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
     let plab=null;
-    const barData = bars.map(d=>{const c=wkc[isoWeek(d)]||{};
-      const segs=order.map(k=>({color:CAT[k],n:c[k]||0})).filter(s=>s.n>0);
-      let lab=""; if(yearTicks){const yr=d.getFullYear(); if(yr!==plab){lab=String(yr);plab=yr;}}
-      else{const key=d.getFullYear()*12+d.getMonth(); if(key!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=key;}}
+    const barData=bars.map(d=>{const c=buk[keyOf(d)]||{};
+      const segs=order.map(k=>({color:CAT[k],n:c[k]||0})).filter(x=>x.n>0);
+      let lab="";
+      if(G==='y') lab="'"+String(d.getFullYear()).slice(2);
+      else if(G==='m'){ const y=d.getFullYear(); if(y!==plab){lab=String(y);plab=y;} }
+      else { const key=d.getFullYear()*12+d.getMonth(); if(key!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=key;} }
       return {segs,lab};});
     const cont=$("#tbars"), W=Math.max(280, Math.floor(cont.getBoundingClientRect().width)||760);
     cont.innerHTML = histBars(barData, W, wmax);
@@ -272,7 +281,7 @@ function showDetail(s){
      ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
   const st=new Date(s.date), en=new Date(st.getTime()+s.dur_min*60000);
   $("#detail").innerHTML = `<h2>Session detail</h2>
-    <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span> ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> (${s.dur_min.toFixed(0)} min)</span>
+    <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span> ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> ${s.dur_min.toFixed(0)} min</span>
       <span class="muted">avg ${s.hr_avg} · max ${s.hr_max} · 5-min max ${s.max5}</span></div>
     ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
     ${s.nint?`<div class="muted">${s.nint} work reps detected (dots = peaks)</div>`:""}
