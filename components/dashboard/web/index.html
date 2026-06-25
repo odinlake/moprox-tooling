@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
 <title>moprox dashboard</title>
 <style>
   :root{--bg:#0d1117;--panel:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
@@ -54,6 +55,7 @@
 </main>
 <script>
 const CAT = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681"};
+const BUILD = "__BUILD__";   // replaced at publish with a hash of this shell; the poller below reloads on a new deploy
 const $ = s => document.querySelector(s);
 const gib = b => (b/1073741824);
 const fmtDur = s => { s=Math.round(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600); return d?`${d}d ${h}h`:`${h}h ${Math.floor(s%3600/60)}m`; };
@@ -355,6 +357,10 @@ $("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"
 ["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = id!==TAB);
 ({system:loadSystem,training:loadTraining,dns:loadDNS,stats:loadStats}[TAB])()
   .catch(e=>$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`);
+// auto-reload when a NEW dashboard build is published (version = hash of this shell; data updates don't bump it)
+setInterval(()=>fetch(DATA+"version.txt",{cache:"no-store"}).then(r=>r.ok?r.text():"").then(v=>{
+  if(v.trim() && BUILD!=="__BUILD__" && v.trim()!==BUILD) location.reload();
+}).catch(()=>{}), 120000);
 </script>
 </body>
 </html>

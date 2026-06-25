@@ -67,11 +67,15 @@ def main():
     ensure_worktree()
     DATA.mkdir(parents=True, exist_ok=True)
 
-    # refresh the shell + per-tab endpoint pages from the repo (no-op in git if unchanged)
-    shell = REPO / "components/dashboard/web/index.html"
-    shutil.copy(shell, DASH / "index.html")
+    # refresh the shell + per-tab endpoint pages, stamping a build version (hash of the shell source) so
+    # the page auto-reloads when new dashboard CODE ships — data-only updates don't change the hash.
+    shell_src = (REPO / "components/dashboard/web/index.html").read_text()
+    ver = hashlib.sha1(shell_src.encode()).hexdigest()[:12]
+    shell = shell_src.replace("__BUILD__", ver)
+    (DASH / "index.html").write_text(shell)
     for t in TABS:
-        (DASH / t).mkdir(exist_ok=True); shutil.copy(shell, DASH / t / "index.html")
+        (DASH / t).mkdir(exist_ok=True); (DASH / t / "index.html").write_text(shell)
+    (DATA / "version.txt").write_text(ver)
 
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
     timings = {}  # feed -> (ms, bytes), only for feeds we (re)built this run
