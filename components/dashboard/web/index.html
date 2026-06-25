@@ -150,21 +150,21 @@ function lerpColor(a,b,t){const f=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16))
 // Overlay every HR curve of one type, aligned at t=0; recent in the type colour, older fading to grey.
 function overlayChart(sess){
   const arr=[...sess].sort((p,q)=>p.date<q.date?-1:1).slice(-100);  // oldest -> newest, cap 100 most recent
-  const W=760,H=220,pL=34,pR=8,pT=10,pB=22;
-  const durs=arr.map(s=>s.dur_min).sort((a,b)=>a-b);            // x-range: 90th-pct length, then keep
-  let xi=Math.floor(0.9*(durs.length-1)), xmax=durs[xi]||1;     // extending while each next is <3min longer,
-  while(xi+1<durs.length && durs[xi+1]-xmax<3){ xmax=durs[xi+1]; xi++; }   // stop at the first 3min+ gap
+  const W=760,H=300,pL=30,pR=8,pT=10,pB=20;
+  const durs=arr.map(s=>s.dur_min).sort((a,b)=>a-b);            // x-range: 90th-pct length, extend while each
+  let xi=Math.floor(0.9*(durs.length-1)), xmax=durs[xi]||1;     // next is <3min longer, stop at a 3min+ gap
+  while(xi+1<durs.length && durs[xi+1]-xmax<3){ xmax=durs[xi+1]; xi++; }
   xmax=Math.max(1,xmax);
-  let lo=Infinity,hi=-Infinity; arr.forEach(s=>s.trace.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v);}));
-  if(!isFinite(lo)){lo=100;hi=180;} lo=Math.floor(lo/10)*10; hi=Math.ceil(hi/10)*10; if(hi<=lo)hi=lo+10;
-  const px=m=>pL+(W-pL-pR)*m/xmax, py=v=>pT+(H-pT-pB)*(1-(v-lo)/(hi-lo));
-  let g="";for(let k=0;k<=3;k++){const v=lo+(hi-lo)*k/3,y=py(v);g+=`<line x1="${pL}" y1="${y.toFixed(1)}" x2="${W-pR}" y2="${y.toFixed(1)}"/><text class="axis" x="2" y="${(y+3).toFixed(1)}">${v.toFixed(0)}</text>`;}
+  const lo=110, hi=190;                                          // fixed y-range; curves clamped into it
+  const px=m=>pL+(W-pL-pR)*m/xmax, py=v=>pT+(H-pT-pB)*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
+  let g="";for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=py(v);g+=`<line x1="${pL}" y1="${y.toFixed(1)}" x2="${W-pR}" y2="${y.toFixed(1)}"/><text class="axis" x="2" y="${(y+3).toFixed(1)}">${v.toFixed(0)}</text>`;}
   let xl="";for(let k=0;k<=4;k++){const m=xmax*k/4;xl+=`<text class="axis" x="${px(m).toFixed(1)}" y="${H-6}" text-anchor="${k===0?'start':k===4?'end':'middle'}">${m.toFixed(0)}m</text>`;}
   const GRAY="#586273";
   const paths=arr.map((s,i)=>{const f=arr.length>1?i/(arr.length-1):1; let d="";
     s.trace.forEach((v,j)=>{const m=j*s.trace_step_s/60; if(m>xmax) return; d+=(d?"L":"M")+px(m).toFixed(1)+" "+py(v).toFixed(1)+" ";});
     return `<path d="${d}" fill="none" stroke="${lerpColor(GRAY,CAT[s.cat],f)}" stroke-width="${f>0.96?1.8:1}" stroke-opacity="${(0.2+0.8*f).toFixed(2)}"/>`;}).join("");
-  return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}</svg>`;
+  const tag=`<text x="${W-pR-2}" y="${pT+12}" text-anchor="end" fill="#8b949e" font-size="12">${arr.length}/${sess.length}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}${tag}</svg>`;
 }
 async function loadTraining(){
   const data = await J(DATA+"training/sessions.json");
@@ -199,11 +199,11 @@ async function loadTraining(){
     </div>
     <div class="panel" id="ovpanel" style="margin-top:1rem"></div>
     <div class="row" style="margin-top:1rem">
-      <div class="panel" style="flex:1;min-width:330px"><h2>Sessions</h2>
+      <div class="panel" style="flex:1;min-width:330px">
         <div style="max-height:560px;overflow:auto"><table class="compact">
         <thead><tr><th>day</th><th style="text-align:center">type</th><th>dur</th><th>avg</th><th>max</th><th>trace</th></tr></thead>
         <tbody id="slist"></tbody></table></div></div>
-      <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Session detail</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
+      <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Selected session details</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
   let S=[], wcounts={}, activeCats=null, curCut=0;        // window sessions, per-type counts, filter (null=all), window start
   const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
@@ -263,10 +263,8 @@ async function loadTraining(){
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
     $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
-    $("#ovpanel").innerHTML = Sf.length                       // combined overlay of the filtered set
-      ? `<h2>Overlay <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">${Math.min(Sf.length,100)}/${Sf.length}</span></h2>${overlayChart(Sf)}`
-      : '<h2>Overlay</h2><p class="muted">No sessions match.</p>';
-    if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Session detail</h2><p class="muted">No sessions match.</p>';
+    $("#ovpanel").innerHTML = Sf.length ? overlayChart(Sf) : '<p class="muted">No sessions match.</p>';   // count is overlaid on the chart
+    if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Selected session details</h2><p class="muted">No sessions match.</p>';
   };
   $("#wintoggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{
     $("#wintoggle").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
@@ -280,7 +278,7 @@ function showDetail(s){
   const repTable = s.reps.length ? `<table style="margin-top:.6rem"><tr><th>#</th><th>peak</th><th>recovery↓</th><th>work</th></tr>
      ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
   const st=new Date(s.date), en=new Date(st.getTime()+s.dur_min*60000);
-  $("#detail").innerHTML = `<h2>Session detail</h2>
+  $("#detail").innerHTML = `<h2>Selected session details</h2>
     <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span> ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> ${s.dur_min.toFixed(0)} min</span>
       <span class="muted">avg ${s.hr_avg} · max ${s.hr_max} · 5-min max ${s.max5}</span></div>
     ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
