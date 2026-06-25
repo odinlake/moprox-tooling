@@ -66,25 +66,7 @@ def main():
     load_env(PVE_ENV)
     ensure_worktree()
     DATA.mkdir(parents=True, exist_ok=True)
-    (WT / ".nojekyll").write_text("")        # serve static files as-is; skip Jekyll
-    wf = WT / ".github/workflows/pages.yml"  # deploy via GitHub Actions (legacy branch builds were flaky/throttled)
-    wf.parent.mkdir(parents=True, exist_ok=True)
-    wf.write_text(
-        "name: deploy-pages\n"
-        "on: { push: { branches: [gh-pages] } }\n"
-        "permissions: { contents: read, pages: write, id-token: write }\n"
-        "concurrency: { group: pages, cancel-in-progress: true }\n"
-        "jobs:\n"
-        "  deploy:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    environment: { name: github-pages, url: \"${{ steps.dep.outputs.page_url }}\" }\n"
-        "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
-        "      - uses: actions/configure-pages@v5\n"
-        "      - uses: actions/upload-pages-artifact@v3\n"
-        "        with: { path: \".\" }\n"
-        "      - id: dep\n"
-        "        uses: actions/deploy-pages@v4\n")
+    (WT / ".nojekyll").write_text("")        # serve static files as-is; skip Jekyll (faster, no build errors)
 
     # refresh the shell + per-tab endpoint pages, stamping a build version (hash of the shell source) so
     # the page auto-reloads when new dashboard CODE ships — data-only updates don't change the hash.
