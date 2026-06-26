@@ -43,10 +43,17 @@ def window(rows, secs, stmts):
                     "avg_ms": round(d["ms"] / ok), "fails": d["fails"]})
     return out
 
+def _icons():
+    out = {}
+    for a in AGENTS:
+        try: out[a] = (Path.home() / ("projects/private-data/agents/%s/icon.svg" % a)).read_text().strip()
+        except Exception: pass
+    return out
+
 def main():
     rows = _jsonl(LEDGER)
     stmts = json.loads(STMT.read_text()) if STMT.exists() else {}
-    data = {"generated": int(time.time()),
+    data = {"generated": int(time.time()), "icons": _icons(),
             "windows": {"24h": window(rows, 86400, stmts), "30d": window(rows, 30 * 86400, stmts)}}
     out = Path(os.environ.get("OUT", "agents.json"))
     out.parent.mkdir(parents=True, exist_ok=True)

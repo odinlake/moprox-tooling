@@ -51,6 +51,7 @@
   .toggle button.active{color:var(--fg);background:var(--btnAct)}
   svg{display:block;width:100%;height:auto}
   .axis{fill:var(--mut);font-size:10px}.grid line{stroke:var(--grid)}.sfloor{stroke:var(--bd)}
+  .agi svg{width:17px;height:17px;vertical-align:-4px}
   a{color:var(--accent)}
 </style>
 </head>
@@ -377,9 +378,10 @@ function renderAgents(a){
   _ag = a || _ag; if(!_ag) return;
   const k   = t  => (t/1000).toFixed(1)+"k";
   const sec = ms => (ms/1000).toFixed(1)+"s";
+  const ico = a => _ag.icons && _ag.icons[a] ? `<span class="agi">${_ag.icons[a]}</span> ` : '';
   const blocks = (_ag.windows[_agWin]||[]).map(r=>`
     <div style="padding:.45rem 0;border-bottom:1px solid var(--grid)">
-      <div><b>${r.agent}</b> <span class="muted">— ${r.statement||'—'}</span></div>
+      <div>${ico(r.agent)}<b>${r.agent}</b> <span class="muted">— ${r.statement||'—'}</span></div>
       <div style="margin-top:.15rem;font-size:.85rem">${r.calls} calls · ${k(r.tokens)} tok ·
         ${r.cache_pct}% cache · ${sec(r.avg_ms)} avg${r.fails?' · <span style="color:#f85149">'+r.fails+' fails</span>':''}</div>
     </div>`).join("");
