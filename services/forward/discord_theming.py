@@ -58,7 +58,9 @@ def _reply_for(text, author, context=""):
               "(search / get_document). To add or revise a theme/story, prepare the change on an "
               "`ai-feature-` BRANCH in ~/projects/theming (never master/main, never force) and say "
               "what you changed + that it awaits review. You can also `convo search <regex>` for older "
-              "cross-platform context. Reply concisely in native Discord markdown (no #theming prefix)."
+              "cross-platform context. Reply concisely in native Discord markdown (no #theming prefix). "
+              "Wrap every URL in angle brackets — `<https://example.com>` — so Discord suppresses the "
+              "link-preview embed."
               % (author, text, ctx))
     reply = run_agent(AGENT, prompt, timeout=600)
     convo.log_out(AGENT, reply)
