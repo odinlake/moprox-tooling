@@ -63,7 +63,7 @@ AGENT_FLAGS = {
     # agent with --mcp-config + --strict-mcp-config) and prepares branch-only edits to the theming repo.
     "theming": ["--permission-mode", "acceptEdits",
                 "--allowedTools",
-                "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch,mcp__totolo__search,mcp__totolo__get_document",
+                "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch,mcp__totolo",   # all totolo MCP tools
                 "--disallowedTools", THEMING_DENY,
                 "--mcp-config", str(AGENTS["theming"] / "mcp.json"), "--strict-mcp-config",
                 "--add-dir", str(THEMING_REPO)],   # variadic: keep last
