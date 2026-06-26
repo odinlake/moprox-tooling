@@ -19,7 +19,7 @@ from run import run_agent
 import tg, convo
 
 DEV_INBOX = Path.home() / ".local/share/moprox/dev-requests.jsonl"
-ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet)\b[\s:,>\-]*", re.I)   # explicit address at the start
+ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming)\b[\s:,>\-]*", re.I)   # explicit address at the start
 
 def _json(s):
     m = re.search(r"\{.*\}", s or "", re.S)
@@ -35,16 +35,18 @@ def decide(rec):
     if a: return a, "reply-to %s" % rec.get("reply_to")
     last = convo.last_agent() or "coach"
     prompt = ("Route the operator's new Telegram message to ONE agent. Output ONLY "
-              '{"route":"coach|dev|steward|valet","reason":"<short>"}.\n'
+              '{"route":"coach|dev|steward|valet|theming","reason":"<short>"}.\n'
               "The most recent agent to speak was '%s' — if the new message reads as a continuation, "
               "affirmation, thanks, or short follow-up, route it THERE. Otherwise route by content: "
               "training / workouts / the plan / how a session went -> coach; homelab / dashboard / "
               "infra / code / 'the bot is broken' -> dev; the morning brief / news / markets / "
-              "geopolitics / weather / 'more|less of X in the brief' -> valet; questions about message "
-              "routing or the agent setup itself -> steward.\n\nRecent conversation:\n%s\n\nNEW MESSAGE: %s"
+              "geopolitics / weather / 'more|less of X in the brief' -> valet; literary themes / the "
+              "theme ontology / themeontology.org / stories & their themes / the theming repo -> "
+              "theming; questions about message routing or the agent setup itself -> steward."
+              "\n\nRecent conversation:\n%s\n\nNEW MESSAGE: %s"
               % (last, convo.transcript(12), text))
     d = _json(run_agent("steward", prompt, timeout=120)) or {}
-    route = d.get("route") if d.get("route") in ("coach", "dev", "steward", "valet") else last
+    route = d.get("route") if d.get("route") in ("coach", "dev", "steward", "valet", "theming") else last
     return route, d.get("reason", "steward judgement")
 
 # How an agent pulls conversation history on demand (it is NOT force-fed the transcript).
@@ -83,6 +85,14 @@ def handle(agent, rec):
             "valet-memory.md so future briefs reflect it, and confirm. Start with #valet."
             % (text, HISTORY_NOTE), timeout=300)
         tg.send(reply, agent="valet", reply_to=reply_to)
+    elif agent == "theming":
+        reply = run_agent("theming",
+            "The operator sent you (#theming) this on Telegram:\n%r\n\n%s\n\nIf it's a question about "
+            "the theme ontology's data, answer it using the totolo MCP (search / get_document). If it "
+            "asks you to add or revise a theme/story, prepare the change on a BRANCH in ~/projects/"
+            "theming (never master, never force) and say what you changed + that it awaits review. "
+            "Reply concisely for Telegram, starting with #theming." % (text, HISTORY_NOTE), timeout=600)
+        tg.send(reply, agent="theming", reply_to=reply_to)
     return agent
 
 def summarize_for_digest(old_text):

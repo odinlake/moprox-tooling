@@ -10,7 +10,7 @@ from pathlib import Path
 
 LEDGER = Path.home() / ".local/share/moprox/agent-usage.jsonl"
 STMT   = Path.home() / ".local/share/moprox/agent-statements.json"
-AGENTS = ["coach", "steward", "dev", "valet"]
+AGENTS = ["coach", "steward", "dev", "valet", "theming"]
 
 def _jsonl(p):
     if not p.exists(): return []

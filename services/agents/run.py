@@ -15,6 +15,7 @@ AGENTS = {
     "steward": HOME / "projects/private-data/agents/steward",
     "dev":     HOME / "projects/private-data/agents/dev",     # the persona dir (loads its CLAUDE.md)
     "valet":   HOME / "projects/private-data/agents/valet",
+    "theming": HOME / "projects/private-data/agents/theming",
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -30,6 +31,14 @@ DEV_DENY = ",".join("Bash(%s)" % p for p in (
     "reboot:*", "shutdown:*", "dd:*", "mkfs:*", "gh:*"))   # service mutation needs sudo (denied); read-only systemctl ok
 TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
+THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
+# theming may push feature BRANCHES (once access is granted) but never bypass protections: deny
+# force-push + direct master pushes, plus the usual catastrophic/outward commands. Plain `git push`
+# (of a feature branch) is allowed; branch protection on master is the real backstop.
+THEMING_DENY = ",".join("Bash(%s)" % p for p in (
+    "git push --force:*", "git push -f:*", "git push *master*", "git push origin master:*",
+    "git reset --hard:*", "git clean:*", "sudo:*", "rm:*", "reboot:*", "shutdown:*",
+    "dd:*", "mkfs:*", "gh:*"))
 AGENT_FLAGS = {
     # dev already has broad Bash (can run convo directly); the rest get the convo helper as their one
     # way to read/search the shared conversation on demand.
@@ -49,6 +58,14 @@ AGENT_FLAGS = {
     # valet: writes its own preference memory (learns what to surface) + the convo helper
     "valet": ["--permission-mode", "acceptEdits",
               "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL],
+    # theming: theme-ontology expert. Answers data questions via the totolo MCP (scoped to ONLY this
+    # agent with --mcp-config + --strict-mcp-config) and prepares branch-only edits to the theming repo.
+    "theming": ["--permission-mode", "acceptEdits",
+                "--allowedTools",
+                "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch,mcp__totolo__search,mcp__totolo__get_document",
+                "--disallowedTools", THEMING_DENY,
+                "--mcp-config", str(AGENTS["theming"] / "mcp.json"), "--strict-mcp-config",
+                "--add-dir", str(THEMING_REPO)],   # variadic: keep last
 }
 
 def _log_usage(agent, j):

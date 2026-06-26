@@ -18,7 +18,7 @@ INBOX  = Path.home() / ".local/share/moprox/telegram-inbox.jsonl"
 OFFSET = Path.home() / ".local/share/moprox/dispatcher-offset"     # byte offset into the inbox
 
 Q = {"router": queue.Queue(), "coach": queue.Queue(), "dev": queue.Queue(),
-     "steward": queue.Queue(), "valet": queue.Queue()}
+     "steward": queue.Queue(), "valet": queue.Queue(), "theming": queue.Queue()}
 
 def agent_worker(name):
     """Single-flight worker for one agent: one invocation at a time, the rest queue (in order)."""
@@ -71,7 +71,7 @@ def main():
     off = int(OFFSET.read_text()) if OFFSET.exists() else INBOX.stat().st_size
     threading.Thread(target=router_worker, daemon=True).start()
     threading.Thread(target=compactor_worker, daemon=True).start()
-    for name in ("coach", "dev", "steward", "valet"):
+    for name in ("coach", "dev", "steward", "valet", "theming"):
         threading.Thread(target=agent_worker, args=(name,), daemon=True).start()
     print("dispatcher up; offset=%d" % off)
     while True:

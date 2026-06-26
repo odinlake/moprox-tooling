@@ -1,0 +1,16 @@
+# STAND-IN: run the totolo-search MCP server ON claude-dev, exposed at the totolo endpoint, until the
+# real LXC (moprox-homelab/services/totolo) is provisioned. Install to /etc/systemd/system/.
+[Unit]
+Description=totolo-search MCP server (themeontology.org) — STAND-IN on claude-dev (until the LXC exists)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=mikael
+EnvironmentFile=/etc/totolo-standin.env
+WorkingDirectory=/opt/totolo-search
+ExecStart=/opt/totolo-search/venv/bin/python /opt/totolo-search/serve_http.py
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
