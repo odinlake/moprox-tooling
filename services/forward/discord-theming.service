@@ -1,0 +1,18 @@
+# Discord bridge for the theming agent: @mention the bot in its channel -> theming agent (totolo MCP),
+# replies in-channel, logs to the shared convo store. Outbound-only gateway connection.
+# Needs a venv with discord.py (see discord-install.sh) and ~/.config/claude-dev/discord.env.
+# Install to /etc/systemd/system/.
+[Unit]
+Description=moprox Discord bridge for the theming agent (@mention -> theming)
+After=network-online.target totolo-mcp.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mikael/.local/share/moprox/discord-venv/bin/python /home/mikael/projects/moprox-tooling/services/forward/discord_theming.py
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
