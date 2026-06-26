@@ -12,5 +12,7 @@ WorkingDirectory=/opt/totolo-search
 ExecStart=/opt/totolo-search/venv/bin/python /opt/totolo-search/serve_http.py
 Restart=on-failure
 RestartSec=5
+# soft ceiling; embeddings are mmap'd so this reclaims gracefully (matches the LXC)
+MemoryHigh=1024M
 [Install]
 WantedBy=multi-user.target
