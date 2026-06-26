@@ -32,13 +32,14 @@ DEV_DENY = ",".join("Bash(%s)" % p for p in (
 TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
 THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
-# theming may push feature BRANCHES (once access is granted) but never bypass protections: deny
-# force-push + direct master pushes, plus the usual catastrophic/outward commands. Plain `git push`
-# (of a feature branch) is allowed; branch protection on master is the real backstop.
+# theming pushes feature BRANCHES and opens PRs, but never bypasses protections: deny force-push +
+# direct master/main pushes, the dangerous `gh` verbs (merge a PR, delete/archive a repo), and the
+# usual catastrophic/outward commands. Plain `git push` of a feature branch and `gh pr create` ARE
+# allowed; server-side branch protection on master/main is the real backstop for "no self-merge".
 THEMING_DENY = ",".join("Bash(%s)" % p for p in (
     "git push --force:*", "git push -f:*", "git push *master*", "git push origin master:*",
     "git reset --hard:*", "git clean:*", "sudo:*", "rm:*", "reboot:*", "shutdown:*",
-    "dd:*", "mkfs:*", "gh:*"))
+    "dd:*", "mkfs:*", "gh pr merge:*", "gh repo delete:*", "gh repo archive:*"))
 AGENT_FLAGS = {
     # dev already has broad Bash (can run convo directly); the rest get the convo helper as their one
     # way to read/search the shared conversation on demand.
