@@ -7,19 +7,27 @@
 <title>moprox dashboard</title>
 <script>try{if(localStorage.theme==='light')document.documentElement.dataset.theme='light'}catch(e){}</script>
 <style>
-  :root{--bg:#0d1117;--panel:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
-        --grid:#21262d;--hover:#1c2128;--btn:#21262d;--btnAct:#30363d;
+  :root{--bg:#0d1117;--panel:#161b22;--header:#0d1117;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
+        --grid:#21262d;--hover:#1c2128;--btn:#21262d;--btnAct:#30363d;--fade:#586273;
         --easy:#3fb950;--tempo:#d29922;--vo2max:#f85149;--speed:#a371f7;--trail:#58a6ff;--accent:#58a6ff}
-  [data-theme=light]{--bg:#ffffff;--panel:#f6f8fa;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
-        --grid:#e4e8ec;--hover:#eef1f4;--btn:#eef1f4;--btnAct:#d0d7de;--accent:#0969da}
+  [data-theme=light]{--bg:#eef1f4;--panel:#ffffff;--header:#ffffff;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
+        --grid:#e9edf1;--hover:#f0f3f6;--btn:#f0f3f6;--btnAct:#dfe3e8;--accent:#0969da;--fade:#c4ccd4}
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
-  header{display:flex;align-items:center;gap:1rem;padding:.8rem 1rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--bg);z-index:5}
+  header{display:flex;align-items:center;gap:1rem;padding:.8rem 1rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--header);z-index:5}
   header h1{font-size:1.05rem;margin:0;font-weight:600}
   .tabs{display:flex;gap:.25rem;margin-left:auto}
   .tabs a{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer;text-decoration:none}
   .tabs a.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
-  #themebtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;padding:.4rem .55rem;cursor:pointer;font-size:1rem;line-height:1}
+  #themebtn,#navbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center}
+  #themebtn{padding:.4rem .5rem}
+  #navbtn{display:none;padding:.35rem .55rem;font-size:1.2rem}
+  @media(max-width:640px){
+    #navbtn{display:flex;margin-left:auto}
+    .tabs{display:none;position:absolute;top:calc(100% + 4px);right:1rem;flex-direction:column;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:.3rem;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:6}
+    .tabs.open{display:flex}
+    .tabs a{padding:.55rem .9rem}
+  }
   main{padding:1rem;max-width:1100px;margin:0 auto}
   .grid{display:grid;gap:1rem}
   .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
@@ -50,7 +58,8 @@
 <header>
   <h1>moprox</h1>
   <div class="tabs" id="tabs"></div>
-  <button id="themebtn" title="Toggle light / dark">☀</button>
+  <button id="navbtn" aria-label="Menu">☰</button>
+  <button id="themebtn" title="Toggle light / dark"></button>
 </header>
 <main>
   <section id="system"></section>
@@ -60,7 +69,11 @@
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
-const CAT = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681"};
+const CAT_DARK = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681"};
+const CAT_LIGHT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781"};  // darker, ~3:1 on white (GitHub Primer)
+let CAT = document.documentElement.dataset.theme==='light' ? CAT_LIGHT : CAT_DARK;
+const ICON = {sun:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/></svg>`,
+  moon:`<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`};
 const BUILD = "__BUILD__";   // replaced at publish with a hash of this shell; the poller below reloads on a new deploy
 const $ = s => document.querySelector(s);
 const gib = b => (b/1073741824);
@@ -167,7 +180,7 @@ function overlayChart(sess){
   const px=m=>pL+(W-pL-pR)*m/xmax, py=v=>pT+(H-pT-pB)*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
   let g="";for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=py(v);g+=`<line x1="${pL}" y1="${y.toFixed(1)}" x2="${W-pR}" y2="${y.toFixed(1)}"/><text class="axis" x="2" y="${(y+3).toFixed(1)}">${v.toFixed(0)}</text>`;}
   let xl="";for(let k=0;k<=4;k++){const m=xmax*k/4;xl+=`<text class="axis" x="${px(m).toFixed(1)}" y="${H-6}" text-anchor="${k===0?'start':k===4?'end':'middle'}">${m.toFixed(0)}m</text>`;}
-  const GRAY="#586273";
+  const GRAY=getComputedStyle(document.documentElement).getPropertyValue('--fade').trim()||"#586273";
   const paths=arr.map((s,i)=>{const f=arr.length>1?i/(arr.length-1):1; let d="";
     s.trace.forEach((v,j)=>{const m=j*s.trace_step_s/60; if(m>xmax) return; d+=(d?"L":"M")+px(m).toFixed(1)+" "+py(v).toFixed(1)+" ";});
     return `<path d="${d}" fill="none" stroke="${lerpColor(GRAY,CAT[s.cat],f)}" stroke-width="${f>0.96?1.8:1}" stroke-opacity="${(0.2+0.8*f).toFixed(2)}"/>`;}).join("");
@@ -406,9 +419,12 @@ const DATA = ROOT + "data/";
 $("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"],["stats","Stats"]]
   .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
 ["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = id!==TAB);
-function setTheme(t){ document.documentElement.dataset.theme = t==='light'?'light':''; try{localStorage.theme=t}catch(e){} $("#themebtn").textContent = t==='light'?'☾':'☀'; }
-setTheme((()=>{try{return localStorage.theme}catch(e){return''}})()||'dark');
-$("#themebtn").onclick=()=>setTheme(document.documentElement.dataset.theme==='light'?'dark':'light');
+function redraw(){ ({system:loadSystem,training:loadTraining,dns:loadDNS,stats:loadStats}[TAB])().catch(()=>{}); }
+function applyTheme(t){ const L=t==='light'; document.documentElement.dataset.theme=L?'light':''; try{localStorage.theme=t}catch(e){}
+  CAT=L?CAT_LIGHT:CAT_DARK; $("#themebtn").innerHTML=L?ICON.moon:ICON.sun; }
+applyTheme((()=>{try{return localStorage.theme}catch(e){return''}})()||'dark');
+$("#themebtn").onclick=()=>{ applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'); redraw(); };
+$("#navbtn").onclick=()=>$("#tabs").classList.toggle("open");
 ({system:loadSystem,training:loadTraining,dns:loadDNS,stats:loadStats}[TAB])()
   .catch(e=>$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`);
 // auto-reload when a NEW dashboard build is published (version = hash of this shell; data updates don't bump it)
