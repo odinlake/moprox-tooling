@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the dashboard data + assemble the static site, then publish it to the gh-pages branch
-# under /dashboard (served at https://odinlake.github.io/moprox-tooling/dashboard/).
+# under /dashboard (served at https://dash.odinlake.net/ and https://odinlake.github.io/moprox-tooling/dashboard/).
 #
 # Runs on claude-dev (reads the Proxmox token + the private Polar export). Idempotent; safe to
 # re-run on a timer. Builds DIRECTLY into the gh-pages checkout and overwrites only the files it
@@ -25,6 +25,21 @@ cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"     # shell is
 # Per-tab endpoints (dashboard/system/, /dns/, /training/) — same app; it reads the URL to pick
 # the tab and fetches from the shared dashboard/data/. So reload/bookmark land on the right tab.
 for t in system training dns; do mkdir -p "$DASH/$t"; cp "$DASH/index.html" "$DASH/$t/index.html"; done
+
+# Custom domain: the site is served at https://dash.odinlake.net (CNAME on Squarespace ->
+# odinlake.github.io). Re-write the CNAME + a root redirect EVERY run so a republish/force-push can
+# never drop them. The redirect target is relative, so it works both behind the custom domain and at
+# odinlake.github.io/moprox-tooling/.
+printf 'dash.odinlake.net\n' > "$WT/CNAME"
+cat > "$WT/index.html" <<'HTML'
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moprox dashboard</title>
+<link rel="canonical" href="dashboard/">
+<meta http-equiv="refresh" content="0; url=dashboard/">
+<script>location.replace("dashboard/"+location.search+location.hash)</script>
+</head><body>Redirecting to the <a href="dashboard/">dashboard</a>…</body></html>
+HTML
 
 if [[ "$WHAT" == all || "$WHAT" == system ]]; then
   [[ -f "$PVE_ENV" ]] || { echo "no $PVE_ENV"; exit 1; }
