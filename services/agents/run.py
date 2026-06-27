@@ -57,8 +57,11 @@ AGENT_FLAGS = {
     # steward: only the convo helper, to investigate routing history when answering meta questions
     "steward": ["--allowedTools", CONVO_TOOL],
     # valet: writes its own preference memory (learns what to surface) + the convo helper
+    # valet: morning brief + afternoon catch-up; reads (only) the Google Workspace MCP (read-only,
+    # impersonating Mikael) for overnight email + calendar, scoped to ONLY this agent.
     "valet": ["--permission-mode", "acceptEdits",
-              "--allowedTools", "Read,Grep,Glob,Edit,Write,%s" % CONVO_TOOL],
+              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s" % CONVO_TOOL,
+              "--mcp-config", str(AGENTS["valet"] / "mcp.json"), "--strict-mcp-config"],
     # theming: theme-ontology expert. Answers data questions via the totolo MCP (scoped to ONLY this
     # agent with --mcp-config + --strict-mcp-config) and prepares branch-only edits to the theming repo.
     "theming": ["--permission-mode", "acceptEdits",

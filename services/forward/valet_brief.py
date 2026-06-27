@@ -21,6 +21,10 @@ WMO = {0: "clear", 1: "mainly clear", 2: "partly cloudy", 3: "overcast", 45: "fo
        71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow grains", 80: "rain showers",
        81: "showers", 82: "violent showers", 85: "snow showers", 86: "snow showers",
        95: "thunderstorm", 96: "thunderstorm w/ hail", 99: "severe thunderstorm"}
+# emoji per WMO code, for a glanceable weather icon next to the condition
+WICON = {0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️", 45: "🌫️", 48: "🌫️", 51: "🌦️", 53: "🌦️", 55: "🌧️",
+         56: "🌧️", 57: "🌧️", 61: "🌦️", 63: "🌧️", 65: "🌧️", 66: "🌧️", 67: "🌧️", 71: "🌨️", 73: "🌨️",
+         75: "❄️", 77: "🌨️", 80: "🌦️", 81: "🌧️", 82: "⛈️", 85: "🌨️", 86: "❄️", 95: "⛈️", 96: "⛈️", 99: "⛈️"}
 
 def _get(url, timeout=20):
     req = urllib.request.Request(url, headers={"User-Agent": "moprox-valet/1"})
@@ -41,7 +45,8 @@ def weather(lat, lon):
             pp = (hourly.get("precipitation_probability") or [])
             win.append({"t": t[11:16], "mm": pr[i] if i < len(pr) else None,
                         "prob": pp[i] if i < len(pp) else None})
-    return {"summary": WMO.get(code, "?"), "tmax": (daily.get("temperature_2m_max") or [None])[0],
+    return {"summary": WMO.get(code, "?"), "icon": WICON.get(code, ""),
+            "tmax": (daily.get("temperature_2m_max") or [None])[0],
             "tmin": (daily.get("temperature_2m_min") or [None])[0],
             "precip_sum": (daily.get("precipitation_sum") or [0])[0], "commute_window": win}
 
@@ -106,7 +111,7 @@ def tidy(b):
     b = re.sub(r"\n[ \t]*\n+", "\n", b)              # no blank lines
     return b.strip()
 
-def main():
+def morning():
     location_pull.pull()                       # refresh from the 3am gist
     loc = location.resolve() or {}
     lat, lon, place = loc.get("lat"), loc.get("lon"), loc.get("name")
@@ -116,14 +121,49 @@ def main():
         "weather": weather(lat, lon) if lat else {"error": "no location"},
         "news": news(), "local": local_news(place), "repos": git_overnight(),
     }
-    prompt = ("Compose this morning's brief from the gathered data below. Follow your persona's "
-              "section order, OMIT empty sections, lead with the location tag, stay concise, one "
-              "subtle wink at most; if nothing genuinely earns attention, give a trivia or "
-              "word-of-the-day instead of padding. Start with #valet.\n\nDATA:\n%s"
-              % json.dumps(bundle, ensure_ascii=False))
-    brief = tidy(run_agent("valet", prompt, timeout=300))
+    prompt = (
+        "Compose Mikael's morning brief as THREE compact blocks, in this order, each opening with a "
+        "bold lead-in and separated by a SINGLE newline (no blank lines):\n"
+        "1) GENERAL NEWS — top overnight item + 1-2 inlined 'Also' items (from DATA.news), your usual "
+        "geopolitics/markets bias.\n"
+        "2) LOCAL CONDITIONS — the weather, putting DATA.weather.icon immediately before the condition "
+        "word; mention rain ONLY if likely in the 07:30-09:00 window — folded with any SERIOUS local "
+        "event (DATA.local). Add the day's repo line here if DATA.repos has any.\n"
+        "3) ENGAGEMENTS — Mikael's overnight PERSONAL email + today's calendar via the google MCP: call "
+        "search_gmail_messages query 'in:inbox newer_than:1d' (always pass user_google_email "
+        "'mikael@odinlake.net'), read the promising ones, and surface ONLY genuinely personal messages a "
+        "human wrote FOR Mikael (ignore newsletters, receipts, notifications, automated/marketing, list "
+        "mail) as 'sender — gist'. Then today's calendar events via the calendar tools. If there's no "
+        "personal mail and no events, say so in a few words; never invent.\n"
+        "Lead with the '@ <location>' tag line. Dense, narrow gaps, one subtle wink at most; drop a whole "
+        "block only if it's genuinely empty. Start with #valet.\n\nDATA (news/weather/local/repos):\n%s"
+        % json.dumps(bundle, ensure_ascii=False))
+    brief = tidy(run_agent("valet", prompt, timeout=480))
     tg.send(brief, agent="valet")              # tg logs it to the shared conversation
     print("valet: brief sent (%d chars)" % len(brief))
+
+def review():
+    """Afternoon catch-up (16:15): scan ~2 weeks of mail for neglected items; stay SILENT if nothing."""
+    import re
+    prompt = (
+        "Afternoon catch-up for Mikael. Using the google MCP (search_gmail_messages, "
+        "get_gmail_message_content; always pass user_google_email 'mikael@odinlake.net'), scan roughly "
+        "the last TWO WEEKS of email for anything he may have NEGLECTED: personal messages still awaiting "
+        "a reply, requests/asks left hanging, approaching deadlines, things that seem to have slipped. "
+        "Judge significance strictly; ignore newsletters / automated / marketing / notifications.\n"
+        "If there is nothing genuinely worth flagging, reply with EXACTLY 'NONE' and nothing else. "
+        "Otherwise give a SHORT list (max ~5), most-urgent first, each one line: "
+        "'sender — what's owed / why it matters'. Be a quiet useful nudge, not noise. Start with #valet.")
+    out = (run_agent("valet", prompt, timeout=600) or "").strip()
+    core = re.sub(r"(?i)^#valet[:\s]*", "", out).strip().rstrip(".")
+    if not core or core.upper() == "NONE":
+        print("valet review: nothing significant — staying quiet"); return
+    tg.send(tidy(out), agent="valet")
+    print("valet review: sent (%d chars)" % len(out))
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "morning"
+    (review if mode == "review" else morning)()
 
 if __name__ == "__main__":
     main()

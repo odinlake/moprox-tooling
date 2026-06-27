@@ -1,0 +1,13 @@
+# Valet afternoon catch-up (16:15): scan ~2 weeks of mail for neglected items; SILENT unless
+# something's significant. Triggered by valet-review.timer. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox valet afternoon catch-up (neglected correspondence -> Telegram, only if significant)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/valet_brief.py review

@@ -1,0 +1,7 @@
+[Unit]
+Description=Run the valet afternoon catch-up at 16:15 local
+[Timer]
+OnCalendar=*-*-* 16:15:00
+Persistent=true
+[Install]
+WantedBy=timers.target
