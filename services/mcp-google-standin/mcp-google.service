@@ -8,11 +8,11 @@
 #
 # DWD scope authorization (admin.google.com) gates what the SA may request — the union of all
 # enabled scopes is requested in ONE token, so an unauthorized scope breaks the WHOLE server.
-# Authorized so far: gmail.readonly, gmail.compose, calendar.readonly, drive.readonly,
-# documents.readonly. calendar.events is the one outstanding admin step; once added, flip
-# calendar:readonly -> calendar:events below (target end-state) and restart.
+# Authorized scopes: gmail.readonly, gmail.compose, calendar.readonly, calendar.events,
+# drive.readonly, documents.readonly. To add write to another service, authorize its scope in DWD
+# FIRST, then raise its level here.
 [Unit]
-Description=Google Workspace MCP (workspace-mcp) — STAND-IN on claude-dev (read + gmail drafts)
+Description=Google Workspace MCP (workspace-mcp) — STAND-IN on claude-dev (read + gmail drafts + calendar events)
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -21,7 +21,7 @@ User=mikael
 Environment=HOME=/home/mikael
 Environment=GOOGLE_SERVICE_ACCOUNT_KEY_FILE=/home/mikael/.config/claude-dev/google-sa.json
 Environment=USER_GOOGLE_EMAIL=mikael@odinlake.net
-Environment="WORKSPACE_MCP_PERMISSIONS=gmail:drafts calendar:readonly drive:readonly docs:readonly"
+Environment="WORKSPACE_MCP_PERMISSIONS=gmail:drafts calendar:events drive:readonly docs:readonly"
 Environment=WORKSPACE_MCP_HOST=0.0.0.0
 Environment=WORKSPACE_MCP_PORT=8000
 WorkingDirectory=/opt/mcp-google
