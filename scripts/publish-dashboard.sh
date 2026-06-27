@@ -24,7 +24,7 @@ DASH="$WT/dashboard"; mkdir -p "$DASH/data"
 cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"     # shell is cheap; always refresh
 # Per-tab endpoints (dashboard/system/, /dns/, /training/) — same app; it reads the URL to pick
 # the tab and fetches from the shared dashboard/data/. So reload/bookmark land on the right tab.
-for t in system training dns; do mkdir -p "$DASH/$t"; cp "$DASH/index.html" "$DASH/$t/index.html"; done
+for t in system training; do mkdir -p "$DASH/$t"; cp "$DASH/index.html" "$DASH/$t/index.html"; done
 
 # Custom domain: the site is served at https://dash.odinlake.net (CNAME on Squarespace ->
 # odinlake.github.io). Re-write the CNAME + a root redirect EVERY run so a republish/force-push can

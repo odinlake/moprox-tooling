@@ -65,8 +65,8 @@
 <main>
   <section id="system"></section>
   <section id="training" hidden></section>
-  <section id="dns" hidden></section>
-  <section id="stats" hidden></section>
+  <section id="dns" hidden style="margin-top:1rem"></section>
+  <section id="stats" hidden style="margin-top:1rem"></section>
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
@@ -414,26 +414,28 @@ async function loadStats(){
 }
 
 // ---- endpoints / boot ----
-// Each tab is served from its own dir (dashboard/system/, /dns/, /training/) so reload &
-// bookmarks land on the right tab. Derive the active tab + the data base from the URL; load
-// only that tab. Works at .../dashboard/ (defaults to system) or behind a custom domain.
+// Two tabs now: System (which also carries DNS + agent/updater stats as stacked panels) and
+// Training. Each is served from its own dir (dashboard/system/, /training/) so reload & bookmarks
+// land right. Derive the active tab + data base from the URL. Works at .../dashboard/ or a custom domain.
 let _p = location.pathname.replace(/index\.html$/,""); if(!_p.endsWith("/")) _p+="/";
 const _seg = _p.replace(/\/$/,"").split("/").pop();
-const _isTab = ["system","training","dns","stats"].includes(_seg);
+const _isTab = ["system","training"].includes(_seg);
 const TAB  = _isTab ? _seg : "system";
 const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
 const DATA = ROOT + "data/";
-$("#tabs").innerHTML = [["system","System"],["training","Training"],["dns","DNS"],["stats","Stats"]]
+$("#tabs").innerHTML = [["system","System"],["training","Training"]]
   .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
-["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = id!==TAB);
-function redraw(){ ({system:loadSystem,training:loadTraining,dns:loadDNS,stats:loadStats}[TAB])().catch(()=>{}); }
+// System view stacks system + dns + stats; Training stands alone.
+const SECTIONS = {system:["system","dns","stats"], training:["training"]};
+const LOADERS  = {system:[loadSystem,loadDNS,loadStats], training:[loadTraining]};
+["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = !(SECTIONS[TAB]||[]).includes(id));
+function redraw(){ (LOADERS[TAB]||[]).forEach((fn,i)=>fn().catch(e=>{ if(i===0)$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`; })); }
 function applyTheme(t){ const L=t==='light'; document.documentElement.dataset.theme=L?'light':''; try{localStorage.theme=t}catch(e){}
   CAT=L?CAT_LIGHT:CAT_DARK; $("#themebtn").innerHTML=L?ICON.moon:ICON.sun; }
 applyTheme((()=>{try{return localStorage.theme}catch(e){return''}})()||'dark');
 $("#themebtn").onclick=()=>{ applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'); redraw(); };
 $("#navbtn").onclick=()=>$("#tabs").classList.toggle("open");
-({system:loadSystem,training:loadTraining,dns:loadDNS,stats:loadStats}[TAB])()
-  .catch(e=>$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`);
+redraw();
 // auto-reload when a NEW dashboard build is published (version = hash of this shell; data updates don't bump it)
 setInterval(()=>fetch(DATA+"version.txt",{cache:"no-store"}).then(r=>r.ok?r.text():"").then(v=>{
   if(v.trim() && BUILD!=="__BUILD__" && v.trim()!==BUILD) location.replace(location.pathname+"?v="+v.trim());
