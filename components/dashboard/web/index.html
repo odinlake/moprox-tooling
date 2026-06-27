@@ -7,10 +7,10 @@
 <title>moprox dashboard</title>
 <script>try{if(localStorage.theme==='light')document.documentElement.dataset.theme='light'}catch(e){}</script>
 <style>
-  :root{--bg:#0d1117;--panel:#161b22;--header:#0d1117;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
+  :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--header:#0d1117;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
         --grid:#21262d;--hover:#1c2128;--btn:#21262d;--btnAct:#30363d;--fade:#586273;
         --easy:#3fb950;--tempo:#d29922;--vo2max:#f85149;--speed:#a371f7;--trail:#58a6ff;--accent:#58a6ff}
-  [data-theme=light]{--bg:#eef1f4;--panel:#ffffff;--header:#ffffff;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
+  [data-theme=light]{color-scheme:light;--bg:#eef1f4;--panel:#ffffff;--header:#ffffff;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
         --grid:#e9edf1;--hover:#f0f3f6;--btn:#f0f3f6;--btnAct:#dfe3e8;--accent:#0969da;--fade:#c4ccd4}
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
@@ -322,6 +322,8 @@ function showDetail(s){
 async function loadDNS(){
   const data = await J(DATA+"dns/blocked.json");
   const days = data.blocked_days || [];                 // [{date,total,clients:{ip:{domain:count}}}]
+  const DRANGE=[1,7,14,30], DAY_DEFAULT=7;              // day windows, segmented like the other tabs
+  let curDays=DAY_DEFAULT;
   const ips = [...new Set(days.flatMap(d=>Object.keys(d.clients||{})))].sort();
   const aggFor = (win, pred) => {                        // sum domain counts over win for matching IPs
     const agg={};
@@ -337,7 +339,7 @@ async function loadDNS(){
         <td style="width:36%"><div class="bar"><i style="width:${(100*c/max).toFixed(1)}%;background:#f85149"></i></div></td></tr>`).join("")+`</table>`};
   };
   const render = () => {
-    const x=+$("#dnsrange").value, sel=$("#dnssel").value; $("#dnsx").textContent=x;
+    const x=curDays, sel=$("#dnssel").value;
     const win=days.slice(0,x);
     if(sel==="__group"){
       let body="", tot=0;
@@ -356,19 +358,22 @@ async function loadDNS(){
       <div class="row" style="justify-content:space-between;align-items:center;gap:.8rem;flex-wrap:wrap">
         <h2>Blocked DNS</h2>
         <div class="row" style="gap:.8rem;align-items:center">
-          <select id="dnssel" style="background:#21262d;color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:.35rem">
+          <select id="dnssel" style="background:var(--btn);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:.35rem">
             <option value="__all">All IPs (aggregate)</option>
             <option value="__group">Group by IP</option>
             ${ips.map(ip=>`<option value="${ip}">${ip}</option>`).join("")}
           </select>
-          <label class="muted" style="white-space:nowrap">last <b id="dnsx">7</b>d
-            <input id="dnsrange" type="range" min="1" max="30" value="7" style="vertical-align:middle;width:150px"></label>
+          <span class="toggle" id="dnsrange">${DRANGE.map(d=>`<button data-d="${d}"${d===DAY_DEFAULT?' class="active"':''}>${d}d</button>`).join("")}</span>
         </div>
       </div>
       <div class="muted" id="dnssum" style="margin:.3rem 0"></div>
       <div id="dnsbody" style="max-height:600px;overflow:auto"></div>
     </div>`;
-  $("#dnsrange").oninput=render; $("#dnssel").onchange=render;
+  $("#dnssel").onchange=render;
+  $("#dnsrange").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $("#dnsrange").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); curDays=+b.dataset.d; render();
+  });
   render();
 }
 
