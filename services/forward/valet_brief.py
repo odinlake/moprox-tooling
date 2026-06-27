@@ -133,8 +133,11 @@ def morning():
         "search_gmail_messages query 'in:inbox newer_than:1d' (always pass user_google_email "
         "'mikael@odinlake.net'), read the promising ones, and surface ONLY genuinely personal messages a "
         "human wrote FOR Mikael (ignore newsletters, receipts, notifications, automated/marketing, list "
-        "mail) as 'sender — gist'. Then today's calendar events via the calendar tools. If there's no "
-        "personal mail and no events, say so in a few words; never invent.\n"
+        "mail) as 'sender — gist'. Then today's calendar: call list_calendars, then get_events (today) "
+        "for the TWO that matter — the primary 'mikael@odinlake.net' and 'Onsjo shared' — and report "
+        "those events (time + what). Also glance at the rest (Rie's, Polar training, bin, holidays) and "
+        "mention something from them ONLY if genuinely unusual/worth flagging. If there's no personal "
+        "mail and nothing on those calendars, say so in a few words; never invent.\n"
         "Lead with the '@ <location>' tag line. Dense, narrow gaps, one subtle wink at most; drop a whole "
         "block only if it's genuinely empty. Start with #valet.\n\nDATA (news/weather/local/repos):\n%s"
         % json.dumps(bundle, ensure_ascii=False))
