@@ -133,6 +133,9 @@ def main():
     (DATA / "stats").mkdir(parents=True, exist_ok=True)
     sp.run([sys.executable, str(REPO / "services/agents/agent_stats.py")],
            env={**os.environ, "OUT": str(DATA / "stats/agents.json")}, check=False, capture_output=True)
+    # MCP usage per agent × endpoint (from the agents' transcripts; cheap, retroactive)
+    sp.run([sys.executable, str(REPO / "services/agents/mcp_stats.py")],
+           env={**os.environ, "OUT": str(DATA / "stats/mcp.json")}, check=False, capture_output=True)
 
     # what changed?
     git("add", "-A")

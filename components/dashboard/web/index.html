@@ -395,6 +395,23 @@ function renderAgents(a){
     ${blocks||'<p class="muted">no calls in window</p>'}
     <p class="muted" style="margin-top:.5rem">snapshot ${_ag.generated?new Date(_ag.generated*1000).toLocaleString():'—'}</p>`;
 }
+let _mcp=null, _mcpWin="7d";
+function renderMcp(m){
+  _mcp = m || _mcp; if(!_mcp) return;
+  const w = (_mcp.data && _mcp.data[_mcpWin]) || {by_agent:{},agent_tot:{},total:0};
+  const tog = x => `<a href="#" onclick="_mcpWin='${x}';renderMcp();return false" style="${x===_mcpWin?'font-weight:700':'opacity:.55'}">${x}</a>`;
+  const agents = Object.keys(w.by_agent).sort((a,b)=>w.agent_tot[b]-w.agent_tot[a]);
+  const blocks = agents.map(a=>{
+    const eps = Object.entries(w.by_agent[a]).sort((x,y)=>y[1]-x[1]);
+    return `<div style="padding:.45rem 0;border-bottom:1px solid var(--grid)">
+      <div><b>${a}</b> <span class="muted">— ${w.agent_tot[a]} calls</span></div>
+      <div style="margin-top:.15rem;font-size:.85rem;display:flex;flex-wrap:wrap;gap:.3rem .8rem">
+        ${eps.map(([e,n])=>`<span>${e} <b>${n}</b></span>`).join("")}</div>
+    </div>`;}).join("");
+  document.getElementById("mcp-panel").innerHTML = `<h2>MCP usage <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${tog('24h')} · ${tog('7d')} · ${tog('30d')}</span></h2>
+    ${blocks||'<p class="muted">no MCP calls in window</p>'}
+    <p class="muted" style="margin-top:.5rem">${w.total} calls · snapshot ${_mcp.generated?new Date(_mcp.generated*1000).toLocaleString():'—'}</p>`;
+}
 async function loadStats(){
   const d = await J(DATA+"stats.json");
   const s = d.sources||{};
@@ -405,12 +422,15 @@ async function loadStats(){
     <td style="text-align:right">${s[k].ms} ms</td><td style="text-align:right">${kb(s[k].bytes)}</td></tr>`).join("");
   const totBytes = ["system","training","dns"].reduce((a,k)=>a+(s[k]?.bytes||0),0);
   $("#stats").innerHTML = `<div class="panel" id="agents-panel" style="margin-bottom:1rem"></div>
+    <div class="panel" id="mcp-panel" style="margin-bottom:1rem"></div>
     <div class="panel"><h2>Updater stats</h2>
     <table><tr><th>feed</th><th>last updated</th><th style="text-align:right">build time</th><th style="text-align:right">payload</th></tr>
       ${rows||'<tr><td colspan="4" class="muted">no stats yet</td></tr>'}</table>
     <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>`;
   try { renderAgents(await J(DATA+"stats/agents.json")); }
   catch(e){ document.getElementById("agents-panel").innerHTML = '<p class="muted">agent stats unavailable</p>'; }
+  try { renderMcp(await J(DATA+"stats/mcp.json")); }
+  catch(e){ document.getElementById("mcp-panel").innerHTML = '<p class="muted">MCP stats unavailable</p>'; }
 }
 
 // ---- endpoints / boot ----
