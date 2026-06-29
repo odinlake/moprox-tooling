@@ -1,13 +1,22 @@
 # One of three shared-context Claude Code remote-control dev sessions: "moprox dev one/two/three",
 # driven from the Claude app. Templated unit — instance %i is the AGENT_ID (one|two|three).
 #
-# - Full bypass (--dangerously-skip-permissions) so edits/commands auto-allow; `sudo` still prompts via
-#   the `ask` rule in ~/.claude/settings.json (see services/sessions/README.md).
+# - Full bypass comes from `defaultMode: bypassPermissions` in ~/.claude/settings.json so edits/commands
+#   auto-allow; `sudo` still prompts via the `ask` rule (see services/sessions/README.md). We deliberately
+#   do NOT pass --dangerously-skip-permissions: that flag refuses to run in an untrusted folder and forces
+#   an interactive trust prompt at startup, which wedges a headless `script` PTY before the relay connects.
+#   The settings-based bypass gives identical behaviour without the trust guard.
 # - Restart loop with exponential backoff: a wedged session self-heals, and
 #   `systemctl restart moprox-dev@two` hands you a FRESH session (loses thread history by design;
 #   continuity lives in the shared memory + git, see services/memory/).
 # - --remote-control needs a TTY, so `script` gives it a PTY (same trick as the old claude-remote.service).
 # - WorkingDirectory=/home/mikael so all three share ONE memory dir (the shared context).
+# - ExecStartPre boot-race guard: network-online.target only means interfaces are up, NOT that egress/DNS
+#   work. Without the gate the client starts before egress is ready, fails to register with the relay, and
+#   wedges ALIVE — systemd sees a healthy process so Restart never fires (this is exactly what bricked the
+#   old claude-remote.service across a reboot). We poll a real HTTPS request to Anthropic first; any HTTP
+#   response (incl. 404/401) proves the path, so we don't use curl -f. NOTE: when the Squid cutover
+#   (use-squid.sh) is applied, this probe must inherit https_proxy or it will false-negative.
 #
 # Install to /etc/systemd/system, then:
 #   systemctl daemon-reload
@@ -26,7 +35,13 @@ Environment=AGENT_ID=%i
 EnvironmentFile=-/home/mikael/.config/claude-dev/agent.env
 UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
 WorkingDirectory=/home/mikael
-ExecStart=/usr/bin/script -qec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i' --dangerously-skip-permissions" /dev/null
+# Re-assert workspace trust before launch (flock-serialised across the three instances) so the headless
+# trust dialog never wedges a session — survives version-bump re-arming and clobbering by other sessions.
+ExecStartPre=/usr/bin/flock /home/mikael/.config/claude-dev/.trust.lock /usr/local/bin/moprox-ensure-folder-trust
+# Wait (≤~60s) for real egress to Anthropic before launching; exit non-zero so Restart retries with backoff.
+ExecStartPre=/bin/sh -c 'n=0; until curl -sS --max-time 5 -o /dev/null https://api.anthropic.com/ 2>/dev/null; do n=$((n+1)); [ "$n" -ge 30 ] && echo "moprox-dev@%i: no egress to api.anthropic.com after ~60s" >&2 && exit 1; sleep 2; done'
+ExecStart=/usr/bin/script -qec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i'" /dev/null
+TimeoutStartSec=120
 Restart=always
 RestartSec=5
 RestartSteps=4
