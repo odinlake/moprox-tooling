@@ -40,7 +40,11 @@ WorkingDirectory=/home/mikael
 ExecStartPre=/usr/bin/flock /home/mikael/.config/claude-dev/.trust.lock /usr/local/bin/moprox-ensure-folder-trust
 # Wait (≤~60s) for real egress to Anthropic before launching; exit non-zero so Restart retries with backoff.
 ExecStartPre=/bin/sh -c 'n=0; until curl -sS --max-time 5 -o /dev/null https://api.anthropic.com/ 2>/dev/null; do n=$((n+1)); [ "$n" -ge 30 ] && echo "moprox-dev@%i: no egress to api.anthropic.com after ~60s" >&2 && exit 1; sleep 2; done'
-ExecStart=/usr/bin/script -qec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i'" /dev/null
+# --append-system-prompt teaches THIS session (and only the three dev sessions) the shared-memory
+# protocol: who it is (%i) + journal-on-write + active-read. Scoped here, not in a home CLAUDE.md, so
+# the steward / other `claude -p` runs from $HOME don't inherit it. Full detail in PROTOCOL.md (abs path
+# — WorkingDirectory=/home/mikael, so a relative repo path would not resolve).
+ExecStart=/usr/bin/script -qec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i' --append-system-prompt 'You are moprox dev %i (AGENT_ID=%i), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/.claude/projects/-home-mikael/memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [%i], and append one line to journals/%i.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals.'" /dev/null
 TimeoutStartSec=120
 Restart=always
 RestartSec=5
