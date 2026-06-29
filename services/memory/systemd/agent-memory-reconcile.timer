@@ -1,0 +1,11 @@
+# Reconcile the shared agent memory every 10 minutes (cheap; deterministic). Install to
+# /etc/systemd/system, then: systemctl enable --now agent-memory-reconcile.timer
+[Unit]
+Description=Reconcile shared agent memory every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

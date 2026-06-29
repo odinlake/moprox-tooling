@@ -1,0 +1,13 @@
+# moprox agent-memory steward — the semantic housekeeping the reconciler can't do (merge conflicts,
+# roll up related facts, demote stale, write DIGEST.md), as a bounded headless `claude -p` pass on the
+# Max subscription. Self-skips when there's nothing to do. Install to /etc/systemd/system.
+[Unit]
+Description=moprox agent-memory steward (semantic merge/rollup/digest via claude -p)
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/mikael/projects/moprox-tooling/services/memory/steward.sh
+TimeoutStartSec=900

@@ -1,0 +1,36 @@
+# One of three shared-context Claude Code remote-control dev sessions: "moprox dev one/two/three",
+# driven from the Claude app. Templated unit — instance %i is the AGENT_ID (one|two|three).
+#
+# - Full bypass (--dangerously-skip-permissions) so edits/commands auto-allow; `sudo` still prompts via
+#   the `ask` rule in ~/.claude/settings.json (see services/sessions/README.md).
+# - Restart loop with exponential backoff: a wedged session self-heals, and
+#   `systemctl restart moprox-dev@two` hands you a FRESH session (loses thread history by design;
+#   continuity lives in the shared memory + git, see services/memory/).
+# - --remote-control needs a TTY, so `script` gives it a PTY (same trick as the old claude-remote.service).
+# - WorkingDirectory=/home/mikael so all three share ONE memory dir (the shared context).
+#
+# Install to /etc/systemd/system, then:
+#   systemctl daemon-reload
+#   systemctl enable --now moprox-dev@one moprox-dev@two moprox-dev@three
+[Unit]
+Description=Claude Code remote dev session "moprox dev %i"
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=AGENT_ID=%i
+EnvironmentFile=-/home/mikael/.config/claude-dev/agent.env
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+WorkingDirectory=/home/mikael
+ExecStart=/usr/bin/script -qec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i' --dangerously-skip-permissions" /dev/null
+Restart=always
+RestartSec=5
+RestartSteps=4
+RestartMaxDelaySec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+# moprox shared-agent-memory reconciler — deterministic index rebuild + housekeeping (provenance
+# merge, supersession, TTL, budgeted/stable hot index, conflict detection, CHANGES feed). No LLM.
+# Triggered by agent-memory-reconcile.timer. Install to /etc/systemd/system.
+[Unit]
+Description=moprox agent-memory reconcile (deterministic index rebuild + housekeeping)
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/memory/reconcile.py

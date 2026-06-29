@@ -1,0 +1,12 @@
+# Run the memory steward once a day (it self-skips when there are no conflicts and no recent changes).
+# Install to /etc/systemd/system, then: systemctl enable --now agent-memory-steward.timer
+[Unit]
+Description=Daily memory steward pass (conflicts / rollups / digest)
+
+[Timer]
+OnCalendar=*-*-* 04:45
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
