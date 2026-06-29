@@ -1,0 +1,12 @@
+# Archive transcripts hourly (incremental + cheap). Default 30-day source retention gives huge margin.
+# Install to /etc/systemd/system, then: systemctl enable --now thread-archive.timer
+[Unit]
+Description=Hourly archive of Claude Code conversation transcripts
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

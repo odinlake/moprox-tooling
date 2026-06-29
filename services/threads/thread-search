@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Search archived conversation threads. Thin wrapper so agents/operator can run `thread-search ...`.
+exec /usr/bin/python3 /home/mikael/projects/moprox-tooling/services/threads/search.py "$@"

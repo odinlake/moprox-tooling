@@ -1,0 +1,10 @@
+# Durably archive Claude Code conversation transcripts (flattened, searchable) before the 30-day
+# local cleanup prunes them. Triggered by thread-archive.timer. Install to /etc/systemd/system.
+[Unit]
+Description=moprox conversation-transcript archiver (durable, searchable thread history)
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/threads/archive.py
