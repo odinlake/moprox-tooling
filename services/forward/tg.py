@@ -94,28 +94,42 @@ def send(text, agent=None, reply_to=None):
     convo.log_out(agent or "system", body, (r.get("result") or {}).get("message_id"))
     return r
 
-def send_photo(png, caption="", agent=None):
-    tok, chat = creds()
-    cap = tag(caption, agent)
+def _photo_body(chat, png, caption, parse_mode):
+    """Build the hand-rolled multipart body for sendPhoto (caption + optional parse_mode)."""
     boundary = "----moprox%d" % (len(png) & 0xffffff)
+    fields = [("chat_id", chat), ("caption", caption)]
+    if parse_mode: fields.append(("parse_mode", parse_mode))
     body = b""
-    for k, v in (("chat_id", chat), ("caption", cap)):
+    for k, v in fields:
         body += ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % (boundary, k, v)).encode()
     body += ("--%s\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"hr.png\"\r\nContent-Type: image/png\r\n\r\n" % boundary).encode()
     body += png + ("\r\n--%s--\r\n" % boundary).encode()
-    req = urllib.request.Request(API % (tok, "sendPhoto"), data=body,
-                                 headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
-    # One retry: a photo is the only thing the athlete actually sees, and a transient blip behind
-    # Squid (timeout / 5xx) shouldn't drop it silently the way it did on 2026-06-24.
+    return body, boundary
+
+def send_photo(png, caption="", agent=None):
+    tok, chat = creds()
+    cap = tag(caption, agent)
+    # The caption gets the SAME formatting as a text message — our md->HTML (bold, tables->monospace,
+    # code, links). This path used to send the caption raw, so once the whole session read moved into
+    # the caption it shipped literal **asterisks** and an unformatted pipe-table. Telegram caps a photo
+    # caption at 1024 chars (visible text, tags excluded). HTML first; fall back to plain on a parse error.
+    variants = [(md_to_html(cap), "HTML"), (cap[:1024], None)]
     last = {"ok": False, "description": "send_photo: not attempted"}
-    for attempt in (1, 2):
-        try:
-            r = json.load(urllib.request.urlopen(req, timeout=30))
-            convo.log_out(agent or "system", cap or "[chart]", (r.get("result") or {}).get("message_id"))
-            return r
-        except urllib.error.HTTPError as e:
-            try: last = json.load(e)
-            except Exception: last = {"ok": False, "description": "HTTP %s" % e.code}
-        except Exception as e:
-            last = {"ok": False, "description": "%s: %s" % (type(e).__name__, e)}
+    for caption_value, parse_mode in variants:
+        body, boundary = _photo_body(chat, png, caption_value, parse_mode)
+        req = urllib.request.Request(API % (tok, "sendPhoto"), data=body,
+                                     headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
+        # One retry per variant: a photo is the only thing the athlete actually sees, and a transient
+        # blip behind Squid (timeout / 5xx) shouldn't drop it silently the way it did on 2026-06-24.
+        for attempt in (1, 2):
+            try:
+                r = json.load(urllib.request.urlopen(req, timeout=30))
+                convo.log_out(agent or "system", cap or "[chart]", (r.get("result") or {}).get("message_id"))
+                return r
+            except urllib.error.HTTPError as e:                  # bad entities / caption too long ->
+                try: last = json.load(e)                         # don't retry same body, try next variant
+                except Exception: last = {"ok": False, "description": "HTTP %s" % e.code}
+                break
+            except Exception as e:                               # transient -> retry once, then next variant
+                last = {"ok": False, "description": "%s: %s" % (type(e).__name__, e)}
     return last
