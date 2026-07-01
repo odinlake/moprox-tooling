@@ -15,13 +15,11 @@ FRESH_WINDOW_H are actually posted — so today's workout posts while 90 days do
 """
 import calendar, json, re, sys, time, urllib.error, urllib.request
 from pathlib import Path
-import numpy as np
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
 from run import run_agent
-import telegram_feed
-import tg
+import convo
 from analysis import Athlete, analyse_safe
 
 POLAR_ENV = Path.home() / ".config/claude-dev/polar.env"
@@ -76,31 +74,33 @@ def upload_age_h(ex):
     except Exception: return 0.0
 
 def post_session(ex, hr):
+    """A new workout came in. Coach OWNS the post: it builds its OWN light-mode chart and sends ONE
+    Telegram message — the chart with the read written into its caption (its firm standing rule; no
+    separate chart, no separate text). The pipeline no longer draws a chart or sends any commentary
+    of its own; it just hands coach the computed analysis + the recent conversation (so coach applies
+    the latest feedback) and lets the expert do the rest."""
     dur_min = len(hr) / 60.0
     res = analyse_safe([h for h in hr if 30 < h < 220], dur_min, ATH, ex.get("sport") or "")
-    cls = res["classification"]; block = np.clip(np.asarray(res["block"], float), 40, 210)
-    n = min(len(block), 120); step = len(block) / n
-    trace = [round(float(np.mean(block[int(i*step):max(int(i*step)+1, int((i+1)*step))]))) for i in range(n)]
-    reps = []
-    if cls.session_type in ("speed", "vo2max"):
-        blen = max(1.0, len(block))
-        for pm, ph in zip(res.get("peaks_min", []), res.get("peaks_hr", [])):
-            reps.append({"t": round(pm*60/blen, 3), "peak": round(float(ph)), "trough": 0, "work_s": 0})
-    m5 = res.get("five_min_max")
-    sess = dict(cat=cls.session_type, date=(ex.get("start_time") or "")[:19], trace=trace,
-                trace_step_s=round(len(block)/n), dur_min=round(dur_min, 1),
-                hr_avg=round(float(np.mean(block))), hr_max=round(float(np.max(block))),
-                max5=round(float(m5)) if m5 == m5 else 0, nint=cls.n_work_bouts, reps=reps)
-    if not telegram_feed.send_session(sess, agent="coach"):   # chart (caption #coach-tagged)
-        print("polar: WARN chart send failed for %s — commentary still posting" % (ex.get("id") or "?"))
-    summary = {k: sess[k] for k in ("cat", "date", "dur_min", "hr_avg", "hr_max", "max5", "nint")}
-    summary["above_lt2"] = bool(cls.above_lt2); summary["clamp"] = bool(cls.hr_clamp_suspected)
-    commentary = run_agent("coach",
-        "New session just came in. Here is its computed analysis:\n%s\nWrite the session read in "
-        "your voice (type + plan-match, the numbers, hedged interpretation, 1-2 takeaways)." % json.dumps(summary),
-        timeout=420)
-    tg.send(commentary, agent="coach")
-    return sess["cat"]
+    cls = res["classification"]; m5 = res.get("five_min_max")
+    fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
+    summary = {"exercise_id": ex.get("id"), "raw_file": str(INCOMING / ("exercise_%s.json" % fid)),
+               "cat": cls.session_type, "date": (ex.get("start_time") or "")[:19],
+               "dur_min": round(dur_min, 1), "n_work_bouts": cls.n_work_bouts,
+               "five_min_max": round(float(m5)) if m5 == m5 else None,
+               "above_lt2": bool(cls.above_lt2), "clamp": bool(cls.hr_clamp_suspected)}
+    prompt = (
+        "A new training session just came in. Computed classification (a hint — the raw per-second HR "
+        "is in `raw_file` as {summary, hr}; recompute/refit from it as you see fit, you're the "
+        "expert):\n%s\n\n"
+        "Post it to Mikael the way you always do: build your light-mode chart per your standing "
+        "per-type spec and send it YOURSELF (tg.send_photo) as ONE message with the whole read "
+        "written into the caption. That single chart-with-caption post IS the entire reply — no "
+        "separate chart, no separate text, no preamble or follow-up. Reuse and maintain your own "
+        "charting library (see your CLAUDE.md), not throwaway /tmp scripts. Apply anything relevant "
+        "from the recent conversation below.\n\nRecent conversation:\n%s"
+        % (json.dumps(summary), convo.transcript(16)))
+    run_agent("coach", prompt, timeout=600)   # coach sends its own single post; nothing else is sent
+    return cls.session_type
 
 def main():
     tok = env()["POLAR_ACCESS_TOKEN"]
