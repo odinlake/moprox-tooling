@@ -14,7 +14,7 @@ site (`pip --prefix=~/.local`); if it ever can't convert, we fall back to sendin
 
 Creds from ~/.config/claude-dev/telegram.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID).
 """
-import json, os, urllib.error, urllib.parse, urllib.request
+import json, os, re, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 import telegramify_markdown as tgmd   # markdown -> Telegram MarkdownV2 (user-site install)
@@ -38,14 +38,39 @@ def tag(text, agent):
     h = "#" + str(agent).lstrip("#")
     return text if (text or "").lstrip().startswith(h) else "%s %s" % (h, text)
 
+_BOLD_HEADER = re.compile(r"\*[^*\n]+\*:?")   # a line that is ONLY a bold span (opt. trailing colon)
+
 def _md(text):
     """Convert agents' markdown to Telegram MarkdownV2 (bold/italic/code/links + tables->monospace
     code block, with all the fiddly MarkdownV2 escaping handled). Returns None on any failure so the
-    caller falls back to sending plain text."""
+    caller falls back to sending plain text.
+
+    Style — 'structural spacing'. Telegram has NO sub-line spacing: a gap is binary (single newline =
+    none, blank line = a full line-height), there's no half. So instead of spacing everything (airy) or
+    nothing (cramped), we mix: prose paragraphs are tight (single newline), and a blank line is kept
+    only before a real section boundary — a standalone *bold header* line, or a table/code block. That
+    reads as the middle ground. Code fences are preserved verbatim so table alignment survives."""
     try:
-        return tgmd.markdownify(text or "")
+        md = tgmd.markdownify(text or "")
     except Exception:
         return None
+    out, in_fence = [], False
+    for ln in md.split("\n"):
+        s = ln.strip()
+        if s.startswith("```"):                       # table/code block: set it off with a blank line
+            if not in_fence and out and out[-1] != "": out.append("")
+            out.append(ln); in_fence = not in_fence
+            if not in_fence: out.append("")           # ...and after it closes
+            continue
+        if in_fence:
+            out.append(ln); continue                  # preserve code content verbatim
+        if s == "":
+            continue                                  # tight: drop blank lines between prose paragraphs
+        if _BOLD_HEADER.fullmatch(s) and out and out[-1] != "":
+            out.append("")                            # keep a blank line before a standalone bold header
+        out.append(ln)
+    while out and out[-1] == "": out.pop()            # no trailing blank
+    return "\n".join(out)
 
 def _post(tok, method, params):
     return json.load(urllib.request.urlopen(API % (tok, method) + "?" + urllib.parse.urlencode(params), timeout=20))
