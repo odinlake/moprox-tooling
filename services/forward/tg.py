@@ -3,15 +3,21 @@
 
 Every outbound message — coach session reads, dev acks, steward chat replies, chart captions —
 goes through here. Two reasons:
-  1. one place owns creds + the hand-rolled multipart (no `requests` dependency);
+  1. one place owns creds, the hand-rolled multipart (no `requests`), and the markdown->Telegram
+     conversion, so formatting is identical for a text message and a photo caption;
   2. we enforce the convention that an agent's messages are prefixed with its handle (#coach,
      #dev, #steward). Pass `agent=` and the tag is prepended unless the text already starts with it.
 
+Markdown is converted to Telegram **MarkdownV2** by the battle-tested `telegramify-markdown` (handles
+the MarkdownV2 escaping + renders tables as an aligned monospace code block). Installed in the user
+site (`pip --prefix=~/.local`); if it ever can't convert, we fall back to sending plain text.
+
 Creds from ~/.config/claude-dev/telegram.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID).
 """
-import html, json, os, re, urllib.error, urllib.parse, urllib.request
+import json, os, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
+import telegramify_markdown as tgmd   # markdown -> Telegram MarkdownV2 (user-site install)
 import convo   # shared conversation log (records every outbound message + its msg_id)
 
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
@@ -32,47 +38,14 @@ def tag(text, agent):
     h = "#" + str(agent).lstrip("#")
     return text if (text or "").lstrip().startswith(h) else "%s %s" % (h, text)
 
-def _table(rows_raw):
-    """A markdown table block -> an aligned monospace <pre> (Telegram has no real tables)."""
-    rows = []
-    for ln in rows_raw:
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        if re.fullmatch(r"[\s:\-|]+", ln.strip()): continue      # the |---|---| separator row
-        rows.append(cells)
-    if not rows: return ""
-    ncol = max(len(r) for r in rows); rows = [r + [""] * (ncol - len(r)) for r in rows]
-    w = [max(len(r[i]) for r in rows) for i in range(ncol)]
-    body = "\n".join(" │ ".join(c.ljust(w[i]) for i, c in enumerate(r)) for r in rows)
-    return "<pre>" + html.escape(body) + "</pre>"
-
-def md_to_html(text):
-    """Convert the agents' markdown to the subset of HTML Telegram renders. Headings -> bold,
-    tables -> monospace block, plus bold/italic/code; everything else is escaped to literal text."""
-    holds = []
-    def hold(frag): holds.append(frag); return "\x00%d\x00" % (len(holds) - 1)
-    text = re.sub(r"```[^\n]*\n(.*?)```", lambda m: hold("<pre>" + html.escape(m.group(1).rstrip("\n")) + "</pre>"),
-                  text, flags=re.S)
-    # group consecutive '|' lines that include a separator row into one table block
-    lines = text.split("\n"); out = []; i = 0
-    while i < len(lines):
-        if "|" in lines[i]:
-            j = i
-            while j < len(lines) and "|" in lines[j]: j += 1
-            run = lines[i:j]
-            if len(run) >= 2 and any(re.fullmatch(r"[\s:\-|]+", r.strip()) for r in run):
-                out.append(hold(_table(run))); i = j; continue
-        out.append(lines[i]); i += 1
-    text = "\n".join(out)
-    text = re.sub(r"`([^`]+)`", lambda m: hold("<code>" + html.escape(m.group(1)) + "</code>"), text)
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)",         # [label](url) -> <a href>
-                  lambda m: hold('<a href="%s">%s</a>' % (html.escape(m.group(2), quote=True), html.escape(m.group(1)))),
-                  text)
-    text = html.escape(text)                                     # escape the remaining plain text
-    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*$", r"<b>\1</b>", text)   # ATX headings -> bold
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"(?m)^(\s*)[-*]\s+", r"\1• ", text)           # bullets
-    text = re.sub(r"\x00(\d+)\x00", lambda m: holds[int(m.group(1))], text)
-    return text
+def _md(text):
+    """Convert agents' markdown to Telegram MarkdownV2 (bold/italic/code/links + tables->monospace
+    code block, with all the fiddly MarkdownV2 escaping handled). Returns None on any failure so the
+    caller falls back to sending plain text."""
+    try:
+        return tgmd.markdownify(text or "")
+    except Exception:
+        return None
 
 def _post(tok, method, params):
     return json.load(urllib.request.urlopen(API % (tok, method) + "?" + urllib.parse.urlencode(params), timeout=20))
@@ -80,14 +53,16 @@ def _post(tok, method, params):
 def send(text, agent=None, reply_to=None):
     tok, chat = creds()
     body = tag(text, agent)
-    p = {"chat_id": chat, "text": md_to_html(body)[:4096], "parse_mode": "HTML",
-         "disable_web_page_preview": "true"}             # links stay inline; no big preview cards
+    md = _md(body)                                               # MarkdownV2, or None -> plain fallback
+    p = {"chat_id": chat, "disable_web_page_preview": "true"}    # links stay inline; no big preview cards
+    p["text"], p["parse_mode"] = (md, "MarkdownV2") if md is not None else (body[:4096], None)
+    if p["parse_mode"] is None: p.pop("parse_mode")
     if reply_to:
         p["reply_to_message_id"] = reply_to
         p["allow_sending_without_reply"] = "true"               # stale/deleted target -> still send
     try:
         r = _post(tok, "sendMessage", p)
-    except urllib.error.HTTPError:                               # bad HTML -> plain text, drop the reply target
+    except urllib.error.HTTPError:                              # bad entities / too long -> plain, drop reply target
         for k in ("parse_mode", "reply_to_message_id"): p.pop(k, None)
         p["text"] = body[:4096]
         r = _post(tok, "sendMessage", p)
@@ -109,11 +84,12 @@ def _photo_body(chat, png, caption, parse_mode):
 def send_photo(png, caption="", agent=None):
     tok, chat = creds()
     cap = tag(caption, agent)
-    # The caption gets the SAME formatting as a text message — our md->HTML (bold, tables->monospace,
-    # code, links). This path used to send the caption raw, so once the whole session read moved into
-    # the caption it shipped literal **asterisks** and an unformatted pipe-table. Telegram caps a photo
-    # caption at 1024 chars (visible text, tags excluded). HTML first; fall back to plain on a parse error.
-    variants = [(md_to_html(cap), "HTML"), (cap[:1024], None)]
+    # The caption gets the SAME MarkdownV2 formatting as a text message (bold, tables->monospace, code,
+    # links). This path used to send the caption raw, so once the whole session read moved into the
+    # caption it shipped literal **asterisks** and an unformatted pipe-table. Telegram caps a photo
+    # caption at 1024 chars (visible, post-parse). MarkdownV2 first; fall back to plain on a parse error.
+    md = _md(cap)
+    variants = ([(md, "MarkdownV2")] if md is not None else []) + [(cap[:1024], None)]
     last = {"ok": False, "description": "send_photo: not attempted"}
     for caption_value, parse_mode in variants:
         body, boundary = _photo_body(chat, png, caption_value, parse_mode)
