@@ -102,11 +102,17 @@ def git_overnight(hours=18):
 
 def tidy(b):
     """Enforce the dense layout regardless of agent variance: strip a self-written #valet (the
-    transport re-adds it inline → one-line header), un-double bracketed link labels, and collapse
-    blank lines so the brief stays tight."""
+    transport re-adds it inline → one-line header) + any preamble before the '@ location' line, drop a
+    trailing 'want me to send it?' confirm-question, remove horizontal rules (they misparse as setext
+    headings in MarkdownV2), un-double bracketed link labels, and collapse blank lines so it stays tight."""
     import re
     b = (b or "").strip()
     b = re.sub(r"^#valet\b[:\s]*", "", b)            # transport prepends the tag inline
+    m = re.search(r"(?m)^@ ", b)                     # the brief starts at the '@ <location>' tag —
+    if m: b = b[m.start():]                          # drop any preamble ("here's the brief", --- rules)
+    b = re.sub(r"(?is)\n+[^\n]*\b(want me to|shall i|should i|send it|adjust anything|anything else)\b[^\n]*\??\s*$",
+               "", b)                                # drop a trailing confirm-question / offer to send
+    b = re.sub(r"(?m)^[ \t]*[-*_]{3,}[ \t]*$", "", b)  # drop horizontal rules (setext-heading hazard)
     b = re.sub(r"\[\[([^\]]+)\]\]", r"[\1]", b)      # [[BBC]] -> [BBC]
     b = re.sub(r"\n[ \t]*\n+", "\n", b)              # no blank lines
     return b.strip()
@@ -139,7 +145,10 @@ def morning():
         "mention something from them ONLY if genuinely unusual/worth flagging. If there's no personal "
         "mail and nothing on those calendars, say so in a few words; never invent.\n"
         "Lead with the '@ <location>' tag line. Dense, narrow gaps, one subtle wink at most; drop a whole "
-        "block only if it's genuinely empty. Start with #valet.\n\nDATA (news/weather/local/repos):\n%s"
+        "block only if it's genuinely empty. Start with #valet.\n"
+        "Output ONLY the brief itself — it is sent to Mikael verbatim (not a draft for review), so no "
+        "preamble like 'here's the brief', no '---' separators, and no closing question or offer to "
+        "send/adjust.\n\nDATA (news/weather/local/repos):\n%s"
         % json.dumps(bundle, ensure_ascii=False))
     brief = tidy(run_agent("valet", prompt, timeout=480))
     tg.send(brief, agent="valet")              # tg logs it to the shared conversation

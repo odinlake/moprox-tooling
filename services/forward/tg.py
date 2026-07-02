@@ -50,8 +50,17 @@ def _md(text):
     nothing (cramped), we mix: prose paragraphs are tight (single newline), and a blank line is kept
     only before a real section boundary — a standalone *bold header* line, or a table/code block. That
     reads as the middle ground. Code fences are preserved verbatim so table alignment survives."""
+    # Drop horizontal-rule lines (---, ***, ___) BEFORE conversion: in CommonMark a line of text
+    # followed by `---` is a *setext heading*, which MarkdownV2 renders as underlined bold and mangles
+    # a whole block. Agents shouldn't emit rules for Telegram anyway. Table separators (`--- | ---`,
+    # which contain `|`) and content inside ``` fences are left alone.
+    src, in_f = [], False
+    for ln in (text or "").split("\n"):
+        if ln.lstrip().startswith("```"): in_f = not in_f
+        if not in_f and re.fullmatch(r"[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*", ln): continue
+        src.append(ln)
     try:
-        md = tgmd.markdownify(text or "")
+        md = tgmd.markdownify("\n".join(src))
     except Exception:
         return None
     out, in_fence = [], False
