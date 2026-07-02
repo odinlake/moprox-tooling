@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
+<title>moprox dashboard</title>
+<script>try{if(localStorage.theme==='light')document.documentElement.dataset.theme='light'}catch(e){}</script>
+<style>
+  :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--header:#0d1117;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
+        --grid:#21262d;--hover:#1c2128;--btn:#21262d;--btnAct:#30363d;--fade:#586273;
+        --easy:#3fb950;--tempo:#d29922;--vo2max:#f85149;--speed:#a371f7;--trail:#58a6ff;--accent:#58a6ff}
+  [data-theme=light]{color-scheme:light;--bg:#eef1f4;--panel:#ffffff;--header:#ffffff;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
+        --grid:#e9edf1;--hover:#f0f3f6;--btn:#f0f3f6;--btnAct:#dfe3e8;--accent:#0969da;--fade:#c4ccd4}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
+  header{display:flex;align-items:center;gap:1rem;padding:.8rem 1rem;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--header);z-index:5}
+  header h1{font-size:1.05rem;margin:0;font-weight:600}
+  .tabs{display:flex;gap:.25rem;margin-left:auto}
+  .tabs a{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer;text-decoration:none}
+  .tabs a.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
+  #themebtn,#navbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center}
+  #themebtn{padding:.4rem .5rem}
+  #navbtn{display:none;padding:.35rem .55rem;font-size:1.2rem}
+  @media(max-width:640px){
+    #navbtn{display:flex;margin-left:auto}
+    .tabs{display:none;position:absolute;top:calc(100% + 4px);right:1rem;flex-direction:column;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:.3rem;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:6}
+    .tabs.open{display:flex}
+    .tabs a{padding:.55rem .9rem}
+  }
+  main{padding:1rem;max-width:1100px;margin:0 auto}
+  .grid{display:grid;gap:1rem}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .panel{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:1rem}
+  .panel h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);margin:0 0 .6rem}
+  .stat{font-size:1.6rem;font-weight:600}.stat small{font-size:.85rem;color:var(--mut);font-weight:400}
+  .muted{color:var(--mut);font-size:.85rem}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--bd)}
+  th{color:var(--mut);font-weight:500;font-size:.8rem}
+  table.compact th,table.compact td{padding:.16rem .45rem;font-size:.82rem}
+  .spark{display:block}
+  .badge{display:inline-block;padding:.02rem .32rem;border-radius:4px;font-size:.68rem;font-weight:500;letter-spacing:.02em;border:1px solid currentColor;background:transparent;line-height:1.5;vertical-align:middle}
+  tr.mhead td{background:var(--bg);color:var(--mut);font-weight:600;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;padding-top:.55rem;border-bottom:1px solid var(--bd)}
+  .bar{height:8px;border-radius:4px;background:var(--grid);overflow:hidden}.bar>i{display:block;height:100%;background:var(--accent)}
+  .row{display:flex;gap:1rem;flex-wrap:wrap}
+  .seg{display:flex;gap:.25rem;align-items:center;font-size:.8rem;color:var(--mut)}
+  .seg i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .sessrow{cursor:pointer}.sessrow:hover{background:var(--hover)}
+  .toggle button{background:var(--btn);border:1px solid var(--bd);color:var(--mut);padding:.25rem .6rem;border-radius:6px;cursor:pointer;font-size:.8rem}
+  .toggle button.active{color:var(--fg);background:var(--btnAct)}
+  svg{display:block;width:100%;height:auto}
+  .axis{fill:var(--mut);font-size:10px}.grid line{stroke:var(--grid)}.sfloor{stroke:var(--bd)}
+  .agi svg{width:17px;height:17px;vertical-align:-4px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>moprox</h1>
+  <div class="tabs" id="tabs"></div>
+  <button id="navbtn" aria-label="Menu">☰</button>
+  <button id="themebtn" title="Toggle light / dark"></button>
+</header>
+<main>
+  <section id="system"></section>
+  <section id="training" hidden></section>
+  <section id="dns" hidden style="margin-top:1rem"></section>
+  <section id="stats" hidden style="margin-top:1rem"></section>
+  <p class="muted" id="foot" style="margin-top:2rem"></p>
+</main>
+<script>
+const CAT_DARK = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681"};
+const CAT_LIGHT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781"};  // darker, ~3:1 on white (GitHub Primer)
+let CAT = document.documentElement.dataset.theme==='light' ? CAT_LIGHT : CAT_DARK;
+const ICON = {sun:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/></svg>`,
+  moon:`<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`};
+const BUILD = "4deb9802b6b7";   // replaced at publish with a hash of this shell; the poller below reloads on a new deploy
+const $ = s => document.querySelector(s);
+const gib = b => (b/1073741824);
+const fmtDur = s => { s=Math.round(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600); return d?`${d}d ${h}h`:`${h}h ${Math.floor(s%3600/60)}m`; };
+async function J(p){ const r=await fetch(p,{cache:"no-store"}); if(!r.ok) throw new Error(p+" "+r.status); return r.json(); }
+
+// ---- tiny SVG line chart (horizontal axis labels only — house style) ----
+function lineChart(t, lines, opts={}){
+  const W=opts.w||760, H=opts.h||180, padL=44, padR=10, padB=22, padT=8;
+  const xs=t, n=xs.length;
+  let lo=Infinity, hi=-Infinity;
+  lines.forEach(l=>l.vals.forEach(v=>{ if(v!=null){lo=Math.min(lo,v);hi=Math.max(hi,v);} }));
+  if(!isFinite(lo)){lo=0;hi=1;} if(lo===hi)hi=lo+1;
+  if(opts.y0)lo=Math.min(lo,0);
+  const px=i=> padL+(W-padL-padR)*(i/(n-1||1));
+  const py=v=> padT+(H-padT-padB)*(1-(v-lo)/(hi-lo));
+  const path=vals=>{let d="",pen=false;vals.forEach((v,i)=>{if(v==null){pen=false;return;}d+=(pen?"L":"M")+px(i).toFixed(1)+" "+py(v).toFixed(1)+" ";pen=true;});return d;};
+  let g="";
+  for(let k=0;k<=3;k++){const v=lo+(hi-lo)*k/3,y=py(v);g+=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"/>`;
+    g+=`<text class="axis" x="2" y="${(y+3).toFixed(1)}">${(opts.yfmt?opts.yfmt(v):v.toFixed(0))}</text>`;}
+  let xl="";const nlab=Math.min(5,n);
+  for(let k=0;k<nlab;k++){const i=Math.round((n-1)*k/(nlab-1||1));xl+=`<text class="axis" x="${px(i).toFixed(1)}" y="${H-6}" text-anchor="${k===0?'start':k===nlab-1?'end':'middle'}">${opts.xfmt?opts.xfmt(xs[i]):xs[i]}</text>`;}
+  const paths=lines.map(l=>`<path d="${path(l.vals)}" fill="none" stroke="${l.color}" stroke-width="1.6"/>`).join("");
+  const dots=(opts.marks||[]).map(m=>`<circle cx="${px(m.i).toFixed(1)}" cy="${py(m.v).toFixed(1)}" r="3" fill="${m.c||'#fff'}"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}${dots}</svg>`;
+}
+const hm = ts => { const d=new Date(ts*1000); return d.getHours().toString().padStart(2,'0')+":"+d.getMinutes().toString().padStart(2,'0'); };
+const md = ts => { const d=new Date(ts*1000); return (d.getMonth()+1)+"/"+d.getDate(); };
+
+// ================= SYSTEM =================
+let sysData={};
+async function loadSystem(){
+  const [now,day,month] = await Promise.all([J(DATA+"system/now.json"),J(DATA+"system/day.json"),J(DATA+"system/month.json")]);
+  sysData={now,day,month};
+  const g = now.guests.map(x=>`<tr><td>${x.vmid}</td><td>${x.name||'—'}</td><td class="muted">${x.kind}</td>
+     <td>${x.status==='running'?'🟢':'⚪'} ${x.status}</td><td>${x.cpu_pct.toFixed(1)}%</td>
+     <td>${x.mem?gib(x.mem).toFixed(1):'—'} GB</td></tr>`).join("");
+  const stg = now.storage.map(s=>`<div style="margin:.4rem 0"><div class="row" style="justify-content:space-between"><span>${s.storage} <span class="muted">${s.type}</span></span>
+     <span class="muted">${gib(s.used).toFixed(0)}/${gib(s.total).toFixed(0)} GB</span></div>
+     <div class="bar"><i style="width:${(100*s.used/s.total).toFixed(1)}%"></i></div></div>`).join("");
+  $("#system").innerHTML = `
+    <div class="grid cards">
+      <div class="panel"><h2>CPU</h2><div class="stat">${now.cpu_pct.toFixed(1)}<small>% of ${now.cpus}t</small></div><div class="muted">load ${now.load?now.load[0]:'—'}</div></div>
+      <div class="panel"><h2>Memory</h2><div class="stat">${gib(now.mem_used).toFixed(1)}<small>/${gib(now.mem_total).toFixed(0)} GB</small></div></div>
+      <div class="panel"><h2>Uptime</h2><div class="stat">${fmtDur(now.uptime_s)}</div><div class="muted">PVE ${now.pve_version}</div></div>
+      <div class="panel"><h2>Host</h2><div style="font-size:1rem;font-weight:600">${now.model||now.node}</div></div>
+    </div>
+    <div class="grid" style="grid-template-columns:1fr;margin-top:1rem">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between"><h2>Node metrics</h2>
+          <span class="toggle"><button data-tf="day" class="active">24h</button><button data-tf="month">30d</button></span></div>
+        <div id="syscharts"></div>
+      </div>
+      <div class="row">
+        <div class="panel" style="flex:2;min-width:280px"><h2>Guests</h2><table><tr><th>id</th><th>name</th><th>type</th><th>status</th><th>cpu</th><th>mem</th></tr>${g}</table></div>
+        <div class="panel" style="flex:1;min-width:220px"><h2>Storage</h2>${stg}</div>
+      </div>
+    </div>`;
+  $("#syscharts").parentElement.querySelectorAll(".toggle button").forEach(b=>b.onclick=()=>{
+    $("#syscharts").parentElement.querySelectorAll(".toggle button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); drawSysCharts(b.dataset.tf);});
+  drawSysCharts("day");
+}
+function drawSysCharts(tf){
+  const d=sysData[tf], xf = tf==="day"?hm:md;
+  const chart=(title,lines,opts)=>`<div style="margin:.8rem 0"><div class="muted">${title}</div>${lineChart(d.t,lines,Object.assign({xfmt:xf,w:760,h:150},opts))}</div>`;
+  $("#syscharts").innerHTML =
+    chart("CPU %", [{vals:d.cpu_pct,color:"#58a6ff"},{vals:d.iowait_pct,color:"#f85149"}], {y0:true,yfmt:v=>v.toFixed(0)+"%"}) +
+    chart("Memory used (GB)", [{vals:d.mem_used.map(v=>v==null?null:gib(v)),color:"#3fb950"}], {y0:true,yfmt:v=>v.toFixed(0)}) +
+    chart("Load average", [{vals:d.load,color:"#d29922"}], {y0:true}) +
+    chart("Network (KB/s, in green / out blue)", [{vals:d.netin.map(v=>v==null?null:v/1024),color:"#3fb950"},{vals:d.netout.map(v=>v==null?null:v/1024),color:"#58a6ff"}], {y0:true});
+  $("#foot").textContent = "system data generated " + new Date(sysData.now.generated*1000).toLocaleString();
+}
+
+// ================= TRAINING =================
+function isoWeek(d){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));return t.getUTCFullYear()+"-W"+String(Math.ceil(((t-ys)/86400000+1)/7)).padStart(2,"0");}
+// Stacked weekly histogram as ONE svg, rendered at measured px width so gaps are pixel-consistent:
+// fixed gap (1-2px by bar width), integer bar widths, leftover px distributed +1 across the first bars.
+function histBars(data, W, wmax, active){
+  const n=data.length; if(!n) return '<span class="muted">no sessions in this window</span>';
+  const BH=84, H=BH+15, gap=(W/n)>=14?2:1;
+  let bw=Math.floor((W-gap*(n-1))/n); if(bw<1)bw=1;
+  let rem=Math.max(0,(W-gap*(n-1))-bw*n);
+  let x=0, r="";
+  data.forEach(b=>{ const w=bw+(rem>0?1:0); if(rem>0)rem--;
+    let y=BH, segs=""; b.segs.forEach(s=>{ const h=BH*s.n/wmax; y-=h; segs+=`<rect x="${x}" y="${y.toFixed(1)}" width="${w}" height="${h.toFixed(1)}" fill="${s.color}"/>`; });
+    if(b.segs.length){ const off=active&&!active.has(b.key);   // clickable bucket; fade when a selection excludes it
+      r+=`<g data-bk="${b.key}" opacity="${off?0.28:1}" style="cursor:pointer"><rect x="${x}" y="0" width="${w+gap}" height="${BH}" fill="transparent" pointer-events="all"/>${segs}</g>`; }
+    if(b.lab) r+=`<text x="${(x+w/2).toFixed(1)}" y="${BH+11}" text-anchor="middle" class="axis">${b.lab}</text>`;
+    x+=w+gap; });
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;max-width:100%">${r}</svg>`;
+}
+function lerpColor(a,b,t){const f=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));const A=f(a),B=f(b);
+  return "rgb("+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(",")+")";}
+// Overlay every HR curve of one type, aligned at t=0; recent in the type colour, older fading to grey.
+function overlayChart(sess){
+  const arr=[...sess].sort((p,q)=>p.date<q.date?-1:1).slice(-100);  // oldest -> newest, cap 100 most recent
+  const W=760,H=300,pL=30,pR=8,pT=10,pB=20;
+  const durs=arr.map(s=>s.dur_min).sort((a,b)=>a-b);            // x-range: 90th-pct length, extend while each
+  let xi=Math.floor(0.9*(durs.length-1)), xmax=durs[xi]||1;     // next is <3min longer, stop at a 3min+ gap
+  while(xi+1<durs.length && durs[xi+1]-xmax<3){ xmax=durs[xi+1]; xi++; }
+  xmax=Math.max(1,xmax);
+  const lo=110, hi=190;                                          // fixed y-range; curves clamped into it
+  const px=m=>pL+(W-pL-pR)*m/xmax, py=v=>pT+(H-pT-pB)*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
+  let g="";for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=py(v);g+=`<line x1="${pL}" y1="${y.toFixed(1)}" x2="${W-pR}" y2="${y.toFixed(1)}"/><text class="axis" x="2" y="${(y+3).toFixed(1)}">${v.toFixed(0)}</text>`;}
+  let xl="";for(let k=0;k<=4;k++){const m=xmax*k/4;xl+=`<text class="axis" x="${px(m).toFixed(1)}" y="${H-6}" text-anchor="${k===0?'start':k===4?'end':'middle'}">${m.toFixed(0)}m</text>`;}
+  const GRAY=getComputedStyle(document.documentElement).getPropertyValue('--fade').trim()||"#586273";
+  const paths=arr.map((s,i)=>{const f=arr.length>1?i/(arr.length-1):1; let d="";
+    s.trace.forEach((v,j)=>{const m=j*s.trace_step_s/60; if(m>xmax) return; d+=(d?"L":"M")+px(m).toFixed(1)+" "+py(v).toFixed(1)+" ";});
+    return `<path d="${d}" fill="none" stroke="${lerpColor(GRAY,CAT[s.cat],f)}" stroke-width="${f>0.96?1.8:1}" stroke-opacity="${(0.2+0.8*f).toFixed(2)}"/>`;}).join("");
+  const tag=`<text x="${W-pR-2}" y="${pT+12}" text-anchor="end" class="axis" font-size="12">${arr.length}/${sess.length}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}${tag}</svg>`;
+}
+async function loadTraining(){
+  const data = await J(DATA+"training/sessions.json");
+  const all = data.sessions;
+  const order=["easy","tempo","trail_easy","vo2max","speed","unknown"];
+  const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const WINS=[[90,"3m"],[365,"1y"],[1095,"3y"],[1e12,"all"]], WIN_DEFAULT=0;
+  // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 0..50 (left-aligned, so
+  // width ∝ duration; >50 min gets a red overflow tick), y = 120..180 bpm (out-of-range clamps to
+  // flat lines at the edges). Faint floor line = 120 bpm reference.
+  const spark = s => {
+    const tr=s.trace, step=s.trace_step_s, W=104, H=22, T0=0, T1=3000, Y0=120, Y1=180;
+    const stride=Math.max(1,Math.round(tr.length/60));
+    const xt=t=>(t-T0)/(T1-T0)*W, yh=h=>H-1-(H-2)*(Math.max(Y0,Math.min(Y1,h))-Y0)/(Y1-Y0);
+    let d="",pen=false;
+    for(let i=0;i<tr.length;i+=stride){ const t=i*step; if(t<T0)continue; if(t>T1)break;
+      d+=(pen?"L":"M")+xt(t).toFixed(1)+" "+yh(tr[i]).toFixed(1)+" "; pen=true; }
+    const over = tr.length*step>T1 ? `<path d="M${W-3} 1 L${W} 1 L${W-1.5} 5 Z" fill="#f85149"/>` : "";
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="none">`
+      +`<line x1="0" y1="${H-1}" x2="${W}" y2="${H-1}" class="sfloor" stroke-width="0.5"/>`
+      +`<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.2"/>${over}</svg>`;
+  };
+  $("#training").innerHTML = `
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2>Filter <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— tap a type to isolate</span></h2>
+        <span class="toggle" id="wintoggle">${WINS.map((w,i)=>`<button data-i="${i}"${i===WIN_DEFAULT?' class="active"':''}>${w[1]}</button>`).join("")}</span>
+      </div>
+      <div class="row" id="tlegend" style="margin:.5rem 0 .2rem"></div>
+      <div id="tbars"></div>
+      <div class="muted" id="tfoot" style="font-size:.75rem;margin-top:.35rem"></div>
+    </div>
+    <div class="panel" id="ovpanel" style="margin-top:1rem"></div>
+    <div class="row" style="margin-top:1rem">
+      <div class="panel" style="flex:1;min-width:330px">
+        <div style="max-height:560px;overflow:auto"><table class="compact">
+        <thead><tr><th>day</th><th style="text-align:center">type</th><th>dur</th><th>avg</th><th>max</th><th>trace</th></tr></thead>
+        <tbody id="slist"></tbody></table></div></div>
+      <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Selected session details</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
+    </div>`;
+  let S=[], wcounts={}, activeCats=null, curCut=0, activeBuckets=null, nBuckets=0;   // + time-bucket selection (null=all)
+  const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
+  const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
+    return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};
+  const render = idx => {
+    curCut=Date.now()-WINS[idx][0]*86400*1000;
+    S=all.filter(s=>new Date(s.date).getTime()>=curCut);
+    wcounts={}; S.forEach(s=>wcounts[s.cat]=(wcounts[s.cat]||0)+1);
+    activeCats=null; activeBuckets=null;                  // window change resets both filters
+    paint();
+  };
+  const toggleCat = c => {                                // first click isolates to one type; then toggles; empty/full -> all
+    if(!activeCats) activeCats=new Set([c]);
+    else { activeCats.has(c)?activeCats.delete(c):activeCats.add(c);
+      const avail=order.filter(x=>wcounts[x]).length;
+      if(!activeCats.size||activeCats.size===avail) activeCats=null; }
+    paint();
+  };
+  const toggleBucket = key => {                            // first click isolates a bucket; then toggles; empty/full -> all
+    if(!activeBuckets) activeBuckets=new Set([key]);
+    else { activeBuckets.has(key)?activeBuckets.delete(key):activeBuckets.add(key);
+      if(!activeBuckets.size||activeBuckets.size===nBuckets) activeBuckets=null; }
+    paint();
+  };
+  const paint = () => {
+    const Stype = activeCats ? S.filter(s=>activeCats.has(s.cat)) : S;   // type filter drives the histogram
+    $("#tlegend").innerHTML=order.filter(c=>wcounts[c]).map(c=>{const on=!activeCats||activeCats.has(c);
+      return `<span class="seg legpick" data-c="${c}" style="cursor:pointer;user-select:none;${on?'':'opacity:.3'}"><i style="background:${CAT[c]}"></i>${c} ${wcounts[c]}</span>`;}).join("")||'<span class="muted">none</span>';
+    $("#tlegend").querySelectorAll(".legpick").forEach(el=>el.onclick=()=>toggleCat(el.dataset.c));
+    // adaptive histogram buckets: weekly (<~13mo) -> monthly (<~4y) -> yearly, to keep the bar count sane
+    const dataStart=new Date(all[all.length-1].date).getTime(), start=Math.max(curCut,dataStart);
+    const spanD=(Date.now()-start)/86400000, G=spanD>1500?'y':spanD>400?'m':'w';
+    const keyOf = G==='w' ? (d=>isoWeek(new Date(d)))
+                : G==='m' ? (d=>{d=new Date(d);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');})
+                : (d=>String(new Date(d).getFullYear()));
+    const buk={}; Stype.forEach(s=>{const k=keyOf(s.date);(buk[k]=buk[k]||{})[s.cat]=(buk[k][s.cat]||0)+1;});
+    const bars=[];
+    if(G==='w'){ const last=weekStart(Date.now()); last.setDate(last.getDate()-7);   // drop the partial current week
+      for(let d=weekStart(start); d<=last; d.setDate(d.getDate()+7)) bars.push(new Date(d)); }
+    else if(G==='m'){ const now=new Date(), s0=new Date(start);
+      for(let d=new Date(s0.getFullYear(),s0.getMonth(),1); d<=now; d=new Date(d.getFullYear(),d.getMonth()+1,1)) bars.push(new Date(d)); }
+    else { const ny=new Date().getFullYear();
+      for(let y=new Date(start).getFullYear(); y<=ny; y++) bars.push(new Date(y,0,1)); }
+    const wmax=Math.max(1,...bars.map(d=>{const c=buk[keyOf(d)]||{};return order.reduce((a,k)=>a+(c[k]||0),0);}));
+    nBuckets=bars.filter(d=>buk[keyOf(d)]).length;        // non-empty buckets (for the all/none reset)
+    let plab=null;
+    const barData=bars.map(d=>{const k=keyOf(d), c=buk[k]||{};
+      const segs=order.map(x=>({color:CAT[x],n:c[x]||0})).filter(x=>x.n>0);
+      let lab="";
+      if(G==='y') lab="'"+String(d.getFullYear()).slice(2);
+      else if(G==='m'){ const y=d.getFullYear(); if(y!==plab){lab=String(y);plab=y;} }
+      else { const kk=d.getFullYear()*12+d.getMonth(); if(kk!==plab){lab=d.toLocaleString('en-GB',{month:'short'}); if(d.getMonth()===0)lab+=" '"+String(d.getFullYear()).slice(2); plab=kk;} }
+      return {segs,lab,key:k};});
+    const cont=$("#tbars"), W=Math.max(280, Math.floor(cont.getBoundingClientRect().width)||760);
+    cont.innerHTML = histBars(barData, W, wmax, activeBuckets);
+    cont.querySelectorAll("g[data-bk]").forEach(gel=>gel.onclick=()=>toggleBucket(gel.dataset.bk));
+    // bucket selection filters everything below
+    const Sf = activeBuckets ? Stype.filter(s=>activeBuckets.has(keyOf(s.date))) : Stype;
+    $("#tfoot").textContent=`${Sf.length} of ${all.length} since ${all[all.length-1].date.slice(0,10)}`;
+    let cmy=null,html="";                                 // month-grouped table (filtered)
+    Sf.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
+      if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="6">${my}</td></tr>`;}
+      html+=`<tr class="sessrow" data-i="${i}"><td style="white-space:nowrap">${WD[dt.getDay()]} ${ord(dt.getDate())}</td>
+        <td style="text-align:center"><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span></td>
+        <td>${s.dur_min.toFixed(0)}m</td><td>${s.hr_avg}</td><td>${s.hr_max}</td>
+        <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
+    $("#slist").innerHTML=html;
+    $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
+    $("#ovpanel").innerHTML = Sf.length ? overlayChart(Sf) : '<p class="muted">No sessions match.</p>';   // count is overlaid on the chart
+    if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Selected session details</h2><p class="muted">No sessions match.</p>';
+  };
+  $("#wintoggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $("#wintoggle").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); render(+b.dataset.i);
+  });
+  render(WIN_DEFAULT);
+}
+function showDetail(s){
+  const tr=s.trace, t=tr.map((_,i)=>i);
+  const marks=s.reps.map(r=>({i:Math.round(r.t*(tr.length-1)),v:r.peak,c:CAT[s.cat]}));
+  const repTable = s.reps.length ? `<table style="margin-top:.6rem"><tr><th>#</th><th>peak</th><th>recovery↓</th><th>work</th></tr>
+     ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
+  const st=new Date(s.date), en=new Date(st.getTime()+s.dur_min*60000);
+  $("#detail").innerHTML = `<h2>Selected session details</h2>
+    <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span> ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> ${s.dur_min.toFixed(0)} min</span>
+      <span class="muted">avg ${s.hr_avg} · max ${s.hr_max} · 5-min max ${s.max5}</span></div>
+    ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
+    ${s.nint?`<div class="muted">${s.nint} work reps detected (dots = peaks)</div>`:""}
+    ${repTable}`;
+}
+
+// ================= DNS =================
+async function loadDNS(){
+  const data = await J(DATA+"dns/blocked.json");
+  const days = data.blocked_days || [];                 // [{date,total,clients:{ip:{domain:count}}}]
+  const DRANGE=[1,7,14,30], DAY_DEFAULT=7;              // day windows, segmented like the other tabs
+  let curDays=DAY_DEFAULT;
+  const ips = [...new Set(days.flatMap(d=>Object.keys(d.clients||{})))].sort();
+  const aggFor = (win, pred) => {                        // sum domain counts over win for matching IPs
+    const agg={};
+    win.forEach(d=>Object.entries(d.clients||{}).forEach(([ip,doms])=>{ if(!pred(ip))return;
+      for(const [dom,c] of Object.entries(doms)) agg[dom]=(agg[dom]||0)+c; }));
+    return Object.entries(agg).sort((a,b)=>b[1]-a[1]);
+  };
+  const tableFor = list => {
+    if(!list.length) return {total:0, html:'<p class="muted">No blocked queries.</p>'};
+    const max=list[0][1], total=list.reduce((a,e)=>a+e[1],0);
+    return {total, html:`<table><tr><th>domain</th><th style="text-align:right">blocks</th><th></th></tr>`+
+      list.map(([dom,c])=>`<tr><td style="word-break:break-all">${dom}</td><td style="text-align:right">${c}</td>
+        <td style="width:36%"><div class="bar"><i style="width:${(100*c/max).toFixed(1)}%;background:#f85149"></i></div></td></tr>`).join("")+`</table>`};
+  };
+  const render = () => {
+    const x=curDays, sel=$("#dnssel").value;
+    const win=days.slice(0,x);
+    if(sel==="__group"){
+      let body="", tot=0;
+      ips.forEach(ip=>{ const list=aggFor(win,p=>p===ip); if(!list.length)return; const t=tableFor(list); tot+=t.total;
+        body+=`<h3 style="margin:1rem 0 .3rem;font-size:.92rem">${ip} <span class="muted" style="font-weight:400">· ${t.total} blocks · ${list.length} domains</span></h3>${t.html}`; });
+      $("#dnssum").textContent=`grouped by IP · ${tot} blocks · last ${x} day${x>1?'s':''} · ${ips.length} client(s)`;
+      $("#dnsbody").innerHTML=body||'<p class="muted">No blocked queries in this window.</p>';
+    } else {
+      const t=tableFor(sel==="__all" ? aggFor(win,()=>true) : aggFor(win,p=>p===sel));
+      $("#dnssum").textContent=`${t.total} blocks · last ${x} day${x>1?'s':''} · ${sel==="__all"?"all IPs":sel}`;
+      $("#dnsbody").innerHTML=t.html;
+    }
+  };
+  $("#dns").innerHTML = `
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center;gap:.8rem;flex-wrap:wrap">
+        <h2>Blocked DNS</h2>
+        <div class="row" style="gap:.8rem;align-items:center">
+          <select id="dnssel" style="background:var(--btn);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:.35rem">
+            <option value="__all">All IPs (aggregate)</option>
+            <option value="__group">Group by IP</option>
+            ${ips.map(ip=>`<option value="${ip}">${ip}</option>`).join("")}
+          </select>
+          <span class="toggle" id="dnsrange">${DRANGE.map(d=>`<button data-d="${d}"${d===DAY_DEFAULT?' class="active"':''}>${d}d</button>`).join("")}</span>
+        </div>
+      </div>
+      <div class="muted" id="dnssum" style="margin:.3rem 0"></div>
+      <div id="dnsbody" style="max-height:600px;overflow:auto"></div>
+    </div>`;
+  $("#dnssel").onchange=render;
+  $("#dnsrange").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $("#dnsrange").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); curDays=+b.dataset.d; render();
+  });
+  render();
+}
+
+// ================= STATS =================
+let _ag=null, _agWin="24h";
+function renderAgents(a){
+  _ag = a || _ag; if(!_ag) return;
+  const k   = t  => (t/1000).toFixed(1)+"k";
+  const sec = ms => (ms/1000).toFixed(1)+"s";
+  const ico = a => _ag.icons && _ag.icons[a] ? `<span class="agi">${_ag.icons[a]}</span> ` : '';
+  const blocks = (_ag.windows[_agWin]||[]).map(r=>`
+    <div style="padding:.45rem 0;border-bottom:1px solid var(--grid)">
+      <div>${ico(r.agent)}<b>${r.agent}</b> <span class="muted">— ${r.statement||'—'}</span></div>
+      <div style="margin-top:.15rem;font-size:.85rem">${r.calls} calls · ${k(r.tokens)} tok ·
+        ${r.cache_pct}% cache · ${sec(r.avg_ms)} avg${r.fails?' · <span style="color:#f85149">'+r.fails+' fails</span>':''}</div>
+    </div>`).join("");
+  const tog = w => `<a href="#" onclick="_agWin='${w}';renderAgents();return false" style="${w===_agWin?'font-weight:700':'opacity:.55'}">${w}</a>`;
+  document.getElementById("agents-panel").innerHTML = `<h2>Agents <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${tog('24h')} · ${tog('30d')}</span></h2>
+    ${blocks||'<p class="muted">no calls in window</p>'}
+    <p class="muted" style="margin-top:.5rem">snapshot ${_ag.generated?new Date(_ag.generated*1000).toLocaleString():'—'}</p>`;
+}
+let _mcp=null, _mcpWin="7d";
+function renderMcp(m){
+  _mcp = m || _mcp; if(!_mcp) return;
+  const w = (_mcp.data && _mcp.data[_mcpWin]) || {by_agent:{},agent_tot:{},total:0};
+  const tog = x => `<a href="#" onclick="_mcpWin='${x}';renderMcp();return false" style="${x===_mcpWin?'font-weight:700':'opacity:.55'}">${x}</a>`;
+  const agents = Object.keys(w.by_agent).sort((a,b)=>w.agent_tot[b]-w.agent_tot[a]);
+  const blocks = agents.map(a=>{
+    const eps = Object.entries(w.by_agent[a]).sort((x,y)=>y[1]-x[1]);
+    return `<div style="padding:.45rem 0;border-bottom:1px solid var(--grid)">
+      <div><b>${a}</b> <span class="muted">— ${w.agent_tot[a]} calls</span></div>
+      <div style="margin-top:.15rem;font-size:.85rem;display:flex;flex-wrap:wrap;gap:.3rem .8rem">
+        ${eps.map(([e,n])=>`<span>${e} <b>${n}</b></span>`).join("")}</div>
+    </div>`;}).join("");
+  document.getElementById("mcp-panel").innerHTML = `<h2>MCP usage <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">· ${tog('24h')} · ${tog('7d')} · ${tog('30d')}</span></h2>
+    ${blocks||'<p class="muted">no MCP calls in window</p>'}
+    <p class="muted" style="margin-top:.5rem">${w.total} calls · snapshot ${_mcp.generated?new Date(_mcp.generated*1000).toLocaleString():'—'}</p>`;
+}
+async function loadStats(){
+  const d = await J(DATA+"stats.json");
+  const s = d.sources||{};
+  const rel = ts => { const m=Math.floor((Date.now()/1000-ts)/60); return m<1?"just now":m<60?m+" min ago":m<1440?Math.floor(m/60)+" h ago":Math.floor(m/1440)+" d ago"; };
+  const kb = b => b>=1048576 ? (b/1048576).toFixed(2)+" MB" : (b/1024).toFixed(0)+" KB";
+  const rows = ["system","training","dns"].filter(k=>s[k]).map(k=>`<tr>
+    <td>${k}</td><td>${rel(s[k].updated)}</td>
+    <td style="text-align:right">${s[k].ms} ms</td><td style="text-align:right">${kb(s[k].bytes)}</td></tr>`).join("");
+  const totBytes = ["system","training","dns"].reduce((a,k)=>a+(s[k]?.bytes||0),0);
+  $("#stats").innerHTML = `<div class="panel" id="agents-panel" style="margin-bottom:1rem"></div>
+    <div class="panel" id="mcp-panel" style="margin-bottom:1rem"></div>
+    <div class="panel"><h2>Updater stats</h2>
+    <table><tr><th>feed</th><th>last updated</th><th style="text-align:right">build time</th><th style="text-align:right">payload</th></tr>
+      ${rows||'<tr><td colspan="4" class="muted">no stats yet</td></tr>'}</table>
+    <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>`;
+  try { renderAgents(await J(DATA+"stats/agents.json")); }
+  catch(e){ document.getElementById("agents-panel").innerHTML = '<p class="muted">agent stats unavailable</p>'; }
+  try { renderMcp(await J(DATA+"stats/mcp.json")); }
+  catch(e){ document.getElementById("mcp-panel").innerHTML = '<p class="muted">MCP stats unavailable</p>'; }
+}
+
+// ---- endpoints / boot ----
+// Two tabs now: System (which also carries DNS + agent/updater stats as stacked panels) and
+// Training. Each is served from its own dir (dashboard/system/, /training/) so reload & bookmarks
+// land right. Derive the active tab + data base from the URL. Works at .../dashboard/ or a custom domain.
+let _p = location.pathname.replace(/index\.html$/,""); if(!_p.endsWith("/")) _p+="/";
+const _seg = _p.replace(/\/$/,"").split("/").pop();
+const _isTab = ["system","training"].includes(_seg);
+const TAB  = _isTab ? _seg : "system";
+const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
+const DATA = ROOT + "data/";
+$("#tabs").innerHTML = [["system","System"],["training","Training"]]
+  .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
+// System view stacks system + dns + stats; Training stands alone.
+const SECTIONS = {system:["system","dns","stats"], training:["training"]};
+const LOADERS  = {system:[loadSystem,loadDNS,loadStats], training:[loadTraining]};
+["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = !(SECTIONS[TAB]||[]).includes(id));
+function redraw(){ (LOADERS[TAB]||[]).forEach((fn,i)=>fn().catch(e=>{ if(i===0)$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`; })); }
+function applyTheme(t){ const L=t==='light'; document.documentElement.dataset.theme=L?'light':''; try{localStorage.theme=t}catch(e){}
+  CAT=L?CAT_LIGHT:CAT_DARK; $("#themebtn").innerHTML=L?ICON.moon:ICON.sun; }
+applyTheme((()=>{try{return localStorage.theme}catch(e){return''}})()||'dark');
+$("#themebtn").onclick=()=>{ applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'); redraw(); };
+$("#navbtn").onclick=()=>$("#tabs").classList.toggle("open");
+redraw();
+// auto-reload when a NEW dashboard build is published (version = hash of this shell; data updates don't bump it)
+setInterval(()=>fetch(DATA+"version.txt",{cache:"no-store"}).then(r=>r.ok?r.text():"").then(v=>{
+  if(v.trim() && BUILD!=="4deb9802b6b7" && v.trim()!==BUILD) location.replace(location.pathname+"?v="+v.trim());
+}).catch(()=>{}), 120000);
+</script>
+</body>
+</html>
