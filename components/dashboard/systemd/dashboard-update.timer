@@ -1,11 +1,12 @@
-# Run the dashboard updater every 5 minutes (aligned to :00/:05/:10...). The updater itself
-# exits fast when nothing changed, so an idle tick is cheap. `systemctl enable --now
-# dashboard-update.timer` on claude-dev. Install to /etc/systemd/system/.
+# Run the dashboard updater every 2 minutes (aligned to :00/:02/:04...). Data feeds publish to the
+# `data` branch (served via jsDelivr, no Pages build), so a frequent tick keeps hypervisor stats
+# fresh without any Pages churn; the updater exits fast when nothing changed. Install to
+# /etc/systemd/system/ then `systemctl enable --now dashboard-update.timer` on claude-dev.
 [Unit]
-Description=Run the moprox dashboard updater every 5 minutes
+Description=Run the moprox dashboard updater every 2 minutes
 
 [Timer]
-OnCalendar=*:0/5
+OnCalendar=*:0/2
 Persistent=true
 
 [Install]
