@@ -170,10 +170,11 @@ function histBars(data, W, wmax, active){
   let bw=Math.floor((W-gap*(n-1))/n); if(bw<1)bw=1;
   let rem=Math.max(0,(W-gap*(n-1))-bw*n);
   let x=0, r="";
-  data.forEach(b=>{ const w=bw+(rem>0?1:0); if(rem>0)rem--;
+  data.forEach((b,i)=>{ const w=bw+(rem>0?1:0); if(rem>0)rem--;
     let y=BH, segs=""; b.segs.forEach(s=>{ const h=BH*s.n/wmax; y-=h; segs+=`<rect x="${x}" y="${y.toFixed(1)}" width="${w}" height="${h.toFixed(1)}" fill="${s.color}"/>`; });
-    if(b.segs.length){ const off=active&&!active.has(b.key);   // clickable bucket; fade when a selection excludes it
-      r+=`<g data-bk="${b.key}" opacity="${off?0.28:1}" style="cursor:pointer"><rect x="${x}" y="0" width="${w+gap}" height="${BH}" fill="transparent" pointer-events="all"/>${segs}</g>`; }
+    const off=active&&!active.has(b.key);   // fade when a selection excludes it
+    // every bar (even empty) is a full-height hit target with an ordinal index, so a drag can brush across gaps
+    r+=`<g data-idx="${i}" data-bk="${b.key}" data-x="${x}" data-w="${(w+gap).toFixed(1)}" opacity="${off?0.28:1}" style="cursor:${b.segs.length?'crosshair':'default'}"><rect x="${x}" y="0" width="${w+gap}" height="${BH}" fill="transparent" pointer-events="all"/>${segs}</g>`;
     if(b.lab) r+=`<text x="${(x+w/2).toFixed(1)}" y="${BH+11}" text-anchor="middle" class="axis">${b.lab}</text>`;
     x+=w+gap; });
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;max-width:100%">${r}</svg>`;
@@ -293,7 +294,31 @@ async function loadTraining(){
       return {segs,lab,key:k};});
     const cont=$("#tbars"), W=Math.max(280, Math.floor(cont.getBoundingClientRect().width)||760);
     cont.innerHTML = histBars(barData, W, wmax, activeBuckets);
-    cont.querySelectorAll("g[data-bk]").forEach(gel=>gel.onclick=()=>toggleBucket(gel.dataset.bk));
+    // Drag a window across the bars to select a time range; a click (no drag) toggles one bucket.
+    (function(){
+      const svg=cont.querySelector("svg"); if(!svg) return;
+      const idxAt=e=>{const p=(e.touches&&e.touches[0])||e; const el=document.elementFromPoint(p.clientX,p.clientY);
+        const g=el&&el.closest&&el.closest("g[data-idx]"); return g?+g.dataset.idx:null;};
+      let a=null,b=null;
+      const drawBrush=()=>{ svg.querySelector(".brush")&&svg.querySelector(".brush").remove(); if(a==null)return;
+        const gl=cont.querySelector(`g[data-idx="${Math.min(a,b)}"]`), gh=cont.querySelector(`g[data-idx="${Math.max(a,b)}"]`); if(!gl||!gh)return;
+        const x=+gl.dataset.x, ww=(+gh.dataset.x + +gh.dataset.w)-x;
+        const rc=document.createElementNS("http://www.w3.org/2000/svg","rect");
+        rc.setAttribute("class","brush"); rc.setAttribute("x",x); rc.setAttribute("y",0);
+        rc.setAttribute("width",ww); rc.setAttribute("height",84); rc.setAttribute("fill","var(--accent)");
+        rc.setAttribute("opacity","0.16"); rc.setAttribute("pointer-events","none"); svg.appendChild(rc); };
+      const move=e=>{ if(a==null)return; const i=idxAt(e); if(i!=null){b=i; drawBrush();} };
+      const up=()=>{ window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up);
+        window.removeEventListener("touchmove",move); window.removeEventListener("touchend",up);
+        if(a==null)return; const lo=Math.min(a,b), hi=Math.max(a,b), single=(lo===hi); a=b=null;
+        if(single){ const k=barData[lo]&&barData[lo].key; if(k&&buk[k]) toggleBucket(k); return; }
+        const sel=new Set(); for(let i=lo;i<=hi;i++){ const k=barData[i].key; if(buk[k]) sel.add(k); }
+        if(sel.size){ activeBuckets=(sel.size===nBuckets)?null:sel; paint(); } };
+      const down=e=>{ const i=idxAt(e); if(i==null)return; a=i; b=i; drawBrush(); e.preventDefault();
+        window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+        window.addEventListener("touchmove",move,{passive:false}); window.addEventListener("touchend",up); };
+      svg.addEventListener("mousedown",down); svg.addEventListener("touchstart",down,{passive:false});
+    })();
     // bucket selection filters everything below
     const Sf = activeBuckets ? Stype.filter(s=>activeBuckets.has(keyOf(s.date))) : Stype;
     $("#tfoot").textContent=`${Sf.length} of ${all.length} since ${all[all.length-1].date.slice(0,10)}`;
