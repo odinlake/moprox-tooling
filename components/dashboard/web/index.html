@@ -453,11 +453,12 @@ const _seg = _p.replace(/\/$/,"").split("/").pop();
 const _isTab = ["system","training"].includes(_seg);
 const TAB  = _isTab ? _seg : "system";
 const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
-// Data feeds are published to the `data` branch and served via the jsDelivr CDN (no Pages build),
-// so hypervisor stats stay fresh without redeploying the whole site. Fall back to raw.githubusercontent
-// if the CDN hiccups. The app shell + version.txt stay same-origin on Pages (ROOT).
-const DATA     = "https://cdn.jsdelivr.net/gh/odinlake/moprox-tooling@data/";
-const DATA_RAW = "https://raw.githubusercontent.com/odinlake/moprox-tooling/data/";
+// Data feeds are published to the `data` branch and served from GitHub (no Pages build). PRIMARY is
+// raw.githubusercontent (predictable ~5-min CDN TTL); jsDelivr is only a fallback — its branch cache
+// lags and its purge is unreliable, so it must not be the source of truth. Shell + version.txt stay
+// same-origin on Pages (ROOT).
+const DATA     = "https://raw.githubusercontent.com/odinlake/moprox-tooling/data/";
+const DATA_RAW = "https://cdn.jsdelivr.net/gh/odinlake/moprox-tooling@data/";
 async function JD(rel){ try { return await J(DATA+rel); } catch(e){ return await J(DATA_RAW+rel); } }
 $("#tabs").innerHTML = [["system","System"],["training","Training"]]
   .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
