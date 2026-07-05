@@ -149,6 +149,7 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
     # The classifier is only calibrated for 2026+. Everything earlier is labelled "other" until it can
     # be reviewed by hand — the physiological types (easy/tempo/…) are not trusted pre-2026.
     for s in sessions:
+        if s.get("cat") == "unknown": s["cat"] = "other"     # fold the classifier's catch-all into 'other'
         if s["date"][:4].isdigit() and int(s["date"][:4]) < 2026:
             s["cat"] = "other"; s["reps"] = []
     if not sessions: sys.exit(f"no sessions from export ({raw_dir}) or incoming ({in_dir})")

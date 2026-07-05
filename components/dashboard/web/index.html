@@ -202,7 +202,7 @@ function overlayChart(sess){
 async function loadTraining(){
   const data = await JD("training/sessions.json");
   const all = data.sessions;
-  const order=["easy","tempo","trail_easy","vo2max","speed","unknown"];
+  const order=["easy","tempo","trail_easy","vo2max","speed","other"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const WINS=[[90,"3m"],[365,"1y"],[1095,"3y"],[1e12,"all"]], WIN_DEFAULT=0;
   // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 0..50 (left-aligned, so
