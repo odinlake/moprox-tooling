@@ -109,3 +109,27 @@ def post_file(path, text="", channel_id=None, reply_to=None):
     r = _post(url, body, hdr)
     convo.log_out(AGENT, ("📎 %s — %s" % (p.name, text)).strip(" —"), r.get("id"))
     return r
+
+
+def post_embed(description, title=None, fields=None, color=0x5865F2, channel_id=None, reply_to=None):
+    """Post a rich EMBED — a native card that renders markdown and reads well on mobile. Good for a
+    bounded, pretty summary. Limits (Discord): description ≤4096, title ≤256, ≤25 fields (name ≤256,
+    value ≤1024), ≤6000 total. For content LONGER than that, don't cram an embed — paginate with
+    post() instead. `fields` is a list of {name, value, inline?}. Returns the message dict."""
+    tok, chan = _env(); chan = str(channel_id or chan or "")
+    if not tok or not chan:
+        raise SystemExit("discord_api: missing DISCORD_BOT_TOKEN / DISCORD_CHANNEL_ID")
+    embed = {"description": (description or "")[:4096]}
+    if title: embed["title"] = str(title)[:256]
+    if color is not None: embed["color"] = int(color)
+    if fields:
+        embed["fields"] = [{"name": str(f.get("name", "​"))[:256],
+                            "value": str(f.get("value", "​"))[:1024],
+                            "inline": bool(f.get("inline", False))} for f in fields][:25]
+    payload = {"embeds": [embed], "allowed_mentions": {"parse": []}}
+    if reply_to:
+        payload["message_reference"] = {"message_id": str(reply_to), "fail_if_not_exists": False}
+    hdr = {"Authorization": "Bot %s" % tok, "Content-Type": "application/json", "User-Agent": UA}
+    r = _post("%s/channels/%s/messages" % (API, chan), json.dumps(payload).encode(), hdr)
+    convo.log_out(AGENT, "[embed] %s" % (title or (description or "")[:80]), r.get("id"))
+    return r
