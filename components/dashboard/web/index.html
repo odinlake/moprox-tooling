@@ -49,6 +49,7 @@
   table.compact th,table.compact td{padding:.16rem .45rem;font-size:.82rem}
   .spark{display:block}
   .badge{display:inline-block;padding:.02rem .32rem;border-radius:4px;font-size:.68rem;font-weight:500;letter-spacing:.02em;border:1px solid currentColor;background:transparent;line-height:1.5;vertical-align:middle}
+  .src{display:inline-block;font-size:.56rem;color:var(--mut);border:1px solid var(--bd);border-radius:3px;padding:0 .18rem;margin-left:.3rem;vertical-align:middle;letter-spacing:.02em}
   tr.mhead td{background:var(--bg);color:var(--mut);font-weight:600;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;padding-top:.55rem;border-bottom:1px solid var(--bd)}
   .bar{height:8px;border-radius:4px;background:var(--grid);overflow:hidden}.bar>i{display:block;height:100%;background:var(--accent)}
   .row{display:flex;gap:1rem;flex-wrap:wrap}
@@ -78,8 +79,10 @@
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
-const CAT_DARK = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681"};
-const CAT_LIGHT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781"};  // darker, ~3:1 on white (GitHub Primer)
+const CAT_DARK = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681",other:"#8b949e"};
+const CAT_LIGHT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781",other:"#57606a"};  // darker, ~3:1 on white (GitHub Primer)
+const SRC = {polar:'P', fitbit:'F', apple_health:'AH'};   // tiny provenance badge
+function srcChip(s){ const k=s.source||'polar'; return `<span class="src" title="source: ${k}">${SRC[k]||'?'}</span>`; }
 let CAT = document.documentElement.dataset.theme==='light' ? CAT_LIGHT : CAT_DARK;
 const ICON = {sun:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/></svg>`,
   moon:`<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`};
@@ -298,7 +301,7 @@ async function loadTraining(){
     Sf.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
       if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="6">${my}</td></tr>`;}
       html+=`<tr class="sessrow" data-i="${i}"><td style="white-space:nowrap">${WD[dt.getDay()]} ${ord(dt.getDate())}</td>
-        <td style="text-align:center"><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span></td>
+        <td style="text-align:center"><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span>${srcChip(s)}</td>
         <td>${s.dur_min.toFixed(0)}m</td><td>${s.hr_avg}</td><td>${s.hr_max}</td>
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
@@ -319,7 +322,7 @@ function showDetail(s){
      ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
   const st=new Date(s.date), en=new Date(st.getTime()+s.dur_min*60000);
   $("#detail").innerHTML = `<h2>Selected session details</h2>
-    <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span> ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> ${s.dur_min.toFixed(0)} min</span>
+    <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span>${srcChip(s)} ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> ${s.dur_min.toFixed(0)} min</span>
       <span class="muted">avg ${s.hr_avg} · max ${s.hr_max} · 5-min max ${s.max5}</span></div>
     ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
     ${s.nint?`<div class="muted">${s.nint} work reps detected (dots = peaks)</div>`:""}

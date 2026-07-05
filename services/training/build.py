@@ -14,7 +14,7 @@ against the export by date (a session that later lands in an export is not doubl
   POLAR_IN    dir holding live exercise_*.json      (default: ../private-data/polar/incoming)
   OUT         output JSON path                     (default: ./dist/data/training/sessions.json)
 """
-import glob, json, os, sys, time, zipfile
+import datetime, glob, json, os, sys, time, zipfile
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from analysis import Athlete, analyse_safe   # the validated engine
@@ -118,16 +118,22 @@ def from_fitbit(fitbit_dir):
         try: d = json.loads(open(fp).read())
         except Exception: continue
         ex = d.get("summary") or {}
-        s = make_session([h for h in (d.get("hr") or []) if 30 < h < 220],
-                         ex.get("activityName") or "Run", ex.get("start_time", ""), 1,
-                         ex.get("id", ""), source="fitbit")
-        # Drop "forgot to stop the tracker" logs (long, near-resting HR, ~zero distance): a real run
-        # averages well above resting. 95 bpm cleanly separates the genuine runs from the idle logs.
+        hr = [h for h in (d.get("hr") or []) if 30 < h < 220]
+        # The Fitbit log window often runs long past the effort. Trim to the ELEVATED interval — the
+        # first..last second at running HR — so duration matches real work, not the idle lead/tail.
+        elev = [i for i, h in enumerate(hr) if h >= 100]
+        if not elev: continue
+        hr = hr[elev[0]:elev[-1] + 1]
+        start = ex.get("start_time", "")
+        if start and elev[0]:                            # shift start to when the effort actually began
+            try: start = (datetime.datetime.fromisoformat(start) + datetime.timedelta(seconds=elev[0])).strftime("%Y-%m-%dT%H:%M:%S")
+            except Exception: pass
+        s = make_session(hr, ex.get("activityName") or "Run", start, 1, ex.get("id", ""), source="fitbit")
+        # Drop "forgot to stop the tracker" logs (near-resting HR): a real run averages well above 95.
         if s and s["hr_avg"] >= 95: out.append(s)
     return out
 
 def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
-    import datetime
     sessions = from_export(raw_dir)
     seen = {s["date"][:16] for s in sessions}        # dedup incoming vs export by minute-stamp
     for s in (from_incoming(in_dir) if in_dir else []):
@@ -140,6 +146,11 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
         st = datetime.datetime.fromisoformat(s["date"])
         if any(abs((st - e).total_seconds()) < 2700 for e in starts): continue
         sessions.append(s); starts.append(st)
+    # The classifier is only calibrated for 2026+. Everything earlier is labelled "other" until it can
+    # be reviewed by hand — the physiological types (easy/tempo/…) are not trusted pre-2026.
+    for s in sessions:
+        if s["date"][:4].isdigit() and int(s["date"][:4]) < 2026:
+            s["cat"] = "other"; s["reps"] = []
     if not sessions: sys.exit(f"no sessions from export ({raw_dir}) or incoming ({in_dir})")
     sessions.sort(key=lambda s: s["date"], reverse=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
