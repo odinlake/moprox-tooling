@@ -110,7 +110,10 @@ def flat_publish(wt, branch):
     return True
 
 def purge_jsdelivr(paths):
-    """Best-effort CDN purge of the files we just pushed, so the dashboard sees them within a cadence."""
+    """Best-effort CDN purge of the files we just pushed, so the dashboard sees them within a cadence.
+    Wait a moment first: jsDelivr re-fetches from GitHub on purge, so purging before the pushed ref has
+    propagated just re-caches the stale file (which then sticks for jsDelivr's long branch TTL)."""
+    time.sleep(5)
     for p in paths:
         sp.run(["curl", "-fsS", "--max-time", "10", f"https://purge.jsdelivr.net/gh/{GH}@data/{p}"],
                check=False, capture_output=True)
