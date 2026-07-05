@@ -40,7 +40,7 @@ def downsample(x, n):
     step = len(x) / n
     return [round(float(np.mean(x[int(i*step):max(int(i*step)+1, int((i+1)*step))]))) for i in range(n)]
 
-def make_session(hr, sport, date, sid, sess_id):
+def make_session(hr, sport, date, sid, sess_id, source="polar"):
     """Classify one running session's per-second HR into the public-safe dashboard record, or None."""
     if len(hr) < 60: return None
     try: res = analyse_safe(hr, len(hr) / 60.0, ATH, sport)
@@ -61,7 +61,7 @@ def make_session(hr, sport, date, sid, sess_id):
                          "work_s": 0})
     tp = TRACE_POINTS if cat in ("easy", "tempo", "speed", "vo2max", "trail_easy") else TRACE_POINTS_THIN
     return dict(
-        id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat,
+        id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
         dur_min=round(len(hr) / 60.0, 1), hr_avg=round(float(np.mean(block))),
         hr_max=round(float(np.max(block))), max5=max5, nint=cls.n_work_bouts,
         above_lt2=bool(cls.above_lt2), clamp=bool(cls.hr_clamp_suspected), reps=reps,
@@ -103,21 +103,40 @@ def from_apple_health(csv_path):
     if not csv_path or not os.path.exists(csv_path): return []
     try:
         import apple_health
-        return apple_health.sessions(csv_path)
+        ss = apple_health.sessions(csv_path)
+        for s in ss: s["source"] = "apple_health"        # keep provenance explicit
+        return ss
     except Exception as e:
         print("apple-health: %s" % e); return []
 
-def build(raw_dir, out_path, in_dir=None, ah_csv=None):
+def from_fitbit(fitbit_dir):
+    """Deliberate Fitbit workouts, pre-extracted as {"summary": <exercise>, "hr": [1 Hz bpm]} by the
+    Drive extractor. HR was reconstructed from the Fitbit intraday export, so these classify exactly
+    like Polar runs. Running only; tagged source=fitbit. Fills the 2022-23 device gap (pre-Polar)."""
+    out = []
+    for fp in sorted(glob.glob(os.path.join(fitbit_dir or "", "exercise_*.json"))):
+        try: d = json.loads(open(fp).read())
+        except Exception: continue
+        ex = d.get("summary") or {}
+        s = make_session([h for h in (d.get("hr") or []) if 30 < h < 220],
+                         ex.get("activityName") or "Run", ex.get("start_time", ""), 1,
+                         ex.get("id", ""), source="fitbit")
+        # Drop "forgot to stop the tracker" logs (long, near-resting HR, ~zero distance): a real run
+        # averages well above resting. 95 bpm cleanly separates the genuine runs from the idle logs.
+        if s and s["hr_avg"] >= 95: out.append(s)
+    return out
+
+def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
     import datetime
     sessions = from_export(raw_dir)
     seen = {s["date"][:16] for s in sessions}        # dedup incoming vs export by minute-stamp
     for s in (from_incoming(in_dir) if in_dir else []):
         if s["date"][:16] not in seen:
             sessions.append(s); seen.add(s["date"][:16])
-    # Apple Health fills the device gap; it's lower quality, so it only fills where Polar has NOTHING
-    # within 45 min (Polar wins any overlap).
+    # Gap-fillers only fill where a better source has NOTHING within 45 min. Priority: Polar > Fitbit
+    # (real tracked workout, HR reconstructed) > Apple Health (inferred). Fitbit before AH so it wins.
     starts = [datetime.datetime.fromisoformat(s["date"]) for s in sessions]
-    for s in from_apple_health(ah_csv):
+    for s in from_fitbit(fitbit_dir) + from_apple_health(ah_csv):
         st = datetime.datetime.fromisoformat(s["date"])
         if any(abs((st - e).total_seconds()) < 2700 for e in starts): continue
         sessions.append(s); starts.append(st)
@@ -126,15 +145,19 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     json.dump({"generated": int(time.time()), "count": len(sessions), "sessions": sessions},
               open(out_path, "w"), separators=(",", ":"))
-    by = {}
-    for s in sessions: by[s["cat"]] = by.get(s["cat"], 0) + 1
+    by = {}; src = {}
+    for s in sessions:
+        by[s["cat"]] = by.get(s["cat"], 0) + 1
+        src[s.get("source", "polar")] = src.get(s.get("source", "polar"), 0) + 1
     print(f"wrote {len(sessions)} sessions -> {out_path}")
-    print("  " + "  ".join(f"{k}:{v}" for k, v in sorted(by.items())))
+    print("  cat:  " + "  ".join(f"{k}:{v}" for k, v in sorted(by.items())))
+    print("  src:  " + "  ".join(f"{k}:{v}" for k, v in sorted(src.items())))
 
 if __name__ == "__main__":
     raw = os.environ.get("POLAR_RAW", os.path.expanduser("~/projects/private-data/polar/raw"))
     inc = os.environ.get("POLAR_IN", os.path.expanduser("~/projects/private-data/polar/incoming"))
     ah  = os.environ.get("APPLE_HEALTH") or next(iter(sorted(
             glob.glob(os.path.expanduser("~/projects/private-data/apple-health/*.csv")))[-1:]), None)
+    fit = os.environ.get("FITBIT", os.path.expanduser("~/projects/private-data/fitbit"))
     out = os.environ.get("OUT", "dist/data/training/sessions.json")
-    build(raw, out, inc, ah)
+    build(raw, out, inc, ah, fit)

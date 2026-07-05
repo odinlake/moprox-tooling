@@ -85,6 +85,9 @@ def training_fp():
     ah = POLAR_RAW.parent.parent / "apple-health"            # Apple Health CSVs (device-gap fill)
     if ah.exists():
         files += sorted(f for f in ah.glob("*.csv") if f.is_file())
+    fb = POLAR_RAW.parent.parent / "fitbit"                  # Fitbit deliberate workouts (2022-23 gap)
+    if fb.exists():
+        files += sorted(f for f in fb.glob("exercise_*.json") if f.is_file())
     return hashlib.sha1("|".join(f"{f}:{f.stat().st_size}:{f.stat().st_mtime_ns}" for f in files).encode()).hexdigest()
 
 def staged_changes(wt):
