@@ -135,7 +135,9 @@ def main():
     for fct in facts.values():
         want = "agents: [%s]" % ", ".join(fct["agents"]) if fct["agents"] else None
         if want and ("agents:" not in fct["_raw"] or sorted(fct["agents"]) and want not in fct["_raw"]):
-            new = re.sub(r"(\n\s+)agents:.*", r"\g<1>" + want, fct["_raw"]) if "agents:" in fct["_raw"] \
+            # consume the whole agents entry INCLUDING any block-style "- item" lines beneath it,
+            # or replacing an inline list leaves orphaned "- one" lines behind (malformed YAML)
+            new = re.sub(r"(\n\s+)agents:[^\n]*(?:\n\s+-\s*[^\n]*)*", r"\g<1>" + want, fct["_raw"]) if "agents:" in fct["_raw"] \
                   else re.sub(r"(\n\s+type:.*)", r"\1\n  " + want, fct["_raw"], count=1)
             if new != fct["_raw"] and not DRY:
                 open(os.path.join(MEMORY_DIR, fct["file"]), "w", encoding="utf-8").write(new)
