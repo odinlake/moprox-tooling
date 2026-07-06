@@ -1,6 +1,7 @@
-# Rebuild the dashboard's data feeds and publish only what changed to gh-pages. Runs as the
+# Rebuild the dashboard's data feeds and publish what changed: shell/assets -> gh-pages (Pages
+# deploy, rare), data feeds -> the 'data' branch (jsDelivr/raw, no Pages build). Runs as the
 # agent user on claude-dev; reads the read-only PVE token + the private Polar data, fetches the
-# DNS exporter, and force-pushes a single flat commit. Triggered by dashboard-update.timer.
+# DNS exporter, and force-pushes single flat commits per branch. Triggered by dashboard-update.timer.
 # Install to /etc/systemd/system/.
 [Unit]
 Description=moprox dashboard updater (publish changed feeds to gh-pages)
