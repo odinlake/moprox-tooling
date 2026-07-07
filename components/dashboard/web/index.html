@@ -27,11 +27,8 @@
   .tabs{display:flex;gap:.25rem;margin-left:auto}
   .tabs a{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer;text-decoration:none}
   .tabs a.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
-  #themebtn,#navbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center}
-  #themebtn{padding:.4rem .5rem}
-  #navbtn{display:none;padding:.35rem .55rem;font-size:1.2rem}
+  #themebtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;padding:.4rem .5rem}
   @media(max-width:640px){
-    #navbtn{display:flex;margin-left:auto}
     .tabs{display:none;position:absolute;top:calc(100% + 4px);right:1rem;flex-direction:column;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:.3rem;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:6}
     .tabs.open{display:flex}
     .tabs a{padding:.55rem .9rem}
@@ -66,7 +63,7 @@
   .bwrap{position:relative;display:inline-flex}
   #bbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;padding:.34rem .5rem;cursor:pointer;display:inline-flex;align-items:center}
   #bbtn:hover{color:var(--fg)}
-  #bpop{position:absolute;right:0;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--bd);border-radius:10px;min-width:200px;padding:.3rem;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:99;display:flex;flex-direction:column}
+  #bpop{position:absolute;left:0;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--bd);border-radius:10px;min-width:200px;padding:.3rem;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:99;display:flex;flex-direction:column}
   #bpop a{padding:.45rem .7rem;border-radius:7px;color:var(--fg);text-decoration:none;font-size:.9rem}
   #bpop a:hover{background:rgba(128,128,128,.12)}
   #bpop[hidden]{display:none}
@@ -75,9 +72,10 @@
 </head>
 <body>
 <header>
+  <div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden><a href="https://mo.lan/mail/">Mail</a><a href="https://mo.lan/mail/#docs">Docs</a><a href="https://mo.lan/finance/">Finance</a><a href="https://dash.odinlake.net/dashboard/system/">Dashboard · System</a><a href="https://dash.odinlake.net/dashboard/training/">Dashboard · Training</a><a href="https://mo.lan/">mo.lan home</a></nav></div>
   <h1>moprox</h1>
   <div class="tabs" id="tabs"></div>
-  <button id="navbtn" aria-label="Tabs">⋯</button><div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden><a href="https://mo.lan/mail/">Mail</a><a href="https://mo.lan/mail/#docs">Docs</a><a href="https://mo.lan/finance/">Finance</a><a href="https://dash.odinlake.net/dashboard/system/">Dashboard · System</a><a href="https://dash.odinlake.net/dashboard/training/">Dashboard · Training</a><a href="https://mo.lan/">mo.lan home</a></nav></div>
+  
   <button id="themebtn" title="Toggle light / dark"></button>
 </header>
 <main>
@@ -505,7 +503,6 @@ function applyTheme(t){ const L=t==='light'; document.documentElement.dataset.th
   CAT=L?CAT_LIGHT:CAT_DARK; $("#themebtn").innerHTML=L?ICON.moon:ICON.sun; }
 applyTheme((()=>{try{return localStorage.theme}catch(e){return''}})()||'dark');
 $("#themebtn").onclick=()=>{ applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'); redraw(); };
-$("#navbtn").onclick=()=>$("#tabs").classList.toggle("open");
 redraw();
 // Every 2 min: re-fetch the current tab's data (feeds publish to the CDN independently of the
 // shell, so an open dashboard stays live), and hard-reload only when NEW dashboard CODE ships
