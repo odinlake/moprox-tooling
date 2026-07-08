@@ -178,6 +178,11 @@ EASY_CEIL_BPM          = 160.0   # JUDGEMENT (chat rule): 60s-smoothed HR
                                  # never exceeds 160 => easy session.
 ACTIVITY_FLOOR_FRAC    = 0.50    # active if HR > rest + 0.50*HRR ... see fn
 MIN_REPS               = 3       # >=3 work bouts => treat as intervallic
+MIN_RECOVERY_BPM       = 15      # JUDGEMENT: real intervals recover deeply between reps; require the
+                                 # median peak->trough swing >= this or the "bouts" are just ripples on
+                                 # one continuous effort, not intervals. Empirically: genuine speed/
+                                 # vo2max sit at 20-24 bpm; a continuous progression misread as vo2max
+                                 # was 12 (07-08). 15 separates them with margin either side.
 SHORT_BOUT_MAX_S       = 120     # work bout <=120s => "speed" candidate
 LONG_BOUT_MIN_S        = 180     # work bout >=180s => "vo2max" candidate
 TEMPO_BAND_BPM         = 6.0     # plateau within +/-6 bpm of LT2 => tempo
@@ -230,7 +235,14 @@ def classify_session(hr, duration_min, ath: Athlete, sport_label: str = "") -> C
     # --- intervallic vs continuous ---
     peaks, troughs = detect_peaks_troughs(block, ath)
     n_bouts = len(peaks)
-    intervallic = n_bouts >= MIN_REPS
+    # Count as intervals ONLY if the reps actually recover: the median peak->trough swing must clear
+    # MIN_RECOVERY_BPM. Otherwise the detected "bouts" are small ripples riding one continuous climb
+    # (which the prominence filter alone can't tell from real reps) — treat as continuous, not intervals.
+    recovery = float(np.median(block[peaks]) - np.median(block[troughs])) if (n_bouts and len(troughs)) else 0.0
+    intervallic = n_bouts >= MIN_REPS and recovery >= MIN_RECOVERY_BPM
+    if n_bouts >= MIN_REPS and recovery < MIN_RECOVERY_BPM:
+        notes.append("%d peaks but shallow recovery (%.0f<%d bpm) => continuous, not intervals"
+                     % (n_bouts, recovery, MIN_RECOVERY_BPM))
 
     if intervallic:
         bout_durs = estimate_work_bout_durations(block, peaks, troughs, ath)
