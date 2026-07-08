@@ -7,18 +7,14 @@
 <title>moprox dashboard</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="mo/dash">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="#ffffff">
 <link rel="apple-touch-icon" href="/dashboard/apple-touch-icon.png">
 <link rel="icon" type="image/svg+xml" href="/dashboard/icon.svg">
 <link rel="manifest" href="/dashboard/manifest.json">
-<script>try{if(localStorage.theme==='light')document.documentElement.dataset.theme='light'}catch(e){}</script>
 <style>
-  :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--header:#0d1117;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
-        --grid:#21262d;--hover:#1c2128;--btn:#21262d;--btnAct:#30363d;--fade:#586273;
-        --easy:#3fb950;--tempo:#d29922;--vo2max:#f85149;--speed:#a371f7;--trail:#58a6ff;--accent:#58a6ff}
-  [data-theme=light]{color-scheme:light;--bg:#eef1f4;--panel:#ffffff;--header:#ffffff;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
+  :root{color-scheme:light;--bg:#eef1f4;--panel:#ffffff;--header:#ffffff;--bd:#d0d7de;--fg:#1f2328;--mut:#59636e;
         --grid:#e9edf1;--hover:#f0f3f6;--btn:#f0f3f6;--btnAct:#dfe3e8;--accent:#0969da;--fade:#c4ccd4}
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
@@ -27,7 +23,6 @@
   .tabs{display:flex;gap:.25rem;margin-left:auto}
   .tabs a{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:8px;padding:.45rem .9rem;font-size:.95rem;cursor:pointer;text-decoration:none}
   .tabs a.active{color:var(--fg);background:var(--panel);border-color:var(--bd)}
-  #themebtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;padding:.4rem .5rem}
   @media(max-width:640px){
     .tabs{display:none;position:absolute;top:calc(100% + 4px);right:1rem;flex-direction:column;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:.3rem;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:6}
     .tabs.open{display:flex}
@@ -76,7 +71,6 @@
   <h1>moprox</h1>
   <div class="tabs" id="tabs"></div>
   
-  <button id="themebtn" title="Toggle light / dark"></button>
 </header>
 <main>
   <section id="system"></section>
@@ -86,13 +80,9 @@
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
-const CAT_DARK = {easy:"#3fb950",tempo:"#d29922",vo2max:"#f85149",speed:"#a371f7",trail_easy:"#58a6ff",unknown:"#6e7681",other:"#8b949e"};
-const CAT_LIGHT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781",other:"#57606a"};  // darker, ~3:1 on white (GitHub Primer)
+const CAT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781",other:"#57606a"};  // ~3:1 on white (GitHub Primer)
 const SRC = {polar:'P', fitbit:'F', apple_health:'AH'};   // tiny provenance badge
 function srcChip(s){ const k=s.source||'polar'; return `<span class="src" title="source: ${k}">${SRC[k]||'?'}</span>`; }
-let CAT = document.documentElement.dataset.theme==='light' ? CAT_LIGHT : CAT_DARK;
-const ICON = {sun:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/></svg>`,
-  moon:`<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`};
 const BUILD = "__BUILD__";   // replaced at publish with a hash of this shell; the poller below reloads on a new deploy
 const $ = s => document.querySelector(s);
 const gib = b => (b/1073741824);
@@ -499,10 +489,6 @@ const SECTIONS = {system:["system","dns","stats"], training:["training"]};
 const LOADERS  = {system:[loadSystem,loadDNS,loadStats], training:[loadTraining]};
 ["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = !(SECTIONS[TAB]||[]).includes(id));
 function redraw(){ (LOADERS[TAB]||[]).forEach((fn,i)=>fn().catch(e=>{ if(i===0)$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`; })); }
-function applyTheme(t){ const L=t==='light'; document.documentElement.dataset.theme=L?'light':''; try{localStorage.theme=t}catch(e){}
-  CAT=L?CAT_LIGHT:CAT_DARK; $("#themebtn").innerHTML=L?ICON.moon:ICON.sun; }
-applyTheme((()=>{try{return localStorage.theme}catch(e){return''}})()||'dark');
-$("#themebtn").onclick=()=>{ applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'); redraw(); };
 redraw();
 // Every 2 min: re-fetch the current tab's data (feeds publish to the CDN independently of the
 // shell, so an open dashboard stays live), and hard-reload only when NEW dashboard CODE ships
