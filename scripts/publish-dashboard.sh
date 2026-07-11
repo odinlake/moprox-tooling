@@ -24,9 +24,11 @@ DASH="$WT/dashboard"; mkdir -p "$DASH/data"
 cp "$REPO/components/dashboard/web/index.html" "$DASH/index.html"     # shell is cheap; always refresh
 cp "$REPO/components/dashboard/web/manifest.json" "$REPO/components/dashboard/web/apple-touch-icon.png" \
    "$REPO/components/dashboard/web/icon-512.png" "$REPO/components/dashboard/web/icon.svg" "$DASH/"   # PWA assets (installable mo/dash)
-# Per-tab endpoints (dashboard/system/, /dns/, /training/) — same app; it reads the URL to pick
+# Per-tab endpoints (dashboard/system/, /training/, /agents/) — same app; it reads the URL to pick
 # the tab and fetches from the shared dashboard/data/. So reload/bookmark land on the right tab.
-for t in system training; do mkdir -p "$DASH/$t"; cp "$DASH/index.html" "$DASH/$t/index.html"; done
+# (agents reads stats/agents.json+mcp.json. The process Inventory is a separate Authelia-gated page
+# on mo.lan — internal topology — so it isn't published here.)
+for t in system training agents; do mkdir -p "$DASH/$t"; cp "$DASH/index.html" "$DASH/$t/index.html"; done
 
 # Custom domain: the site is served at https://dash.odinlake.net (CNAME on Squarespace ->
 # odinlake.github.io). Re-write the CNAME + a root redirect EVERY run so a republish/force-push can

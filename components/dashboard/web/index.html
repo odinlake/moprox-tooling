@@ -67,7 +67,7 @@
 </head>
 <body>
 <header>
-  <div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden><a href="https://mo.lan/mail/">Mail</a><a href="https://mo.lan/mail/#docs">Docs</a><a href="https://mo.lan/finance/">Finance</a><a href="https://dash.odinlake.net/dashboard/system/">Dashboard · System</a><a href="https://dash.odinlake.net/dashboard/training/">Dashboard · Training</a><a href="https://mo.lan/">mo.lan home</a></nav></div>
+  <div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden><a href="https://mo.lan/mail/">Mail</a><a href="https://mo.lan/mail/#docs">Docs</a><a href="https://mo.lan/finance/">Finance</a><a href="https://dash.odinlake.net/dashboard/system/">System</a><a href="https://dash.odinlake.net/dashboard/training/">Training</a><a href="https://dash.odinlake.net/dashboard/agents/">Agents</a><a href="https://mo.lan/inventory/">Inventory</a><a href="https://mo.lan/">mo.lan home</a></nav></div>
   <h1>moprox</h1>
   <div class="tabs" id="tabs"></div>
   
@@ -77,6 +77,7 @@
   <section id="training" hidden></section>
   <section id="dns" hidden style="margin-top:1rem"></section>
   <section id="stats" hidden style="margin-top:1rem"></section>
+  <section id="agents" hidden></section>
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
@@ -445,7 +446,7 @@ function renderMcp(m){
     ${blocks||'<p class="muted">no MCP calls in window</p>'}
     <p class="muted" style="margin-top:.5rem">${w.total} calls · snapshot ${_mcp.generated?new Date(_mcp.generated*1000).toLocaleString():'—'}</p>`;
 }
-async function loadStats(){
+async function loadStats(){                       // System tab: updater/feed build stats only
   const d = await JD("stats.json");
   const s = d.sources||{};
   const rel = ts => { const m=Math.floor((Date.now()/1000-ts)/60); return m<1?"just now":m<60?m+" min ago":m<1440?Math.floor(m/60)+" h ago":Math.floor(m/1440)+" d ago"; };
@@ -454,12 +455,14 @@ async function loadStats(){
     <td>${k}</td><td>${rel(s[k].updated)}</td>
     <td style="text-align:right">${s[k].ms} ms</td><td style="text-align:right">${kb(s[k].bytes)}</td></tr>`).join("");
   const totBytes = ["system","training","dns"].reduce((a,k)=>a+(s[k]?.bytes||0),0);
-  $("#stats").innerHTML = `<div class="panel" id="agents-panel" style="margin-bottom:1rem"></div>
-    <div class="panel" id="mcp-panel" style="margin-bottom:1rem"></div>
-    <div class="panel"><h2>Updater stats</h2>
+  $("#stats").innerHTML = `<div class="panel"><h2>Updater stats</h2>
     <table><tr><th>feed</th><th>last updated</th><th style="text-align:right">build time</th><th style="text-align:right">payload</th></tr>
       ${rows||'<tr><td colspan="4" class="muted">no stats yet</td></tr>'}</table>
     <p class="muted" style="margin-top:.6rem">total published data: ${kb(totBytes)} · snapshot ${d.generated?new Date(d.generated*1000).toLocaleString():'—'}</p></div>`;
+}
+async function loadAgents(){                      // Agents tab: agent activity + MCP usage
+  $("#agents").innerHTML = `<div class="panel" id="agents-panel" style="margin-bottom:1rem"></div>
+    <div class="panel" id="mcp-panel"></div>`;
   try { renderAgents(await JD("stats/agents.json")); }
   catch(e){ document.getElementById("agents-panel").innerHTML = '<p class="muted">agent stats unavailable</p>'; }
   try { renderMcp(await JD("stats/mcp.json")); }
@@ -467,12 +470,14 @@ async function loadStats(){
 }
 
 // ---- endpoints / boot ----
-// Two tabs now: System (which also carries DNS + agent/updater stats as stacked panels) and
-// Training. Each is served from its own dir (dashboard/system/, /training/) so reload & bookmarks
-// land right. Derive the active tab + data base from the URL. Works at .../dashboard/ or a custom domain.
+// Three tabs: System (system + DNS + updater stats), Training, and Agents (agent activity + MCP
+// usage). Each is served from its own dir (dashboard/system/, /training/, /agents/) so reload &
+// bookmarks land right. (The process Inventory is a separate Authelia-gated page on mo.lan — it
+// carries internal topology, so it isn't published to this public dashboard.) Derive the active tab
+// + data base from the URL. Works at .../dashboard/ or a custom domain.
 let _p = location.pathname.replace(/index\.html$/,""); if(!_p.endsWith("/")) _p+="/";
 const _seg = _p.replace(/\/$/,"").split("/").pop();
-const _isTab = ["system","training"].includes(_seg);
+const _isTab = ["system","training","agents"].includes(_seg);
 const TAB  = _isTab ? _seg : "system";
 const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
 // Data feeds are published to the `data` branch and served from GitHub (no Pages build). PRIMARY is
@@ -482,12 +487,12 @@ const ROOT = _isTab ? _p.replace(/[^/]+\/$/,"") : _p;
 const DATA     = "https://raw.githubusercontent.com/odinlake/moprox-tooling/data/";
 const DATA_RAW = "https://cdn.jsdelivr.net/gh/odinlake/moprox-tooling@data/";
 async function JD(rel){ try { return await J(DATA+rel); } catch(e){ return await J(DATA_RAW+rel); } }
-$("#tabs").innerHTML = [["system","System"],["training","Training"]]
+$("#tabs").innerHTML = [["system","System"],["training","Training"],["agents","Agents"]]
   .map(([id,l])=>`<a href="${ROOT}${id}/"${id===TAB?' class="active"':''}>${l}</a>`).join("");
-// System view stacks system + dns + stats; Training stands alone.
-const SECTIONS = {system:["system","dns","stats"], training:["training"]};
-const LOADERS  = {system:[loadSystem,loadDNS,loadStats], training:[loadTraining]};
-["system","training","dns","stats"].forEach(id=>$("#"+id).hidden = !(SECTIONS[TAB]||[]).includes(id));
+// System stacks system + dns + updater-stats; the others stand alone.
+const SECTIONS = {system:["system","dns","stats"], training:["training"], agents:["agents"]};
+const LOADERS  = {system:[loadSystem,loadDNS,loadStats], training:[loadTraining], agents:[loadAgents]};
+["system","training","dns","stats","agents"].forEach(id=>$("#"+id).hidden = !(SECTIONS[TAB]||[]).includes(id));
 function redraw(){ (LOADERS[TAB]||[]).forEach((fn,i)=>fn().catch(e=>{ if(i===0)$("#"+TAB).innerHTML=`<div class="panel">Data unavailable: ${e.message}</div>`; })); }
 redraw();
 // Every 2 min: re-fetch the current tab's data (feeds publish to the CDN independently of the

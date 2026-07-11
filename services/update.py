@@ -34,7 +34,7 @@ POLAR_RAW = Path(os.environ.get("POLAR_RAW", Path.home() / "projects/private-dat
 DNS_EXPORTER = os.environ.get("DNS_EXPORTER", "http://10.10.10.3:9153/")
 PVE_ENV = Path(os.environ.get("PVE_ENV", Path.home() / ".config/proxmox/pve-metrics.env"))
 GH = "odinlake/moprox-tooling"                                  # jsDelivr purge namespace
-NAV = ("system", "training")                                   # real nav tabs (SPA only links these)
+NAV = ("system", "training", "agents")                         # real nav tabs (SPA only links these)
 ASSETS = ("manifest.json", "apple-touch-icon.png", "icon-512.png", "icon.svg")
 
 PAGES_YML = (
