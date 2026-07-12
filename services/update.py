@@ -35,7 +35,10 @@ DNS_EXPORTER = os.environ.get("DNS_EXPORTER", "http://10.10.10.3:9153/")
 PVE_ENV = Path(os.environ.get("PVE_ENV", Path.home() / ".config/proxmox/pve-metrics.env"))
 GH = "odinlake/moprox-tooling"                                  # jsDelivr purge namespace
 NAV = ("system", "training", "agents")                         # real nav tabs (SPA only links these)
-ASSETS = ("manifest.json", "apple-touch-icon.png", "icon-512.png", "icon.svg")
+ASSETS = ("manifest.json", "apple-touch-icon.png", "icon-512.png", "icon.svg", "menu.js")
+# The site menu is single-sourced in the private-web repo; publish THAT file (the committed
+# web/menu.js is only a fallback seed) so mo.lan and the dashboard never drift.
+MENU_CANON = Path.home() / "projects/private-web/site/mo/menu.js"
 
 PAGES_YML = (
     "name: deploy-pages\n"
@@ -147,6 +150,7 @@ def main():
     (DASH / "version.txt").write_text(ver)                # same-origin reload signal (lives WITH the shell)
     for a in ASSETS:
         if (SRC / a).exists(): shutil.copy2(SRC / a, DASH / a)
+    if MENU_CANON.exists(): shutil.copy2(MENU_CANON, DASH / "menu.js")   # canonical menu wins over the seed
     shell_changed = staged_changes(WT)
     if flat_publish(WT, "gh-pages"):
         print(f"published gh-pages (shell/assets): {shell_changed}")

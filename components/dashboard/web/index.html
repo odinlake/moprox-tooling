@@ -67,7 +67,7 @@
 </head>
 <body>
 <header>
-  <div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden><a href="https://mo.lan/mail/">Mail</a><a href="https://mo.lan/mail/#docs">Docs</a><a href="https://mo.lan/finance/">Finance</a><a href="https://dash.odinlake.net/dashboard/system/">System</a><a href="https://dash.odinlake.net/dashboard/training/">Training</a><a href="https://dash.odinlake.net/dashboard/agents/">Agents</a><a href="https://mo.lan/inventory/">Inventory</a><a href="https://mo.lan/">mo.lan home</a></nav></div>
+  <div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden></nav></div><!-- menu rendered by /dashboard/menu.js (single source: private-web/site/mo/menu.js) -->
   <h1>moprox</h1>
   <div class="tabs" id="tabs"></div>
   
@@ -505,8 +505,6 @@ setInterval(()=>{
   }).catch(()=>{});
 }, 120000);
 </script>
-<script>(function(){var b=document.getElementById('bbtn'),p=document.getElementById('bpop');
-b.onclick=function(e){e.stopPropagation();p.hidden=!p.hidden};
-document.addEventListener('click',function(){p.hidden=true});})();</script>
+<script src="/dashboard/menu.js"></script>
 </body>
 </html>
