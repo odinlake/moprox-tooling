@@ -118,10 +118,10 @@ let sysData={};
 async function loadSystem(){
   const [now,day,month] = await Promise.all([JD("system/now.json"),JD("system/day.json"),JD("system/month.json")]);
   sysData={now,day,month};
-  const g = now.guests.map(x=>`<tr><td>${x.vmid}</td><td>${x.name||'—'}</td><td class="muted">${x.kind}</td>
-     <td>${x.status==='running'?'🟢':'⚪'} ${x.status}</td><td>${x.cpu_pct.toFixed(1)}%</td>
-     <td>${x.mem?gib(x.mem).toFixed(1):'—'} GB</td>
-     <td class="muted" style="font-family:ui-monospace,monospace;font-size:.82em">${(x.ips&&x.ips.length)?x.ips.join(' · '):'—'}</td></tr>`).join("");
+  const g = now.guests.map(x=>`<tr><td>${x.vmid}</td>
+     <td>${x.name||'—'}<div class="muted" style="font-family:ui-monospace,monospace;font-size:.72em;line-height:1.35;word-break:break-word">${x.kind}${(x.ips&&x.ips.length)?' · '+x.ips.join(' · '):''}</div></td>
+     <td>${x.status==='running'?'🟢':'⚪'}</td><td>${x.cpu_pct.toFixed(1)}%</td>
+     <td>${x.mem?gib(x.mem).toFixed(1):'—'} GB</td></tr>`).join("");
   const stg = now.storage.map(s=>`<div style="margin:.4rem 0"><div class="row" style="justify-content:space-between"><span>${s.storage} <span class="muted">${s.type}</span></span>
      <span class="muted">${gib(s.used).toFixed(0)}/${gib(s.total).toFixed(0)} GB</span></div>
      <div class="bar"><i style="width:${(100*s.used/s.total).toFixed(1)}%"></i></div></div>`).join("");
@@ -139,7 +139,7 @@ async function loadSystem(){
         <div id="syscharts"></div>
       </div>
       <div class="row">
-        <div class="panel" style="flex:2;min-width:280px"><h2>Guests</h2><table><tr><th>id</th><th>name</th><th>type</th><th>status</th><th>cpu</th><th>mem</th><th>ip</th></tr>${g}</table></div>
+        <div class="panel" style="flex:2;min-width:280px"><h2>Guests</h2><div style="overflow-x:auto"><table class="compact"><tr><th>id</th><th>name <span class="muted" style="font-weight:400;text-transform:none">· type · ip</span></th><th></th><th>cpu</th><th>mem</th></tr>${g}</table></div></div>
         <div class="panel" style="flex:1;min-width:220px"><h2>Storage</h2>${stg}</div>
       </div>
     </div>`;
