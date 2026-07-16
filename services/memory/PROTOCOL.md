@@ -12,8 +12,13 @@ steward can keep the shared memory clean, provenance-tagged, and bounded.
    - `salience: high|normal|low` — `high` = belongs in every session's hot index; `low` = niche.
    - optional `supersedes: <slug>` when this fact replaces an older one (the old one is archived).
    - optional `expires: YYYY-MM-DD` for time-bound facts (auto-archived after).
-2. **Append one line to `journals/$AGENT_ID.jsonl`** (this is the audit trail + cross-pollination feed):
+2. **Append one line to `journals/$AGENT_ID.jsonl`** (this is the audit trail + cross-pollination feed).
+   Use these EXACT keys — they are what `reconcile.py` folds into provenance + `CHANGES.md`:
    `{"ts":"<today>","agent":"$AGENT_ID","slug":"<fact-slug>","action":"add|update|supersede","scope":"...","salience":"...","note":"<5-8 word what/why>"}`
+   The key is `slug` (not `name`), the prose key is `note` (not `summary`), and `action` has no `-fact`
+   suffix. The reconciler now self-heals those three drifts on read, but write canonical so the raw log
+   stays greppable. A journal line is what lets **you** resume and the **other sessions** see your work —
+   skip it and your fact lands on the blackboard un-attributed (blank `agents:`), invisible in `CHANGES.md`.
 
 Do **not** hand-edit `MEMORY.md`, `CHANGES.md`, `CONFLICTS.md`, or `.reconcile-state.json` — the reconciler
 owns those. Just drop fact files + journal lines; the index is rebuilt from them (which also recovers

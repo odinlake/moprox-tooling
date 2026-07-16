@@ -48,6 +48,7 @@
   .seg{display:flex;gap:.25rem;align-items:center;font-size:.8rem;color:var(--mut)}
   .seg i{width:10px;height:10px;border-radius:2px;display:inline-block}
   .sessrow{cursor:pointer}.sessrow:hover{background:var(--hover)}
+  .sessrow.sel td{background:var(--hover)}.sessrow.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
   .toggle button{background:var(--btn);border:1px solid var(--bd);color:var(--mut);padding:.25rem .6rem;border-radius:6px;cursor:pointer;font-size:.8rem}
   .toggle button.active{color:var(--fg);background:var(--btnAct)}
   svg{display:block;width:100%;height:auto}
@@ -199,7 +200,9 @@ function overlayChart(sess){
   const GRAY=getComputedStyle(document.documentElement).getPropertyValue('--fade').trim()||"#586273";
   const paths=arr.map((s,i)=>{const f=arr.length>1?i/(arr.length-1):1; let d="";
     s.trace.forEach((v,j)=>{const m=j*s.trace_step_s/60; if(m>xmax) return; d+=(d?"L":"M")+px(m).toFixed(1)+" "+py(v).toFixed(1)+" ";});
-    return `<path d="${d}" fill="none" stroke="${lerpColor(GRAY,CAT[s.cat],f)}" stroke-width="${f>0.96?1.8:1}" stroke-opacity="${(0.2+0.8*f).toFixed(2)}"/>`;}).join("");
+    const col=lerpColor(GRAY,CAT[s.cat],f), w=(f>0.96?1.8:1), op=(0.2+0.8*f).toFixed(2);   // stash base look for restore on de-select
+    return `<path class="ovc" data-d="${s.date}" data-hue="${CAT[s.cat]}" data-bs="${col}" data-bw="${w}" data-bo="${op}" `
+      +`d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-opacity="${op}"/>`;}).join("");
   const tag=`<text x="${W-pR-2}" y="${pT+12}" text-anchor="end" class="axis" font-size="12">${arr.length}/${sess.length}</text>`;
   return `<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${xl}${paths}${tag}</svg>`;
 }
@@ -333,9 +336,11 @@ async function loadTraining(){
         <td>${s.dur_min.toFixed(0)}m</td><td>${s.hr_avg}</td><td>${s.hr_max}</td>
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
-    $("#slist").querySelectorAll(".sessrow").forEach(r=>r.onclick=()=>showDetail(Sf[+r.dataset.i]));
     $("#ovpanel").innerHTML = Sf.length ? overlayChart(Sf) : '<p class="muted">No sessions match.</p>';   // count is overlaid on the chart
-    if(Sf.length) showDetail(Sf[0]); else $("#detail").innerHTML='<h2>Selected session details</h2><p class="muted">No sessions match.</p>';
+    const rows=$("#slist").querySelectorAll(".sessrow");
+    const pick=i=>{ rows.forEach(r=>r.classList.toggle("sel",+r.dataset.i===i)); showDetail(Sf[i]); };   // mark row + detail + highlight curve
+    rows.forEach(r=>r.onclick=()=>pick(+r.dataset.i));
+    if(Sf.length) pick(0); else $("#detail").innerHTML='<h2>Selected session details</h2><p class="muted">No sessions match.</p>';
   };
   $("#wintoggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{
     $("#wintoggle").querySelectorAll("button").forEach(x=>x.classList.remove("active"));
@@ -355,6 +360,19 @@ function showDetail(s){
     ${lineChart(t,[{vals:tr,color:CAT[s.cat]}],{w:760,h:200,yfmt:v=>v.toFixed(0),xfmt:i=>Math.round(i*s.trace_step_s/60)+"m",marks})}
     ${s.nint?`<div class="muted">${s.nint} work reps detected (dots = peaks)</div>`:""}
     ${repTable}`;
+  highlightOverlay(s.date);
+}
+// Pop the selected session's curve out of the overlay: restore every curve to its faded base, then
+// raise the picked one to full type colour on top. No-op if it fell outside the 100-curve cap.
+function highlightOverlay(d){
+  const svg=document.querySelector("#ovpanel svg"); if(!svg) return;
+  let sel=null;
+  svg.querySelectorAll(".ovc").forEach(p=>{
+    p.setAttribute("stroke",p.dataset.bs); p.setAttribute("stroke-width",p.dataset.bw); p.setAttribute("stroke-opacity",p.dataset.bo);
+    if(p.dataset.d===d) sel=p; });
+  if(!sel) return;
+  sel.setAttribute("stroke",sel.dataset.hue); sel.setAttribute("stroke-width","2.8"); sel.setAttribute("stroke-opacity","1");
+  sel.parentNode.appendChild(sel);
 }
 
 // ================= DNS =================

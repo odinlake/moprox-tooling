@@ -168,10 +168,35 @@ def review():
         "'sender — what's owed / why it matters'. Be a quiet useful nudge, not noise. Start with #valet.")
     out = (run_agent("valet", prompt, timeout=600) or "").strip()
     core = re.sub(r"(?i)^#valet[:\s]*", "", out).strip().rstrip(".")
-    if not core or core.upper() == "NONE":
+    ln = localnews_para()
+    if (not core or core.upper() == "NONE") and not ln:
         print("valet review: nothing significant — staying quiet"); return
-    tg.send(tidy(out), agent="valet")
-    print("valet review: sent (%d chars)" % len(out))
+    msg = out if core and core.upper() != "NONE" else "#valet"
+    if ln:
+        msg = msg + "\n\n" + ln
+    tg.send(tidy(msg), agent="valet")
+    print("valet review: sent (%d chars, localnews=%s)" % (len(msg), bool(ln)))
+
+LN_STATE = Path.home() / ".local/state/valet-localnews-sent.json"
+
+def localnews_para():
+    """New (unsent) local-news items from the reader (crimes/incidents/council/events, minsig 3)."""
+    try:
+        items = json.loads(_get("http://10.10.10.8:8004/api/brief?hours=26&minsig=3", timeout=15))
+    except Exception:
+        return None
+    try: sent = set(json.load(open(LN_STATE)))
+    except Exception: sent = set()
+    new = [i for i in items if i["id"] not in sent][:5]
+    if not new:
+        return None
+    lines = ["📍 *Local*"]
+    for i in new:
+        area = f" ({i['area']})" if i.get("area") and i["area"] not in ("Edited", "Communications Team") else ""
+        lines.append(f"• [{i['title']}](https://mo.lan/reader/p/{i['id']}){area} — {i['blurb']}")
+    LN_STATE.parent.mkdir(parents=True, exist_ok=True)
+    json.dump(sorted(sent | {i["id"] for i in new})[-500:], open(LN_STATE, "w"))
+    return "\n".join(lines)
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "morning"

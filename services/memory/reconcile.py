@@ -69,6 +69,17 @@ def parse(path):
         "_raw": txt,
     }
 
+def canon(e):
+    """Tolerate hand-written journal-schema drift so no entry is silently dropped.
+    Sessions have written `name` for `slug`, `summary` for `note`, and
+    `add-fact`/`update-fact` for `add`/`update`. Canonicalise on read so every
+    downstream consumer (provenance fold, CHANGES.md, conflict scan) agrees."""
+    if not e.get("slug") and e.get("name"): e["slug"] = e["name"]
+    if not e.get("note") and e.get("summary"): e["note"] = e["summary"]
+    a = e.get("action")
+    if isinstance(a, str) and a.endswith("-fact"): e["action"] = a[:-len("-fact")]
+    return e
+
 def load_journals():
     jdir = os.path.join(MEMORY_DIR, "journals")
     entries = []
@@ -78,7 +89,7 @@ def load_journals():
             for ln in open(os.path.join(jdir, f), errors="ignore"):
                 ln = ln.strip()
                 if not ln: continue
-                try: entries.append(json.loads(ln))
+                try: entries.append(canon(json.loads(ln)))
                 except Exception: pass
     return entries
 
