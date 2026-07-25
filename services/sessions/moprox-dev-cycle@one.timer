@@ -1,0 +1,12 @@
+# Recycle moprox dev ONE weekly — Tuesday 03:00 (low-traffic). Staggered a day apart from two/three so
+# only one session recycles per day. Activates moprox-dev-cycle@one.service.
+[Unit]
+Description=Weekly recycle of moprox dev one (Tue 03:00)
+
+[Timer]
+OnCalendar=Tue *-*-* 03:00:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+# Recycle moprox dev THREE weekly — Thursday 03:00. Activates moprox-dev-cycle@three.service.
+[Unit]
+Description=Weekly recycle of moprox dev three (Thu 03:00)
+
+[Timer]
+OnCalendar=Thu *-*-* 03:00:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
