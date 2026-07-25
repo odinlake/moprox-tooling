@@ -17,6 +17,13 @@
 #   old claude-remote.service across a reboot). We poll a real HTTPS request to Anthropic first; any HTTP
 #   response (incl. 404/401) proves the path, so we don't use curl -f. NOTE: when the Squid cutover
 #   (use-squid.sh) is applied, this probe must inherit https_proxy or it will false-negative.
+# - ExecStartPre credential gate: the SAME wedged-ALIVE shape, different cause (outage 2026-07-25). These
+#   sessions authenticate only with the shared Max OAuth in ~/.claude/.credentials.json (see the
+#   UnsetEnvironment line — no API key is involved) and read it ONCE at startup. Booting with a dead
+#   refresh token brought all three up at "Not logged in" with healthy processes, so Restart never fired
+#   and a later /login couldn't reach them. The gate refuses to launch on a positively-expired token, so
+#   the backoff retries and the sessions self-heal within ~2min of a /login. It FAILS OPEN on anything it
+#   can't parse — this check must never itself be the reason all three are down.
 #
 # Install to /etc/systemd/system, then:
 #   systemctl daemon-reload
@@ -38,13 +45,20 @@ WorkingDirectory=/home/mikael
 # Re-assert workspace trust before launch (flock-serialised across the three instances) so the headless
 # trust dialog never wedges a session — survives version-bump re-arming and clobbering by other sessions.
 ExecStartPre=/usr/bin/flock /home/mikael/.config/claude-dev/.trust.lock /usr/local/bin/moprox-ensure-folder-trust
+# Refuse to launch on an expired refresh token (fails open on anything unparseable). Local and instant, so
+# it runs BEFORE the ≤60s egress probe — no point waiting on the network to start a session that can't log in.
+ExecStartPre=/usr/local/bin/moprox-creds-check --gate
 # Wait (≤~60s) for real egress to Anthropic before launching; exit non-zero so Restart retries with backoff.
 ExecStartPre=/bin/sh -c 'n=0; until curl -sS --max-time 5 -o /dev/null https://api.anthropic.com/ 2>/dev/null; do n=$((n+1)); [ "$n" -ge 30 ] && echo "moprox-dev@%i: no egress to api.anthropic.com after ~60s" >&2 && exit 1; sleep 2; done'
+# Record each session's PTY to a per-instance log (rotated by logrotate.d/moprox-dev) so a wedged /
+# zombied bridge is observable after the fact — the failure text ("Session creation failed" /
+# "Remote credentials fetch failed") only ever appears on-screen, and /dev/null hid it (CC #57715).
+ExecStartPre=/bin/mkdir -p /home/mikael/.local/state/moprox-dev
 # --append-system-prompt teaches THIS session (and only the three dev sessions) the shared-memory
 # protocol: who it is (%i) + journal-on-write + active-read. Scoped here, not in a home CLAUDE.md, so
 # the steward / other `claude -p` runs from $HOME don't inherit it. Full detail in PROTOCOL.md (abs path
 # — WorkingDirectory=/home/mikael, so a relative repo path would not resolve).
-ExecStart=/usr/bin/script -qec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i' --append-system-prompt 'You are moprox dev %i (AGENT_ID=%i), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/.claude/projects/-home-mikael/memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [%i], and append one line to journals/%i.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals.'" /dev/null
+ExecStart=/usr/bin/script -qfec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i' --append-system-prompt 'You are moprox dev %i (AGENT_ID=%i), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/.claude/projects/-home-mikael/memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [%i], and append one line to journals/%i.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals.'" /home/mikael/.local/state/moprox-dev/%i.log
 TimeoutStartSec=120
 Restart=always
 RestartSec=5
