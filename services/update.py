@@ -81,7 +81,11 @@ def dir_size(p):
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.exists() else 0
 
 def training_fp():
-    files = sorted(POLAR_RAW.glob("*.zip"))
+    # The BUILDER's own code counts as input: otherwise a change to build.py / the analysis engine
+    # (e.g. adding a new per-session field) never invalidates the fingerprint, and sessions.json
+    # silently keeps the old schema until the next run happens to land. 2026-07-29.
+    files = sorted((REPO / "services/training").rglob("*.py"))
+    files += sorted(POLAR_RAW.glob("*.zip"))
     inc = POLAR_RAW.parent / "incoming"
     if inc.exists():
         files += sorted(f for f in inc.rglob("*") if f.is_file())

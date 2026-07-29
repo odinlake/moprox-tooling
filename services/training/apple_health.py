@@ -11,6 +11,12 @@ CSV columns: Date/Time, Min, Max, Avg(=bpm), Context, Sources.
 """
 import csv, datetime, os, sys
 import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from analysis import med10 as _med10_raw
+
+def _med10(block):
+    m = _med10_raw(block)
+    return None if m is None else round(m)
 
 HOT = 110          # "active" HR threshold (operator's heuristic)
 GAP_S = 120        # data gap that ends a session
@@ -73,7 +79,11 @@ def sessions(path):
             id="ah" + t0.strftime("%y%m%d%H%M"), date=t0.strftime("%Y-%m-%dT%H:%M:%S"), sport=1,
             cat="unknown", src="apple", dur_min=round(dur/60.0, 1),
             hr_avg=round(float(np.mean(block))), hr_max=round(float(np.max(block))),
-            max5=round(_five_min_max(block)), nint=0, above_lt2=False, clamp=False, reps=[],
+            max5=round(_five_min_max(block)),
+            # NOTE: AH HR is linearly interpolated to 1 Hz, so its peaks are smoothed --
+            # med10 here reads a little low vs a true 1 Hz Polar trace. Source chip marks it.
+            med10=_med10(block),
+            nint=0, above_lt2=False, clamp=False, reps=[],
             trace=_downsample(block, TRACE_POINTS), trace_step_s=round(len(block)/min(len(block), TRACE_POINTS))))
     return out
 

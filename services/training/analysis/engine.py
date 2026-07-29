@@ -591,6 +591,29 @@ def five_min_max(hr):
     return float(np.nanmax(rolling_mean(hr, 300)))
 
 
+MED10_FLOOR = 100      # ignore non-running samples; also drops H10 dropout reads outright
+MED10_WIN_S = 10       # 10 s window: resolves 1-min reps, same day-to-day noise as 30 s
+
+def med10(hr, floor=MED10_FLOOR, w=MED10_WIN_S):
+    """Peak sustained HR: the MAX of a rolling 10 s MEDIAN over samples >= `floor`.
+
+    A peer of five_min_max, chosen over it after testing on 36 easy sessions (2026-07-29):
+      * identical day-to-day noise at every window from 5 s to 600 s (CV ~3.8%), and lower than
+        a fitted exponential asymptote (4.9%, which carries fit uncertainty on top of physiology);
+      * no dependence on session duration (r = -0.00), unlike a whole-trace percentile;
+      * robust to the H10's real failure mode -- DROPOUT, not spikes. Injected last-value-holds
+        up to 10 x 30 s move it 0.000 bpm at the median, ~2 bpm at the 99th percentile. The
+        median (rather than mean) window costs nothing in noise and covers a spiky failure too;
+      * defined for EVERY session type, so easy/tempo/vo2max/speed trend on one axis -- which
+        five_min_max cannot do well: a 5 min window averages across interval recoveries and sits
+        5.6-6.8 bpm low on speed/vo2max days, and it failed to detect a trend that med10 caught.
+    Returns None when there is no running-intensity data."""
+    y = np.asarray([v for v in np.asarray(hr, float).ravel() if v == v and v >= floor], float)
+    if len(y) < w: return None
+    sw = np.lib.stride_tricks.sliding_window_view(y, w)
+    return float(np.max(np.median(sw, axis=1)))
+
+
 # ======================================================================
 # ORCHESTRATION
 # ======================================================================
