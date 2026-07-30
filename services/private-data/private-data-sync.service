@@ -1,0 +1,11 @@
+# Commit + push whatever the private-data producers left uncommitted. Triggered by
+# private-data-sync.timer. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox private-data catch-all commit/push
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/home/mikael/projects/moprox-tooling/services/private-data/private-data-sync.sh
