@@ -3,7 +3,8 @@
 `moprox-dev@.service` is a templated systemd unit that runs three long-lived Claude Code
 remote-control sessions — **moprox dev one / two / three** — driven from the Claude app. They share
 one memory dir (the shared context, see [`../memory/`](../memory/)) and each runs in a restart loop
-with exponential backoff, so a wedged session self-heals and you can ask for a fresh one any time.
+with exponential backoff, so a wedged session self-heals **without losing its thread** — restarts resume
+the conversation (see below); a fresh one is available on request.
 
 **Status: LIVE on claude-dev since 2026-06-29.** All three are enabled and connected.
 
@@ -11,6 +12,7 @@ with exponential backoff, so a wedged session self-heals and you can ask for a f
 ```bash
 install -m 0755 services/sessions/ensure-folder-trust.py /usr/local/bin/moprox-ensure-folder-trust
 install -m 0755 services/sessions/creds-check.py         /usr/local/bin/moprox-creds-check
+install -m 0755 services/sessions/dev-launch.sh           /usr/local/bin/moprox-dev-launch
 install -m 0755 services/sessions/dev-cycle.sh           /usr/local/bin/moprox-dev-cycle
 cp services/sessions/moprox-dev@.service services/sessions/moprox-dev-cycle@* \
    services/sessions/moprox-creds-warn.* /etc/systemd/system/
@@ -22,12 +24,72 @@ systemctl enable --now moprox-creds-warn.timer
 They'll appear in the Claude app as **moprox dev one/two/three**. (Both helpers are required — the
 unit's `ExecStartPre` calls them; see "Boot & trust robustness" below.)
 
-## "Kill that one, give me a fresh session"
+## Restart keeps the thread; ask explicitly for a fresh one
 ```bash
-systemctl restart moprox-dev@two
+systemctl restart moprox-dev@two          # same thread, reattached
+rm ~/.local/state/moprox-dev/two.session && systemctl restart moprox-dev@two   # deliberately fresh
 ```
-≤5 s later a brand-new bypass session is up. A restart **drops that thread's history by design** —
-continuity lives in the shared memory + git, not the conversation.
+`/usr/local/bin/moprox-dev-launch <id>` (from `dev-launch.sh`) sits between the unit and `claude`: it
+records the instance's session id in `~/.local/state/moprox-dev/<id>.session` and reattaches with
+`--resume` on the next start. Continuity across a *deliberate* reset still lives in the shared memory +
+git, not the conversation.
+
+Verified on 2.1.220 — these are the three facts the design rests on:
+
+| | |
+|---|---|
+| `--remote-control <name> --resume <id>` | **compose.** Resume is validated *before* bridge registration, so a stale id fails cheaply without clogging the registration pool |
+| `--session-id <uuid>` twice | **refused** (`Session ID … is already in use`) — an agent can't own one pinned UUID forever, hence the recorded pointer. `--resume` preserves the id, so the pointer stays valid indefinitely |
+| `-c/--continue` | **wrong tool here.** All three instances share `WorkingDirectory=/home/mikael` → one project transcript dir; `--continue` takes whichever *sibling* spoke last, so restarting `two` would hijack `three`'s thread |
+
+**A plain `--resume` reattaches to the SAME bridge registration** — measured, not assumed: across a
+restart the transcript keeps one unchanged `bridgeSessionId` with `lastSequenceNum` advancing 0 → 6, and
+the `claude.ai/code/session_…` URL is unchanged. Good for the app thread (the conversation continues at
+the same link), but it means a plain resume would **neuter the weekly recycle**, whose whole job is to
+rotate the registration before it can zombie (CC #57715).
+
+Hence the **fork flag**: `moprox-dev-cycle` drops a one-shot `~/.local/state/moprox-dev/<id>.fork`, and
+the launcher turns that start into `--resume <old> --fork-session --session-id <new>` — history carried
+into a new session id, which *does* rotate the registration (verified live: `cse_0172…` → `cse_01J4A…`).
+The flag is consumed whether or not the launch succeeds, so a crash loop can't spray session ids.
+
+| restart kind | path | thread | registration |
+|---|---|---|---|
+| crash, credential gate, reboot, manual `systemctl restart` | plain `--resume` | kept | reused |
+| weekly `moprox-dev-cycle` | `--fork-session` | kept | **rotated** |
+| pointer cleared / cap tripped | `--session-id <new>` | dropped | new |
+
+**Fresh-start triggers** (all logged to the PTY log as `moprox-dev-launch <id>: fresh session … (<reason>)`):
+no pointer · pointer isn't a UUID · transcript missing · transcript > 200 MiB · transcript untouched > 90 d
+· a resume that dies within 60 s (which also clears the pointer, so an unresumable transcript self-heals
+instead of pinning the instance in a restart loop). Caps are overridable via
+`MOPROX_DEV_MAX_TRANSCRIPT_{BYTES,DAYS}` / `MOPROX_DEV_RESUME_FAIL_WINDOW` in
+`~/.config/claude-dev/agent.env`.
+
+### The 5 MiB size cap is a protocol limit — do not raise it
+Remote-control **session creation POSTs the entire transcript** in the request body (`events:`), so a
+large transcript fails registration outright with the generic `Session creation failed — see debug log`
+— upstream [#78825](https://github.com/anthropics/claude-code/issues/78825), measured: 9.9 MB and 10.9 MB
+fail, 0.86 MB and below succeed, and *every* live session over 5 MB failed.
+
+This matters more than it looks: that failure is **indistinguishable in the app from the zombie bridge**
+the weekly recycle exists to avoid. A generous cap would therefore manufacture the exact symptom this
+whole setup prevents — and it would do it on a schedule, since forking copies the transcript forward.
+5 MiB sits inside the measured-good band with margin. Disk and context cost are irrelevant to this
+number; only the registration payload is.
+
+**Consequence: an in-app thread cannot be permanent.** It must roll over before the wall. For scale,
+transcripts in this project dir have historically reached 40, 27 and 20 MiB, and an active session adds
+roughly 1–2 MiB per working day — so expect a roll every few weeks, announced in the PTY log.
+
+## Startup recap
+On every **resumed** start (never a fresh one — there'd be nothing to recap) the launcher submits a
+positional prompt asking for a short "here's where we left off" recap, so the app shows the state of play
+without being asked. Verified live: the prompt auto-submits and the reply lands in the app thread.
+
+Rate-limited by `~/.local/state/moprox-dev/<id>.recap` to one per 30 min, so a crash/backoff loop can't
+spend a turn every 5 s. Tune with `MOPROX_DEV_SUMMARY_MIN_GAP`; disable with
+`MOPROX_DEV_SUMMARY_PROMPT=''`; reword with the same variable.
 
 ## Permissions — allow all, but sudo prompts
 Bypass (auto-allow all edits/commands) comes from **`defaultMode: bypassPermissions` in
@@ -109,7 +171,8 @@ Human check any time: `moprox-creds-check --status`.
 ## Weekly recycle (zombie-bridge prevention)
 `moprox-dev-cycle@{one,two,three}.timer` → `moprox-dev-cycle@.service` → `/usr/local/bin/moprox-dev-cycle
 <id>`, one weekday each at 03:00 ±10m (one=Tue, two=Wed, three=Thu). Staggered so **only one session
-recycles at a time** — never all three down together, and context is lost only weekly per session.
+recycles at a time** — never all three down together. Each run now also drops the `.fork` flag, so it
+rotates the bridge registration **without** costing the thread; it is no longer a weekly context reset.
 Each run archives the session's PTY log dated (keeps ~2 weeks) then restarts the instance, so a
 registration never lives long enough to zombie. **Prevention only** — it cannot cure a formed zombie.
 

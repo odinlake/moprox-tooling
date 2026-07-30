@@ -7,8 +7,11 @@
 #   an interactive trust prompt at startup, which wedges a headless `script` PTY before the relay connects.
 #   The settings-based bypass gives identical behaviour without the trust guard.
 # - Restart loop with exponential backoff: a wedged session self-heals, and
-#   `systemctl restart moprox-dev@two` hands you a FRESH session (loses thread history by design;
-#   continuity lives in the shared memory + git, see services/memory/).
+#   `systemctl restart moprox-dev@two` RESUMES that session's thread — moprox-dev-launch records the
+#   session id per instance and reattaches with --resume (see dev-launch.sh for why not --continue and
+#   why the id can't be pinned). For a deliberately FRESH session, clear the pointer first:
+#   `rm ~/.local/state/moprox-dev/two.session && systemctl restart moprox-dev@two`.
+#   Continuity across a reset still lives in the shared memory + git, see services/memory/.
 # - --remote-control needs a TTY, so `script` gives it a PTY (same trick as the old claude-remote.service).
 # - WorkingDirectory=/home/mikael so all three share ONE memory dir (the shared context).
 # - ExecStartPre boot-race guard: network-online.target only means interfaces are up, NOT that egress/DNS
@@ -54,11 +57,13 @@ ExecStartPre=/bin/sh -c 'n=0; until curl -sS --max-time 5 -o /dev/null https://a
 # zombied bridge is observable after the fact — the failure text ("Session creation failed" /
 # "Remote credentials fetch failed") only ever appears on-screen, and /dev/null hid it (CC #57715).
 ExecStartPre=/bin/mkdir -p /home/mikael/.local/state/moprox-dev
-# --append-system-prompt teaches THIS session (and only the three dev sessions) the shared-memory
-# protocol: who it is (%i) + journal-on-write + active-read. Scoped here, not in a home CLAUDE.md, so
-# the steward / other `claude -p` runs from $HOME don't inherit it. Full detail in PROTOCOL.md (abs path
-# — WorkingDirectory=/home/mikael, so a relative repo path would not resolve).
-ExecStart=/usr/bin/script -qfec "/home/mikael/.local/bin/claude --remote-control 'moprox dev %i' --append-system-prompt 'You are moprox dev %i (AGENT_ID=%i), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/.claude/projects/-home-mikael/memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [%i], and append one line to journals/%i.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals.'" /home/mikael/.local/state/moprox-dev/%i.log
+# moprox-dev-launch decides resume-vs-fresh and owns the claude invocation, including the
+# --append-system-prompt that teaches THIS session (and only the three dev sessions) the shared-memory
+# protocol: who it is (%i) + journal-on-write + active-read. Scoped there, not in a home CLAUDE.md, so
+# the steward / other `claude -p` runs from $HOME don't inherit it. Full detail in PROTOCOL.md.
+# The prompt moved out of this unit because it now has to be built alongside the resume flags; keeping
+# one copy in the wrapper beats two that can drift.
+ExecStart=/usr/bin/script -qfec "/usr/local/bin/moprox-dev-launch %i" /home/mikael/.local/state/moprox-dev/%i.log
 TimeoutStartSec=120
 Restart=always
 RestartSec=5

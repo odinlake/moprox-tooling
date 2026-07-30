@@ -1,7 +1,8 @@
 # Weekly recycle of moprox-dev@%i — archives the session's PTY log then restarts it for a fresh bridge
 # registration (zombie-bridge prevention, CC #57715). Runs as root (needs systemctl restart). Driven by
 # per-instance timers on different weekdays (one=Tue, two=Wed, three=Thu) so only ONE session recycles
-# at a time — never all three down together, and context is lost only once a week per session.
+# at a time — never all three down together. moprox-dev-launch resumes the thread across the restart, so
+# this re-registers the bridge without costing context; it is no longer a weekly context reset.
 [Unit]
 Description=Weekly recycle of moprox dev %i (zombie-bridge prevention, CC #57715)
 After=network-online.target
