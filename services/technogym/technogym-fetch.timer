@@ -1,0 +1,9 @@
+[Unit]
+Description=Fetch new Technogym cardio sessions a few times a day
+[Timer]
+# Sessions land ~once a day; check morning/afternoon/evening rather than every few minutes.
+OnCalendar=*-*-* 08,14,20:10
+RandomizedDelaySec=600
+Persistent=true
+[Install]
+WantedBy=timers.target

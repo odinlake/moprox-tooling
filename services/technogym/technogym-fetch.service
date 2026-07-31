@@ -1,0 +1,12 @@
+# Pull new Technogym/mywellness cardio sessions (per-second belt speed/grade/HR) into private-data.
+# Triggered by technogym-fetch.timer. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox Technogym cardio fetcher (mywellness -> private-data/technogym)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/technogym/technogym_fetch.py
