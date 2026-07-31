@@ -244,7 +244,7 @@ function med10Chart(sess, lt1, lt2){
       d+=((prev!=null&&k-prev<=21*86400000)?"L":"M")+px(mean(w.t)).toFixed(1)+" "+py(mean(w.v)).toFixed(1)+" "; prev=k;});
     curves+=`<path d="${d}" fill="none" stroke="${CAT[c]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;});
   return `<h2>Peak sustained HR <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">`
-    +`— med10 (max of a rolling 10 s median); dots = sessions, lines = weekly mean per type</span></h2>`
+    +`(max of a rolling 10s median)</span></h2>`
     +`<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thr}${xl}${curves}${dots}</svg>`;
 }
 async function loadTraining(){
