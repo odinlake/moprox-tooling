@@ -12,9 +12,15 @@ an ordinary web login — no app registration. Endpoints (mapped by the open-sou
   GET  services…/Training/CardioLog/{analyticsId}/Details?facilityId&token&AppId&_c         -> per-second series
 
 The "trusted client" gate is just the `token` (off the Training page) passed as a query param; there
-is no secret header. Mirrors polar_fetch.py: creds in ~/.config/claude-dev, raw JSON into
-private-data, NO git commit here (private-data-sync.timer sweeps it), NO Telegram post (pure ETL —
-coach owns any posting). Run by technogym-fetch.timer.
+is no secret header. Mirrors polar_fetch.py: creds in ~/.config/claude-dev, into private-data, NO git
+commit here (private-data-sync.timer sweeps it), NO Telegram post (pure ETL — coach owns posting).
+
+We keep ONLY what carries information the Polar feed can't: belt **speed** and **incline**, stored as
+change-points (both are piecewise-constant setpoints — an easy run is ~9 points, not 2800 samples).
+Deliberately DROPPED (see the 2026-07-31 analysis): per-second HR (redundant — Polar has true 1 Hz);
+running power (≈ a fixed function of speed — r=0.87 between sessions, 185±2 W across 39 easy sessions
+at a fixed pace — so it carries no signal speed doesn't); cadence (mostly speed-tracking, unused).
+All of it is re-fetchable from the API if ever wanted. Result: ~1 KB/session vs ~160 KB raw.
 
   --backfill        ignore the seen-set and refetch every session in the window
   --since YYYY-MM-DD start of the listing window (default: cold=2025-01-01, warm=today-45d)
@@ -24,8 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ENV      = Path.home() / ".config/claude-dev/mywellness.env"
-CARDIO   = Path.home() / "projects/private-data/technogym/cardio"   # raw {detail, cardio[]} per session
-TRACES   = Path.home() / "projects/private-data/technogym/traces"   # derived 1 Hz trace per session (coach)
+CARDIO   = Path.home() / "projects/private-data/technogym/cardio"   # compact per-session record
 SEEN     = Path.home() / ".local/share/moprox/technogym-seen.json"
 APP_ID   = "ec1d38d7-d359-48d0-a60c-d8c0b8fb9df9"                    # mywellness cloud web app id
 BASE     = "https://www.mywellness.com"
@@ -88,63 +93,51 @@ def fetch_cardio(s, tok, cult, analytics_id, facility_id):
     return b.get("data", {})
 
 
-def _one_hz(samples, idx, n):
-    """Event-sampled channel -> 1 Hz step-held grid of length n+1 (belt speed/grade hold until changed)."""
-    grid = [None] * (n + 1)
+def _changepoints(samples, idx, ndp=1, tol=0.05):
+    """A piecewise-constant channel (belt speed / incline) as [t_sec, value] only where it changes."""
+    out, last = [], None
     for smp in samples:
-        t = int(smp.get("t", -1)); vs = smp.get("vs", [])
-        if 0 <= t <= n and idx < len(vs):
-            grid[t] = float(vs[idx])
-    last = 0.0
-    for i in range(len(grid)):
-        if grid[i] is None:
-            grid[i] = last
-        else:
-            last = grid[i]
-    return grid
+        vs = smp.get("vs", [])
+        if idx is None or idx >= len(vs):
+            continue
+        v = round(float(vs[idx]), ndp)
+        if last is None or abs(v - last) > tol:
+            out.append([int(smp.get("t", 0)), v]); last = v
+    return out
 
 
-def _hr_1hz(hr, n):
-    grid = [None] * (n + 1)
-    for h in hr:
-        t = int(h.get("t", -1))
-        if 0 <= t <= n:
-            grid[t] = int(h.get("hr", 0))
-    last = 0
-    for i in range(len(grid)):
-        if grid[i] is None:
-            grid[i] = last
-        else:
-            last = grid[i]
-    return grid
+def _last(samples, idx, ndp=1):
+    for smp in reversed(samples):
+        vs = smp.get("vs", [])
+        if idx is not None and idx < len(vs):
+            return round(float(vs[idx]), ndp)
+    return None
 
 
-def build_trace(idcr, detail, cardios):
-    """Compact 1 Hz trace for coach: the pace axis the HR-only Polar feed can't see."""
-    an = (cardios[0] or {}).get("analitics", {}) if cardios else {}
-    chans = {(c.get("pr") or {}).get("name"): c.get("i") for c in an.get("descriptor", [])}
-    samples = an.get("samples", [])
-    n = max((int(x.get("t", 0)) for x in samples), default=0)
-    def ch(name):
-        return _one_hz(samples, chans[name], n) if name in chans else None
-    meta = cardios[0] or {}
+def compact_record(detail, cardios):
+    """Lean, faithful session record: identity + one entry per cardio activity with speed/incline
+    change-points and the summary totals. Shared by the puller and the one-off migration."""
+    acts = []
+    for c in cardios or []:
+        an = c.get("analitics", {})
+        chans = {(ch.get("pr") or {}).get("name"): ch.get("i") for ch in an.get("descriptor", [])}
+        smp = an.get("samples", [])
+        acts.append({
+            "machine": c.get("name"),
+            "equipment": c.get("equipmentType"),
+            "durationS": max((int(x.get("t", 0)) for x in smp), default=0),
+            "distanceM": _last(smp, chans.get("HDistance")),
+            "calories": _last(smp, chans.get("Calories"), ndp=0),
+            "speed_kph": _changepoints(smp, chans.get("Speed")),
+            "grade_pct": _changepoints(smp, chans.get("Grade")),
+        })
+    eq = acts[0]["equipment"] if acts else None
     return {
-        "idCr": idcr,
+        "idCr": detail.get("idCr"),
         "startedOn": detail.get("startedOn"),
-        "closedOn": detail.get("closedOn"),
         "facilityId": detail.get("startedInFacilityId"),
-        "equipment": meta.get("equipmentType"),
-        "machine": meta.get("name"),
-        "sport": "run" if (meta.get("equipmentType") == "Treadmill") else (meta.get("equipmentType") or "").lower(),
-        "dur_s": n,
-        "speed_kph": ch("Speed"),
-        "grade_pct": ch("Grade"),
-        "cadence_spm": ch("RunningCadence"),
-        "power_w": ch("RunningPower"),
-        "hdist_m": ch("HDistance"),
-        "hr_bpm": _hr_1hz(an.get("hr", []), n),   # secondary — prefer Polar HR when joining
-        "hr_zones": an.get("hrZones", []),
-        "laps": an.get("laps", []),
+        "sport": "run" if eq == "Treadmill" else (eq or "").lower(),
+        "activities": acts,
     }
 
 
@@ -155,7 +148,6 @@ def main():
     args = ap.parse_args()
 
     CARDIO.mkdir(parents=True, exist_ok=True)
-    TRACES.mkdir(parents=True, exist_ok=True)
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     seen = set(json.loads(SEEN.read_text())) if SEEN.exists() else set()
     cold = not seen
@@ -178,9 +170,8 @@ def main():
     for idcr, ymd in todo:
         try:
             detail = fetch_detail(s, uid, tok, cult, idcr)
-            acts = detail.get("physicalActivities", []) or []
             cardios = []
-            for a in acts:
+            for a in detail.get("physicalActivities", []) or []:
                 aid = a.get("analyticsId") or a.get("analiticsId")
                 fid = ((a.get("performedPhysicalActivity") or {}).get("facilityId")
                        or detail.get("startedInFacilityId"))
@@ -188,14 +179,11 @@ def main():
                     cd = fetch_cardio(s, tok, cult, aid, fid)
                     if cd:
                         cardios.append(cd)
-            (CARDIO / f"{idcr}.json").write_text(
-                json.dumps({"detail": detail, "cardio": cardios}, separators=(",", ":")))
-            if cardios:
-                (TRACES / f"{idcr}.json").write_text(
-                    json.dumps(build_trace(idcr, detail, cardios), separators=(",", ":")))
+            rec = compact_record(detail, cardios)
+            (CARDIO / f"{idcr}.json").write_text(json.dumps(rec, separators=(",", ":")))
             seen.add(idcr); ok += 1
-            n = build_trace(idcr, detail, cardios)["dur_s"] if cardios else 0
-            print(f"  [{ok}/{len(todo)}] {ymd} idCr={idcr}: {len(cardios)} cardio, {n}s trace", flush=True)
+            sp = sum(len(a["speed_kph"]) for a in rec["activities"])
+            print(f"  [{ok}/{len(todo)}] {ymd} idCr={idcr}: {len(rec['activities'])} activity, {sp} speed pts", flush=True)
         except Exception as exc:  # keep going; a bad session shouldn't abort the run
             print(f"  ! idCr={idcr} failed: {exc}", flush=True)
         time.sleep(POLITE_S)
