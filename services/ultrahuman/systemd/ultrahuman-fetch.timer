@@ -1,0 +1,11 @@
+[Unit]
+Description=Fetch Ultrahuman ring metrics twice daily
+[Timer]
+# Sleep is only finalised after waking, so there is nothing to collect overnight. Late morning gets
+# the night just past; the evening run is a retry for a missed or late-syncing morning. Each run
+# re-fetches the last 10 days, so a few days offline heal without a manual backfill.
+OnCalendar=*-*-* 10,19:20
+RandomizedDelaySec=900
+Persistent=true
+[Install]
+WantedBy=timers.target
