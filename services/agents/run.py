@@ -19,7 +19,11 @@ AGENTS = {
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
-SHARED_MEM = HOME / ".claude/projects/-home-mikael/memory"    # the dev agent shares THIS session's memory
+# The estate's semantic-memory store (its own git repo since 2026-08-03). EVERY agent that maintains
+# a durable notebook needs this in --add-dir: the notebooks now live at <SHARED_MEM>/agents/ and are
+# only SYMLINKED into each agent dir, so the permission layer resolves the real path and denies the
+# write unless this directory is granted. Omitting it makes the agent silently unable to save memory.
+SHARED_MEM = HOME / ".claude/projects/-home-mikael/memory"
 LOCAL_BIN = HOME / ".local/bin"
 # Resolve the CLI absolutely: under systemd the service PATH is minimal and won't find ~/.local/bin.
 CLAUDE = shutil.which("claude") or str(LOCAL_BIN / "claude")
@@ -53,7 +57,8 @@ AGENT_FLAGS = {
     "coach": ["--permission-mode", "acceptEdits",
               "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch",
               "--disallowedTools", DEV_DENY,
-              "--add-dir", str(REPOS[1]), str(REPOS[2]), str(TRAINING_DATA)],   # tooling + private-data + dash data
+              # tooling + private-data + dash data + the memory store (coach-memory.md lives there now)
+              "--add-dir", str(REPOS[1]), str(REPOS[2]), str(TRAINING_DATA), str(SHARED_MEM)],  # variadic: keep last
     # steward: only the convo helper, to investigate routing history when answering meta questions
     "steward": ["--allowedTools", CONVO_TOOL],
     # valet: writes its own preference memory (learns what to surface) + the convo helper
@@ -61,7 +66,8 @@ AGENT_FLAGS = {
     # impersonating Mikael) for overnight email + calendar, scoped to ONLY this agent.
     "valet": ["--permission-mode", "acceptEdits",
               "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s" % CONVO_TOOL,
-              "--mcp-config", str(AGENTS["valet"] / "mcp.json"), "--strict-mcp-config"],
+              "--mcp-config", str(AGENTS["valet"] / "mcp.json"), "--strict-mcp-config",
+              "--add-dir", str(SHARED_MEM)],   # valet-memory.md lives in the memory store; variadic: keep last
     # theming: theme-ontology expert. Answers data questions via the totolo MCP (scoped to ONLY this
     # agent with --mcp-config + --strict-mcp-config) and prepares branch-only edits to the theming repo.
     "theming": ["--permission-mode", "acceptEdits",
@@ -69,7 +75,7 @@ AGENT_FLAGS = {
                 "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch,mcp__totolo",   # all totolo MCP tools
                 "--disallowedTools", THEMING_DENY,
                 "--mcp-config", str(AGENTS["theming"] / "mcp.json"), "--strict-mcp-config",
-                "--add-dir", str(THEMING_REPO)],   # variadic: keep last
+                "--add-dir", str(THEMING_REPO), str(SHARED_MEM)],   # + theming-memory.md; variadic: keep last
 }
 
 def _log_usage(agent, j):
