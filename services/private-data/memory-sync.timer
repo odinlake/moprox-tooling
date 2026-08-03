@@ -1,0 +1,10 @@
+[Unit]
+Description=Sweep the semantic-memory store for uncommitted facts, 4x/hour
+[Timer]
+# Tighter than the private-data hourly sweep: memory is what the OTHER boxes read to stay current,
+# so its staleness is the cross-box staleness. 15 min + the 10-min reconciler = ~25 min worst case.
+OnCalendar=*:00/15
+RandomizedDelaySec=120
+Persistent=true
+[Install]
+WantedBy=timers.target

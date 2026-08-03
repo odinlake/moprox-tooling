@@ -25,7 +25,10 @@ say() { echo "$(date -Is) $*"; }
 cd "$REPO" || { say "FATAL: no $REPO"; exit 1; }
 
 # Serialise against the mail-lane committers and any dev session working in the same tree.
-exec 9>/run/lock/private-data-sync.lock 2>/dev/null || exec 9>/tmp/private-data-sync.lock
+# Lock is per-REPO (basename), so a second instance pointed at a different repo — e.g. the semantic
+# memory store — runs concurrently instead of queueing behind this one for no reason.
+LOCK="${PRIVATE_DATA_LOCK:-$(basename "$REPO")-sync.lock}"
+exec 9>"/run/lock/$LOCK" 2>/dev/null || exec 9>"/tmp/$LOCK"
 flock -w 300 9 || { say "busy: another sync holds the lock, skipping"; exit 0; }
 
 # Never touch a tree someone left mid-rebase/merge — that needs a human.

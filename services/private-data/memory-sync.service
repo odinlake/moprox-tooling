@@ -1,0 +1,15 @@
+# Commit + push the shared semantic-memory store. Reuses private-data-sync.sh via its env overrides
+# (REPO/LOG/LOCK), so there is one sweeper implementation, not two. Triggered by memory-sync.timer.
+# Install to /etc/systemd/system/.
+[Unit]
+Description=moprox semantic-memory commit/push sweep
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PRIVATE_DATA_REPO=/home/mikael/.claude/projects/-home-mikael/memory
+Environment=PRIVATE_DATA_LOG=/home/mikael/.local/state/memory-sync.log
+Environment=PRIVATE_DATA_LOCK=memory-sync.lock
+ExecStart=/home/mikael/projects/moprox-tooling/services/private-data/private-data-sync.sh
