@@ -17,7 +17,7 @@ against the export by date (a session that later lands in an export is not doubl
 import datetime, glob, json, os, sys, time, zipfile
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from analysis import Athlete, analyse_safe   # the validated engine
+from analysis import Athlete, analyse_safe, med10   # the validated engine
 
 RUN_SPORTS = {1, 17, 83}
 ATHLETE_JSON = os.path.expanduser("~/projects/private-data/agents/coach/athlete.json")
@@ -33,6 +33,9 @@ def hr_series(d):
             vals = [float(v) for v in (s.get("values") or []) if v and 30 < v < 220]
             if len(vals) > len(best): best = vals
     return best
+
+def _round_or_none(v):
+    return None if v is None else round(v)
 
 def downsample(x, n):
     x = np.asarray(x, float)
@@ -63,7 +66,8 @@ def make_session(hr, sport, date, sid, sess_id, source="polar"):
     return dict(
         id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
         dur_min=round(len(hr) / 60.0, 1), hr_avg=round(float(np.mean(block))),
-        hr_max=round(float(np.max(block))), max5=max5, nint=cls.n_work_bouts,
+        hr_max=round(float(np.max(block))), max5=max5, med10=_round_or_none(med10(hr)),
+        nint=cls.n_work_bouts,
         above_lt2=bool(cls.above_lt2), clamp=bool(cls.hr_clamp_suspected), reps=reps,
         trace=downsample(block, tp), trace_step_s=round(len(block) / min(len(block), tp)))
 
@@ -155,7 +159,9 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
     if not sessions: sys.exit(f"no sessions from export ({raw_dir}) or incoming ({in_dir})")
     sessions.sort(key=lambda s: s["date"], reverse=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    json.dump({"generated": int(time.time()), "count": len(sessions), "sessions": sessions},
+    json.dump({"generated": int(time.time()), "count": len(sessions),
+               "lt1": ATH.lt1_hr, "lt2": ATH.lt2_hr,     # thresholds so the dashboard can draw them
+               "sessions": sessions},
               open(out_path, "w"), separators=(",", ":"))
     by = {}; src = {}
     for s in sessions:

@@ -5,7 +5,7 @@
 
 Per-second HR only (analyse_safe rejects pre-binned input). numpy required; scipy optional (fits).
 """
-from .engine import Athlete, analyse, CHART_SPEC, five_min_max
+from .engine import Athlete, analyse, CHART_SPEC, five_min_max, med10
 from .revisions import analyse_safe, flag_easy_session, trend_chart_spec
-__all__ = ["Athlete", "analyse", "analyse_safe", "CHART_SPEC", "five_min_max",
+__all__ = ["Athlete", "analyse", "analyse_safe", "CHART_SPEC", "five_min_max", "med10",
            "flag_easy_session", "trend_chart_spec"]

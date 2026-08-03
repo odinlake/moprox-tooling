@@ -1,0 +1,12 @@
+# Pull Ultrahuman ring metrics (RHR + sleep stages) into private-data. Pure ETL: no git commit
+# (private-data-sync.timer sweeps it), no Telegram (coach owns posting).
+[Unit]
+Description=moprox Ultrahuman ring fetcher (partner API -> private-data/ultrahuman)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/ultrahuman/ultrahuman_fetch.py

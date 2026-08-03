@@ -1,0 +1,11 @@
+# Recycle moprox dev TWO weekly — Wednesday 03:00. Activates moprox-dev-cycle@two.service.
+[Unit]
+Description=Weekly recycle of moprox dev two (Wed 03:00)
+
+[Timer]
+OnCalendar=Wed *-*-* 03:00:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

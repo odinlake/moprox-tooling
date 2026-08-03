@@ -1,0 +1,13 @@
+# Daily at 08:00 — early enough to act on the day, late enough that the operator is around. Jittered so
+# it doesn't pile onto the other morning timers. Persistent so a powered-off box still warns on next boot
+# (the boot-after-downtime case is exactly the one that bites).
+[Unit]
+Description=Check Claude credential expiry daily at 08:00
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+# Daily heads-up before the shared Claude Max OAuth credentials expire, so a `/login` can be scheduled
+# instead of discovered. Pairs with the `--gate` ExecStartPre in moprox-dev@.service: the gate makes
+# recovery automatic AFTER expiry, this makes the expiry not happen unnoticed in the first place.
+# Runs as mikael — needs ~/.claude/.credentials.json and ~/.config/claude-dev/telegram.env.
+[Unit]
+Description=moprox Claude credential expiry warning (Telegram heads-up before the refresh token dies)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/local/bin/moprox-creds-check --warn --days 5
