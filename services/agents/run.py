@@ -95,7 +95,27 @@ def _log_usage(agent, j):
         pass
     return rec
 
+# Best-effort freshening of a lane an agent is about to read. Coach's belt traces (speed/incline) come
+# from the Technogym console, which syncs to mywellness LATER than Polar does — measured 2026-08-03, a
+# session ending ~12:18 appeared ~12:50, while polar-fetch had it within 5 min. So pull right before
+# coach runs, on EVERY path (a new session via polar_fetch, and a Telegram reply via route.py — the
+# reply usually comes later, which is exactly when the trace has landed). Cheap: ~3 s, and it fetches
+# nothing when there is nothing new. Never allowed to block or fail the agent.
+PRE_RUN = {"coach": [sys.executable, str(HOME / "projects/moprox-tooling/services/technogym/technogym_fetch.py")]}
+
+
+def _pre_run(agent):
+    cmd = PRE_RUN.get(agent)
+    if not cmd:
+        return
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except Exception:
+        pass          # a stale trace is a degraded read, not a failed one — never block the agent
+
+
 def run_agent(agent, prompt, timeout=600):
+    _pre_run(agent)
     cwd = AGENTS[agent]
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
