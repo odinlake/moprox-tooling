@@ -36,7 +36,23 @@ if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] || [ -f .git/MERGE_HEAD 
   say "SKIP: rebase/merge in progress"; exit 0
 fi
 
-[ -z "$(git status --porcelain)" ] && exit 0
+BRANCH="$(git symbolic-ref --quiet --short HEAD || echo main)"
+HAS_REMOTE=$(git remote | head -1)
+
+# A clean tree does NOT mean there is nothing to do: producers like the notifications ingest COMMIT
+# without pushing, so commits can sit local indefinitely while the tree looks spotless (4 were sitting
+# when this was found, 2026-08-03). Only exit early when the tree is clean AND nothing is unpushed.
+unpushed() {
+  [ -n "$HAS_REMOTE" ] || { echo 0; return; }
+  git rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0
+}
+if [ -z "$(git status --porcelain)" ]; then
+  if [ "$(unpushed)" -eq 0 ] 2>/dev/null; then exit 0; fi
+  say "clean tree but $(unpushed) unpushed commit(s) — pushing"
+  git pull -q --rebase "$HAS_REMOTE" "$BRANCH" && git push -q "$HAS_REMOTE" "$BRANCH" \
+    && say "pushed $(git rev-parse --short HEAD)" || say "WARN: push of pending commits failed"
+  exit 0
+fi
 
 # Refuse to stage anything absurdly large; commit the rest.
 big=$(git status --porcelain | awk '{print $NF}' | while read -r f; do
@@ -55,7 +71,12 @@ git commit -q -m "sync: $lanes ($n file(s))" \
   -m "Swept by private-data-sync.timer — producers that write here without committing." \
   || { say "FATAL: commit failed"; exit 1; }
 
+# A repo with no remote yet (the memory store, until its GitHub repo exists) is a normal state, not a
+# failure: commit locally and stop cleanly, so systemd doesn't mark the unit failed every run.
+if [ -z "$HAS_REMOTE" ]; then
+  say "committed locally: $lanes ($n file(s)) — no remote configured yet"; exit 0
+fi
 # Another box (or the mail lane) may have pushed since; rebase our sweep on top rather than fail.
-git pull -q --rebase origin main || { say "WARN: rebase failed, leaving commit local"; exit 1; }
-git push -q origin main || { say "WARN: push failed, commit is local"; exit 1; }
+git pull -q --rebase "$HAS_REMOTE" "$BRANCH" || { say "WARN: rebase failed, leaving commit local"; exit 1; }
+git push -q "$HAS_REMOTE" "$BRANCH" || { say "WARN: push failed, commit is local"; exit 1; }
 say "pushed: $lanes ($n file(s))"
