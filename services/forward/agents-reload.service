@@ -1,0 +1,8 @@
+# Triggered by agents-reload.path when services/agents/run.py changes. Restarts only the daemons that
+# import it; the oneshot timers (valet-brief, valet-review, polar-fetch) need nothing — they re-import
+# on every run. Install to /etc/systemd/system/.
+[Unit]
+Description=Restart agent daemons after a run.py change
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart dispatcher.service telegram-poll.service discord-theming.service

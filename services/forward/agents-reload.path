@@ -1,0 +1,15 @@
+# Watch the shared agent-spawn module and restart the LONG-RUNNING services that import it.
+#
+# Why this exists: dispatcher/telegram-poll/discord-theming import run.py once at startup and hold
+# AGENT_FLAGS in memory for as long as they run (dispatcher had been up 9 days). Editing run.py fixes
+# the oneshot timers immediately — they get a fresh interpreter — but the daemons keep serving stale
+# flags, so the SAME agent behaves differently depending on whether it was invoked by a timer or by a
+# Telegram reply. That split-brain cost us a "valet memory is blocked" report from an already-fixed bug.
+# Install to /etc/systemd/system/ and `systemctl enable --now agents-reload.path`.
+[Unit]
+Description=Reload agent daemons when the shared agent-spawn module changes
+[Path]
+PathChanged=/home/mikael/projects/moprox-tooling/services/agents/run.py
+Unit=agents-reload.service
+[Install]
+WantedBy=paths.target
