@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly Technogym cardio backstop (the fresh pull happens before coach runs)
+[Timer]
+# ONCE NIGHTLY, not polling. The freshness path is now event-driven: run.py pulls Technogym
+# immediately before every coach invocation (see PRE_RUN there), which covers both the new-session
+# post and any later Telegram reply. This timer is only the completeness backstop — it catches days
+# when coach never ran, and anything the console synced long after the fact.
+# 02:40 is after the console has certainly synced and clear of the other nightly timers.
+OnCalendar=*-*-* 02:40
+RandomizedDelaySec=600
+Persistent=true
+[Install]
+WantedBy=timers.target
