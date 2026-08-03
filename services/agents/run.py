@@ -23,7 +23,7 @@ BOOK  = HOME / ".local/share/moprox"                          # the book of work
 # a durable notebook needs this in --add-dir: the notebooks now live at <SHARED_MEM>/agents/ and are
 # only SYMLINKED into each agent dir, so the permission layer resolves the real path and denies the
 # write unless this directory is granted. Omitting it makes the agent silently unable to save memory.
-SHARED_MEM = HOME / ".claude/projects/-home-mikael/memory"
+SHARED_MEM = HOME / "projects/moprox-memory"
 LOCAL_BIN = HOME / ".local/bin"
 # Resolve the CLI absolutely: under systemd the service PATH is minimal and won't find ~/.local/bin.
 CLAUDE = shutil.which("claude") or str(LOCAL_BIN / "claude")

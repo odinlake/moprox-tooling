@@ -24,7 +24,7 @@ Usage: reconcile.py [--dry-run]   (env MEMORY_DIR overrides the default path)
 """
 import json, os, re, sys, datetime, shutil
 
-MEMORY_DIR = os.environ.get("MEMORY_DIR", os.path.expanduser("~/.claude/projects/-home-mikael/memory"))
+MEMORY_DIR = os.environ.get("MEMORY_DIR", os.path.expanduser("~/projects/moprox-memory"))
 BUDGET_BYTES = int(os.environ.get("MEMORY_BUDGET", "9000"))   # cap on the always-loaded index
 CONFLICT_DAYS = 2
 DRY = "--dry-run" in sys.argv

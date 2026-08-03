@@ -1,7 +1,7 @@
 # Shared agent memory (moprox dev one/two/three)
 
 The three [`moprox dev`](../sessions/) sessions share **one** memory dir
-(`~/.claude/projects/-home-mikael/memory/`). This gives them shared context (so you don't re-explain
+(`~/projects/moprox-memory/`). This gives them shared context (so you don't re-explain
 what another built) while letting you work three projects in parallel. The design follows current
 (2026) agent-memory practice — OS-style tiering, a scoped blackboard, background reconciliation, and
 provenance — adapted to Claude Code's file memory and kept deliberately simple (no vector DB, no

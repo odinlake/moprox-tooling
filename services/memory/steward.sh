@@ -5,7 +5,7 @@
 # run by hand. Bounded turns so a misfire can't run away.
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export MEMORY_DIR="${MEMORY_DIR:-$HOME/.claude/projects/-home-mikael/memory}"
+export MEMORY_DIR="${MEMORY_DIR:-$HOME/projects/moprox-memory}"
 cd "$HOME"
 # Skip the LLM pass entirely when there's nothing to do (no conflicts and no recent changes).
 if [[ ! -s "$MEMORY_DIR/CONFLICTS.md" && -z "$(find "$MEMORY_DIR/journals" -name '*.jsonl' -newermt '-1 day' 2>/dev/null)" ]]; then

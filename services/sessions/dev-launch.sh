@@ -88,7 +88,7 @@ else
   reason="no recorded session"
 fi
 
-PROMPT="You are moprox dev $ID (AGENT_ID=$ID), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/.claude/projects/-home-mikael/memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [$ID], and append one line to journals/$ID.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals."
+PROMPT="You are moprox dev $ID (AGENT_ID=$ID), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/projects/moprox-memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [$ID], and append one line to journals/$ID.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals."
 
 if [ "$resume" = 1 ]; then
   kib=$(( $(stat -c%s "$PROJECT_DIR/$sid.jsonl") / 1024 ))

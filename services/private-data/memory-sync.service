@@ -9,7 +9,7 @@ Wants=network-online.target
 Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
-Environment=PRIVATE_DATA_REPO=/home/mikael/.claude/projects/-home-mikael/memory
+Environment=PRIVATE_DATA_REPO=/home/mikael/projects/moprox-memory
 Environment=PRIVATE_DATA_LOG=/home/mikael/.local/state/memory-sync.log
 Environment=PRIVATE_DATA_LOCK=memory-sync.lock
 ExecStart=/home/mikael/projects/moprox-tooling/services/private-data/private-data-sync.sh
