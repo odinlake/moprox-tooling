@@ -1,9 +1,15 @@
 [Unit]
-Description=Fetch new Technogym cardio sessions a few times a day
+Description=Fetch new Technogym cardio sessions
 [Timer]
-# Sessions land ~once a day; check morning/afternoon/evening rather than every few minutes.
-OnCalendar=*-*-* 08,14,20:10
-RandomizedDelaySec=600
+# Every 15 min while awake, NOT 3x/day. The original cadence assumed "sessions land once a day", but
+# coach posts its read within minutes of a session ending (polar-fetch runs every 5 min), so a 6-hour
+# window meant the belt trace was essentially never available for the session being read.
+# The treadmill console syncs to mywellness LATER than Polar does (measured 2026-08-03: session ended
+# ~12:18, the record appeared by ~12:50), so the trace genuinely cannot exist at coach's post time —
+# this bounds the lag to ~15 min instead of ~6 h, for a follow-up read rather than the first one.
+# Cheap: a login + list is ~3 s and fetches nothing when there is nothing new.
+OnCalendar=*-*-* 06..22:00/15
+RandomizedDelaySec=120
 Persistent=true
 [Install]
 WantedBy=timers.target
