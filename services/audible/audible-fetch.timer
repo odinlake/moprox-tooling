@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Audible library sync
+[Timer]
+# A purchased library changes a few times a month at most, so daily is already generous — this is a
+# catalogue, not a feed. 03:30 sits clear of the other nightly timers (technogym 02:40, steward
+# 04:45, statements 05:00, valet-brief 05:15, email-categorize 06:00).
+OnCalendar=*-*-* 03:30
+RandomizedDelaySec=900
+# Persistent: a laptop-style miss should still sync once on the next boot rather than skipping a day.
+Persistent=true
+[Install]
+WantedBy=timers.target

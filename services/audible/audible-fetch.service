@@ -1,0 +1,14 @@
+# Pull the Audible library (titles + metadata) into private-data. Triggered by audible-fetch.timer.
+# Install to /etc/systemd/system/.
+[Unit]
+Description=moprox Audible library fetcher (Audible API -> private-data/audible)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+# Its own venv: `audible` is not packaged in Debian, and Debian 13 refuses pip into the system
+# interpreter (PEP 668). Siblings use /usr/bin/python3 only because their deps happen to be apt-able.
+ExecStart=/home/mikael/.local/share/moprox/audible-venv/bin/python /home/mikael/projects/moprox-tooling/services/audible/audible_fetch.py
