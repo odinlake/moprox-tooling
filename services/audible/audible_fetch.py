@@ -34,7 +34,8 @@ AUTH_FILE = pathlib.Path(os.environ.get(
     "AUDIBLE_DIR", pathlib.Path.home() / ".config/claude-dev/audible")) / "auth.json"
 OUT = pathlib.Path.home() / "projects/private-data/audible"
 LIBRARY = OUT / "library.json"
-PAGE_SIZE = 1000          # the documented maximum; a personal library is one or two pages
+PAGE_SIZE = 250           # NOT the documented 1000 max: a full page with synopses is a big payload
+                          # and the first live run timed out. Smaller pages, more of them.
 POLITE_S = 1.0
 
 RESPONSE_GROUPS = ",".join([
@@ -141,7 +142,10 @@ def main():
         print(f"  ! token refresh failed ({type(exc).__name__}: {exc}) — trying the stored token",
               flush=True)
 
-    with audible.Client(auth=auth) as client:
+    # The client defaults to a 10s timeout, which a metadata-heavy page blows straight through —
+    # the first live run died on exactly that, and the error ("API request timed out, please be
+    # patient") reads like a server problem rather than a client setting.
+    with audible.Client(auth=auth, timeout=120) as client:
         raw = fetch_all(client)
 
     rows = [compact(i) for i in raw]
