@@ -6,6 +6,9 @@ by agent. We scan those for tool_use blocks named mcp__<server>__<tool> and buck
 Writes $OUT (data/stats/mcp.json). No change to the agent runner needed — works retroactively."""
 import json, os, glob, time, datetime
 from pathlib import Path
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 PROJ = Path.home() / ".claude/projects"
 GLOB = str(PROJ / "-home-mikael-projects-private-data-agents-*")
@@ -26,11 +29,15 @@ def main():
         for f in glob.glob(d + "/*.jsonl"):
             try:
                 if os.path.getmtime(f) < cutoff: continue
-            except OSError: continue
+            except OSError as _e:
+                errlog.skip("mcp_stats.py: mtime", _e)
+                continue
             for ln in open(f, errors="ignore"):
                 if "mcp__" not in ln: continue
                 try: r = json.loads(ln)
-                except Exception: continue
+                except Exception as _e:
+                    errlog.skip("mcp_stats.py: usage line", _e)
+                    continue
                 cont = (r.get("message") or {}).get("content")
                 if not isinstance(cont, list): continue
                 ts = parse_ts(r.get("timestamp"))

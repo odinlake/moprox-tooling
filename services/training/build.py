@@ -18,6 +18,9 @@ import datetime, glob, json, os, sys, time, zipfile
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from analysis import Athlete, analyse_safe, med10   # the validated engine
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 RUN_SPORTS = {1, 17, 83}
 ATHLETE_JSON = os.path.expanduser("~/projects/private-data/agents/coach/athlete.json")
@@ -79,9 +82,13 @@ def from_export(raw_dir):
         for nm in z.namelist():
             if "training-session_" not in nm or not nm.endswith(".json"): continue
             try: d = json.loads(z.read(nm))
-            except Exception: continue
+            except Exception as _e:
+                errlog.skip("build.py: session json", _e)
+                continue
             try: sid = int((d.get("sport") or {}).get("id"))
-            except Exception: continue
+            except Exception as _e:
+                errlog.skip("build.py: sport id", _e)
+                continue
             if sid not in RUN_SPORTS: continue
             s = make_session(hr_series(d), d.get("name") or "", d.get("startTime", ""), sid,
                              (d.get("identifier") or {}).get("id", ""))
@@ -93,7 +100,9 @@ def from_incoming(in_dir):
     out = []
     for fp in sorted(glob.glob(os.path.join(in_dir, "exercise_*.json"))):
         try: d = json.loads(open(fp).read())
-        except Exception: continue
+        except Exception as _e:
+            errlog.skip("build.py: exercise json", _e)
+            continue
         ex = d.get("summary") or {}; sport = str(ex.get("sport") or "")
         if "RUN" not in sport.upper() and "JOG" not in sport.upper(): continue   # runs only on the dash
         date = ex.get("start_time") or ex.get("start-time") or ""   # /v3/exercises vs transaction shape
@@ -120,7 +129,9 @@ def from_fitbit(fitbit_dir):
     out = []
     for fp in sorted(glob.glob(os.path.join(fitbit_dir or "", "exercise_*.json"))):
         try: d = json.loads(open(fp).read())
-        except Exception: continue
+        except Exception as _e:
+            errlog.skip("build.py: fitbit json", _e)
+            continue
         ex = d.get("summary") or {}
         hr = [h for h in (d.get("hr") or []) if 30 < h < 220]
         # The Fitbit log window often runs long past the effort. Trim to the ELEVATED interval — the
@@ -131,7 +142,9 @@ def from_fitbit(fitbit_dir):
         start = ex.get("start_time", "")
         if start and elev[0]:                            # shift start to when the effort actually began
             try: start = (datetime.datetime.fromisoformat(start) + datetime.timedelta(seconds=elev[0])).strftime("%Y-%m-%dT%H:%M:%S")
-            except Exception: pass
+            except Exception as _e:
+                errlog.skip("build.py: start shift", _e)
+                pass
         s = make_session(hr, ex.get("activityName") or "Run", start, 1, ex.get("id", ""), source="fitbit")
         # Drop "forgot to stop the tracker" logs (near-resting HR): a real run averages well above 95.
         if s and s["hr_avg"] >= 95: out.append(s)

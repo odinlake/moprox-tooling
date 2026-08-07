@@ -20,6 +20,9 @@ from the live log. Recent turns stay verbatim; nothing is lost.
 """
 import json, os, re, sys, time
 from pathlib import Path
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 D = Path.home() / ".local/share/moprox"
 LOG     = D / "conversation.jsonl"
@@ -47,7 +50,9 @@ def _load(path, n=None):
     out = []
     for ln in (lines[-n:] if n else lines):
         try: out.append(json.loads(ln))
-        except Exception: pass
+        except Exception as _e:
+            errlog.skip("convo.py: convo line", _e)
+            pass
     return out
 
 def agent_for_msg(msg_id):
@@ -111,7 +116,9 @@ def harvest():
     rows = []
     for ln in old:
         try: rows.append(json.loads(ln))
-        except Exception: pass
+        except Exception as _e:
+            errlog.skip("convo.py: rotate line", _e)
+            pass
     return _fmt(rows)
 
 def add_digest(summary):

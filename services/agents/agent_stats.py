@@ -7,6 +7,9 @@ $OUT (the dashboard's data/stats/agents.json).
 """
 import json, os, time
 from pathlib import Path
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 LEDGER = Path.home() / ".local/share/moprox/agent-usage.jsonl"
 STMT   = Path.home() / ".local/share/moprox/agent-statements.json"
@@ -17,7 +20,9 @@ def _jsonl(p):
     out = []
     for ln in p.read_text().splitlines():
         try: out.append(json.loads(ln))
-        except Exception: pass
+        except Exception as _e:
+            errlog.skip("agent_stats.py: stats line", _e)
+            pass
     return out
 
 def window(rows, secs, stmts):
@@ -47,7 +52,9 @@ def _icons():
     out = {}
     for a in AGENTS:
         try: out[a] = (Path.home() / ("projects/private-data/agents/%s/icon.svg" % a)).read_text().strip()
-        except Exception: pass
+        except Exception as _e:
+            errlog.skip("agent_stats.py: agent icon", _e)
+            pass
     return out
 
 def main():

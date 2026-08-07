@@ -11,6 +11,9 @@ Incremental: re-flattens only sessions whose source grew/changed (manifest.json)
 Env: CLAUDE_PROJECTS (default ~/.claude/projects), THREADS_DIR (default ~/.local/share/moprox/threads).
 """
 import json, os, sys, glob, datetime
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 PROJECTS = os.environ.get("CLAUDE_PROJECTS", os.path.expanduser("~/.claude/projects"))
 OUT = os.environ.get("THREADS_DIR", os.path.expanduser("~/.local/share/moprox/threads"))
@@ -27,7 +30,9 @@ def flatten(path):
     title = None; cwd = ""; branch = ""; tss = []; nu = na = 0; out = []
     for ln in open(path, errors="ignore"):
         try: d = json.loads(ln)
-        except Exception: continue
+        except Exception as _e:
+            errlog.skip("archive.py: json line", _e)
+            continue
         t = d.get("type")
         if t == "ai-title" and not title:
             title = (d.get("title") or d.get("content") or "").strip() or None
@@ -72,7 +77,9 @@ def main():
         sess = os.path.splitext(os.path.basename(path))[0]
         key = f"{proj}/{sess}"
         try: st = os.stat(path)
-        except OSError: continue
+        except OSError as _e:
+            errlog.skip("archive.py: stat", _e)
+            continue
         sig = [int(st.st_mtime), st.st_size]
         dst = os.path.join(OUT, proj, sess + ".md")
         fresh = manifest.get(key, {}).get("sig") != sig or not os.path.exists(dst)

@@ -13,6 +13,9 @@ sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
 from run import run_agent
 import tg, location, location_pull
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 ME = {"odinlake", "odinlake-ai"}        # operator + agents — their commits aren't news
 WMO = {0: "clear", 1: "mainly clear", 2: "partly cloudy", 3: "overcast", 45: "fog", 48: "rime fog",
@@ -62,7 +65,9 @@ def rss(url, max_age_h, limit):
             try:
                 if now - email.utils.parsedate_to_datetime(pub).timestamp() > max_age_h * 3600:
                     continue
-            except Exception: pass
+            except Exception as _e:
+                errlog.skip("valet_brief.py: feed date", _e)
+                pass
         if title:
             items.append({"title": title, "link": link})
         if len(items) >= limit: break

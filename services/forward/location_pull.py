@@ -9,6 +9,9 @@ manual Telegram share (same file).
 """
 import calendar, json, re, subprocess, time, urllib.request
 from pathlib import Path
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 CFG = Path.home() / ".config/claude-dev/location-relay.json"
 LOCATION = Path.home() / ".local/share/moprox/location.json"
@@ -20,7 +23,9 @@ def _two_floats(s):
 def _write_if_newer(lat, lon, ts, source):
     cur = {}
     try: cur = json.loads(LOCATION.read_text())
-    except Exception: pass
+    except Exception as _e:
+        errlog.skip("location_pull.py: location json", _e)
+        pass
     if ts <= cur.get("ts", 0):
         print("relay: not newer; keeping current"); return cur
     rec = {"lat": lat, "lon": lon, "ts": ts, "source": source}
@@ -35,7 +40,9 @@ def pull_ntfy(topic):
         with urllib.request.urlopen(url, timeout=20) as r:
             for line in r:
                 try: m = json.loads(line)
-                except Exception: continue
+                except Exception as _e:
+                    errlog.skip("location_pull.py: stream line", _e)
+                    continue
                 if m.get("event") == "message": msgs.append(m)
     except Exception as e:
         print("ntfy: poll failed:", e); return None

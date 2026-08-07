@@ -13,6 +13,9 @@ Only messages from the operator's own chat_id are acted on.
 import json, queue, threading, time
 from pathlib import Path
 import route, tg, convo
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 INBOX  = Path.home() / ".local/share/moprox/telegram-inbox.jsonl"
 OFFSET = Path.home() / ".local/share/moprox/dispatcher-offset"     # byte offset into the inbox
@@ -83,7 +86,9 @@ def main():
                 for raw in chunk[:nl + 1].split(b"\n"):
                     if not raw.strip(): continue
                     try: rec = json.loads(raw.decode())
-                    except Exception: continue
+                    except Exception as _e:
+                        errlog.skip("dispatcher.py: inbox line", _e)
+                        continue
                     if (rec.get("text") or "").strip() and our_chat(rec):
                         Q["router"].put(rec)
                 off += nl + 1

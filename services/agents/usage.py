@@ -12,6 +12,9 @@ reports — NOT actually billed (everything runs on the Max subscription), usefu
 """
 import json, sys, time
 from pathlib import Path
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 LEDGER = Path.home() / ".local/share/moprox/agent-usage.jsonl"
 
@@ -20,7 +23,9 @@ def rows():
     out = []
     for ln in LEDGER.read_text().splitlines():
         try: out.append(json.loads(ln))
-        except Exception: pass
+        except Exception as _e:
+            errlog.skip("usage.py: ledger line", _e)
+            pass
     return out
 
 def summary():

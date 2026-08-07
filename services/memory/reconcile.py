@@ -23,6 +23,9 @@ agent sees the same curated headlines (that's the point: don't re-explain), deta
 Usage: reconcile.py [--dry-run]   (env MEMORY_DIR overrides the default path)
 """
 import json, os, re, sys, datetime, shutil
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 MEMORY_DIR = os.environ.get("MEMORY_DIR", os.path.expanduser("~/projects/moprox-memory"))
 BUDGET_BYTES = int(os.environ.get("MEMORY_BUDGET", "9000"))   # cap on the always-loaded index
@@ -90,7 +93,9 @@ def load_journals():
                 ln = ln.strip()
                 if not ln: continue
                 try: entries.append(canon(json.loads(ln)))
-                except Exception: pass
+                except Exception as _e:
+                    errlog.skip("reconcile.py: journal line", _e)
+                    pass
     return entries
 
 def archive(file, reason):
@@ -131,8 +136,9 @@ def main():
             try:
                 if datetime.date.fromisoformat(fct["expires"]) < today():
                     facts.pop(fct["name"], None); archive(fct["file"], "expired " + fct["expires"])
-            except ValueError: pass
-
+            except ValueError as _e:
+                errlog.skip("reconcile.py: expiry date", _e)
+                pass
     # 4) conflict detection: a real conflict is >=2 agents UPDATING the same existing fact within the
     #    window (divergent edits) — not collaboration (one adds, another touches).
     conflicts = []
