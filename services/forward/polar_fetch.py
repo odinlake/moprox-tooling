@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
 from run import run_agent
+import tg
 import convo
 from analysis import Athlete, analyse_safe
 
@@ -78,9 +79,27 @@ def post_session(ex, hr):
     Telegram message — the chart with the read written into its caption (its firm standing rule; no
     separate chart, no separate text). The pipeline no longer draws a chart or sends any commentary
     of its own; it just hands coach the computed analysis + the recent conversation (so coach applies
-    the latest feedback) and lets the expert do the rest."""
+    the latest feedback) and lets the expert do the rest.
+
+    The ONE exception is the receipt below. Coach still owns the session post; this is an
+    acknowledgement, not commentary, and must never grow into a second opinion."""
     dur_min = len(hr) / 60.0
-    res = analyse_safe([h for h in hr if 30 < h < 220], dur_min, ATH, ex.get("sport") or "")
+    clean = [h for h in hr if 30 < h < 220]
+    # Immediate receipt. Coach takes 3-7 min to produce its read (charting-library work can push the
+    # tail out), during which a synced session otherwise sits completely silent. Deliberately plain,
+    # untagged and factual — no classification, no numbers coach is about to interpret — so it reads
+    # as "received, working on it" and cannot be mistaken for the read itself.
+    # Best-effort: a Telegram failure here must never stop the handoff to coach.
+    try:
+        sport = (ex.get("sport") or "session").replace("_", " ").lower()
+        if clean:
+            tg.send("Got %.0f min %s session, HR %d to %d. Pinging coach…"
+                    % (dur_min, sport, min(clean), max(clean)))
+        else:
+            tg.send("Got %.0f min %s session. Pinging coach…" % (dur_min, sport))
+    except Exception as e:
+        print("polar: receipt failed (continuing to coach): %s" % e)
+    res = analyse_safe(clean, dur_min, ATH, ex.get("sport") or "")
     cls = res["classification"]; m5 = res.get("five_min_max")
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
     summary = {"exercise_id": ex.get("id"), "raw_file": str(INCOMING / ("exercise_%s.json" % fid)),
