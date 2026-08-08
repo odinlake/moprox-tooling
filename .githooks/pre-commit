@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Refuse commits in the SHARED dev checkout. Work belongs in a per-task worktree.
+#
+# WHY: ~/projects/moprox-tooling is shared by three interactive sessions and five agents. Twice now a
+# session left it on a feature branch, another committed into it believing it was main, and
+# `git push origin main` reported "Everything up-to-date" while the work sat stranded — because that
+# pushes the local `main` REF, not your HEAD. One of those strandings hid services/lib/errlog.py for a
+# day while a module on main imported it.
+#
+# Worktrees fix this structurally: own HEAD, own branch, shares the object store (so it is nearly
+# free), and lives minutes-to-hours so it cannot diverge. This hook only blocks the shared tree —
+# worktrees have a different toplevel and commit normally.
+SHARED="/home/mikael/projects/moprox-tooling"
+TOP="$(git rev-parse --show-toplevel 2>/dev/null)"
+[ "$TOP" != "$SHARED" ] && exit 0
+[ -n "${MOPROX_ALLOW_SHARED_COMMIT:-}" ] && exit 0
+
+cat >&2 <<'MSG'
+REFUSED: this is the shared dev checkout — commit from a worktree instead.
+
+    cd ~/projects/moprox-tooling
+    git fetch origin
+    git worktree add -b <task-name> /tmp/<task-name> origin/main
+    cd /tmp/<task-name>          # work, commit here
+    git push origin HEAD:main    # HEAD, never `main` — see below
+    cd - && git worktree remove /tmp/<task-name>
+
+Push `HEAD:main`, not `main`: `git push origin main` pushes the local main ref, which is
+usually unchanged, so it prints "Everything up-to-date" and silently discards your work.
+
+Genuinely need this one commit here?  MOPROX_ALLOW_SHARED_COMMIT=1 git commit ...
+MSG
+exit 1
