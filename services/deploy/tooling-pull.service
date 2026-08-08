@@ -1,0 +1,13 @@
+# Keep /opt/moprox-tooling at origin/main — the PRODUCTION checkout the systemd units execute from.
+# Development happens in ~/projects/moprox-tooling; the two must never be the same tree.
+[Unit]
+Description=moprox-tooling production deploy (pull origin/main)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+# Restarting agent daemons on a code change needs root; the script is the only thing granted it.
+AmbientCapabilities=
+ExecStart=/opt/moprox-tooling/services/deploy/tooling-pull.sh

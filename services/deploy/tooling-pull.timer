@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll for moprox-tooling releases
+[Timer]
+# Every 5 min: fast enough that a push lands promptly, slow enough to be invisible. Cheap — it
+# exits immediately when origin/main has not moved.
+OnCalendar=*:0/5
+RandomizedDelaySec=60
+Persistent=true
+[Install]
+WantedBy=timers.target
