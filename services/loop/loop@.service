@@ -16,6 +16,12 @@ Environment=PYTHONUNBUFFERED=1
 # already documents for claude-remote. Optional ('-') so this works pre-cutover too, and it tracks
 # the cutover automatically because use-squid.sh apply/undo owns that file.
 EnvironmentFile=-/etc/environment
+# Loop chatter goes to the dedicated firehose group, NOT the operator's DM. tg.py reads
+# TELEGRAM_CHAT_ID from the environment, so redirecting it needs no code change.
+EnvironmentFile=-/home/mikael/.config/claude-dev/telegram-firehose.env
+# ~/.local/bin is NOT on systemd's default PATH and the claude CLI lives there since the native
+# installer — the exact omission that scored 1,200 local-news posts as 0 for three weeks.
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Backstop only; the harness's idle watchdog is the one that distinguishes stuck from slow.
 TimeoutStartSec=7200
 KillMode=control-group
