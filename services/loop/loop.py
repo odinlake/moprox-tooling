@@ -20,6 +20,7 @@ lines on stdout, which systemd puts in the journal and the fleet lane ships to l
 collapses it too. Full fidelity stays in ~/.claude/projects/<slug>/*.jsonl on the box for 90 days.
 """
 import json, os, queue, signal, subprocess, sys, threading, time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
@@ -32,6 +33,7 @@ PROPOSALS= STATE / "proposals"          # the agent drops {claim, verify, expect
 STOP     = STATE / "STOP"               # touch to halt every loop agent; checked first
 USAGE    = HOME / ".local/share/moprox/agent-usage.jsonl"   # shared with run.py
 AGENTS   = HOME / "projects/private-data/agents"
+MEMORY   = HOME / "projects/moprox-memory"
 CLAUDE   = os.environ.get("CLAUDE_BIN") or str(HOME / ".local/bin/claude")
 
 IDLE_MAX_S   = int(os.environ.get("LOOP_IDLE_MAX_S", 600))    # silence before we call it stuck
@@ -267,6 +269,45 @@ def verify(prop, agent):
     return ok, _clip(out, 200)
 
 
+def promote(prop, evidence, agent):
+    """Land a VERIFIED finding as a memory fact + journal line, then push.
+
+    Deliberately the harness's job, not the agent's: the agent writes its proposal before it knows
+    whether the claim survives, so anything it wrote itself would be a finding published on its own
+    say-so. This runs only after the verifier passed.
+    """
+    slug = str(prop.get("novelty_key") or "").strip() or None
+    body = str(prop.get("fact") or "").strip()
+    if not slug or not body:
+        warn(f"accepted claim has no slug/fact body — not promoted to memory ({_clip(prop.get('claim'), 60)})")
+        return False
+    scope = str(prop.get("scope") or "global")
+    doc = (f"---\nname: {slug}\n"
+           f"description: \"{_clip(prop.get('claim',''), 180)}\"\n"
+           f"metadata:\n  node_type: memory\n  type: project\n  scope: {scope}\n"
+           f"  salience: normal\n  agents: [{agent}]\n---\n\n{body}\n\n"
+           f"**Verified {datetime.now().date().isoformat()}** by the loop harness — the claim's own "
+           f"check was executed, not taken on assertion: `{_clip(evidence, 300)}`\n")
+    (MEMORY / f"{slug}.md").write_text(doc)
+    jline = {"ts": datetime.now().date().isoformat(), "agent": agent, "slug": slug,
+             "action": "add", "scope": scope, "salience": "normal",
+             "note": _clip(prop.get("claim", ""), 90)}
+    jf = MEMORY / "journals" / f"{agent}.jsonl"
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    with open(jf, "a") as fh:
+        fh.write(json.dumps(jline) + "\n")
+    for cmd in (["git", "add", f"{slug}.md", f"journals/{agent}.jsonl"],
+                ["git", "commit", "-q", "-m", f"{agent}: {_clip(prop.get('claim',''), 72)}"],
+                ["git", "pull", "-q", "--rebase", "origin", "main"],
+                ["git", "push", "-q", "origin", "main"]):
+        r = subprocess.run(cmd, cwd=str(MEMORY), capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            err(f"promote: `{' '.join(cmd[:2])}` failed for {slug} — fact is written but unpushed",
+                RuntimeError(_clip(r.stderr or r.stdout, 200)))
+            return False
+    return True
+
+
 def collect_proposals():
     PROPOSALS.mkdir(parents=True, exist_ok=True)
     out = []
@@ -337,6 +378,8 @@ def main():
             led.setdefault("accepted", []).append({"cycle": cyc, "claim": prop.get("claim"),
                                                    "evidence": detail})
             say(f"✓ verify PASS  {claim}  [{detail}]", 6, agent)
+            if promote(prop, detail, agent):
+                say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
         else:
             rejected += 1
             led.setdefault("tried", []).append({"cycle": cyc, "claim": prop.get("claim"),

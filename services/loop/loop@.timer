@@ -1,9 +1,12 @@
 [Unit]
 Description=Wake the %i continuous agent
 [Timer]
-# Self-paced by the harness: a cycle that finds nothing is cheap and exits in seconds, and the
-# budget gate is what actually bounds spend — so a steady tick is simpler than adaptive backoff.
-OnCalendar=*-*-* 07..23:00/30
+# HOURLY, not every 30 min. Measured: a real cycle is ~3 min and ~$1, so a 30-min tick would run
+# straight into the budget gate every window. More to the point, discovery has a finite stock — the
+# obvious findings get taken early and a faster tick mostly buys marginal ones. The ledger stops
+# re-derivation, the budget gate bounds spend; cadence is the knob for SIGNAL quality. Widen once the
+# accept rate and cost-per-finding say it is earning its keep.
+OnCalendar=*-*-* 07..23:00
 RandomizedDelaySec=300
 Persistent=false
 [Install]
