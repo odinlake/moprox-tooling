@@ -1,0 +1,22 @@
+# One bounded cycle of a continuous agent. Templated: loop@analyst, loop@burndown.
+# Oneshot per cycle deliberately — systemd owns the cgroup, so killing a stuck cycle reaps the
+# children claude spawns (bash/node) instead of orphaning them.
+[Unit]
+Description=moprox continuous agent cycle (%i)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+# systemd does NOT read /etc/environment, and on a Squid-contained box that file is where the proxy
+# lives — without it claude has no route to the API at all: it retries silently, emits no events and
+# no stderr, and looks exactly like a hung agent until the idle watchdog fires. Same trap use-squid.sh
+# already documents for claude-remote. Optional ('-') so this works pre-cutover too, and it tracks
+# the cutover automatically because use-squid.sh apply/undo owns that file.
+EnvironmentFile=-/etc/environment
+# Backstop only; the harness's idle watchdog is the one that distinguishes stuck from slow.
+TimeoutStartSec=7200
+KillMode=control-group
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/loop/loop.py %i

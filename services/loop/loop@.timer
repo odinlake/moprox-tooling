@@ -1,0 +1,10 @@
+[Unit]
+Description=Wake the %i continuous agent
+[Timer]
+# Self-paced by the harness: a cycle that finds nothing is cheap and exits in seconds, and the
+# budget gate is what actually bounds spend — so a steady tick is simpler than adaptive backoff.
+OnCalendar=*-*-* 07..23:00/30
+RandomizedDelaySec=300
+Persistent=false
+[Install]
+WantedBy=timers.target
