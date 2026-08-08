@@ -16,6 +16,7 @@ AGENTS = {
     "dev":     HOME / "projects/private-data/agents/dev",     # the persona dir (loads its CLAUDE.md)
     "valet":   HOME / "projects/private-data/agents/valet",
     "theming": HOME / "projects/private-data/agents/theming",
+    "analyst": HOME / "projects/private-data/agents/analyst",   # loop agent (read-mostly)
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here

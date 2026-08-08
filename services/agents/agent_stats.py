@@ -13,7 +13,9 @@ import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 LEDGER = Path.home() / ".local/share/moprox/agent-usage.jsonl"
 STMT   = Path.home() / ".local/share/moprox/agent-statements.json"
-AGENTS = ["coach", "steward", "dev", "valet", "theming"]
+# Roster comes from run.py so it cannot drift from the one that actually invokes agents.
+from run import AGENTS as _A
+AGENTS = sorted(_A)
 
 def _jsonl(p):
     if not p.exists(): return []
@@ -25,6 +27,18 @@ def _jsonl(p):
             pass
     return out
 
+def _n(r, k):
+    """Token counts, defensively. `r.get(k, 0)` returns None when the key EXISTS with a null value —
+    the default only covers a MISSING key — so a single null row crashed the whole panel with
+    "unsupported operand type(s) for +: NoneType and NoneType". Counted, not swallowed."""
+    v = r.get(k)
+    if isinstance(v, (int, float)):
+        return v
+    if v is None and k in r:
+        errlog.skip("agent_stats.py: null token field in usage ledger", ValueError(f"{k}=None"))
+    return 0
+
+
 def window(rows, secs, stmts):
     cut = time.time() - secs
     by = {}
@@ -34,9 +48,9 @@ def window(rows, secs, stmts):
         d["calls"] += 1
         if r.get("error"):
             d["fails"] += 1; continue
-        d["tok"] += r.get("in", 0) + r.get("out", 0) + r.get("cache_read", 0) + r.get("cache_write", 0)
-        d["cr"] += r.get("cache_read", 0)
-        d["ctx"] += r.get("in", 0) + r.get("cache_read", 0) + r.get("cache_write", 0)
+        d["tok"] += _n(r, "in") + _n(r, "out") + _n(r, "cache_read") + _n(r, "cache_write")
+        d["cr"] += _n(r, "cache_read")
+        d["ctx"] += _n(r, "in") + _n(r, "cache_read") + _n(r, "cache_write")
         d["ms"] += r.get("ms") or 0
     out = []
     for a in AGENTS:

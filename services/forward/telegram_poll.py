@@ -61,6 +61,19 @@ def main():
                    "from": (m.get("from") or {}).get("username") or (m.get("from") or {}).get("first_name"),
                    "text": m.get("text", ""),
                    "reply_to": (m.get("reply_to_message") or {}).get("message_id")}
+            # Keep where a forward CAME FROM. The flattened record dropped it, so "forward me this and
+            # act on it" silently lost its origin - and identifying a group by forwarding one of its
+            # messages here produced nothing usable. Bot API 7.x sends forward_origin; older payloads
+            # send forward_from_chat. Record whichever arrived.
+            _fo = m.get("forward_origin") or {}
+            _src = _fo.get("chat") or _fo.get("sender_chat") or m.get("forward_from_chat")
+            if isinstance(_src, dict):
+                rec["fwd_from_chat_id"] = _src.get("id")
+                rec["fwd_from_title"] = _src.get("title") or _src.get("username")
+                rec["fwd_from_type"] = _src.get("type")
+            else:
+                _u2 = _fo.get("sender_user") or m.get("forward_from") or {}
+                if _u2: rec["fwd_from_user"] = _u2.get("username") or _u2.get("first_name")
             with open(INBOX, "a") as f: f.write(json.dumps(rec) + "\n")
             print("inbox <-", rec["from"], repr(rec["text"][:80]))
         if r.get("result"): STATE.write_text(str(offset))
