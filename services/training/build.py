@@ -28,12 +28,21 @@ ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls 
 TRACE_POINTS = 120               # classified sessions (detail chart; the rich chart is the Telegram one)
 TRACE_POINTS_THIN = 50           # unknown / very short
 
+def _hr_val(v):
+    """One HR sample -> float in (30, 220), else None. The export is not type-clean: values are
+    usually floats but at least one block ships a QUOTED "NaN" string, and `30 < v < 220` on a str
+    raises TypeError. That block happens to sit on a sport outside RUN_SPORTS, so the sport filter
+    shields the build today — coerce here so a quoted NaN in a running session can't kill it."""
+    try: f = float(v)
+    except (TypeError, ValueError): return None
+    return f if 30 < f < 220 else None      # NaN fails both comparisons, so it is dropped here too
+
 def hr_series(d):
     ex = (d.get("exercises") or [{}])[0]
     best = []
     for s in (ex.get("samples") or {}).get("samples", []):
         if s.get("type") == "HEART_RATE":
-            vals = [float(v) for v in (s.get("values") or []) if v and 30 < v < 220]
+            vals = [f for f in (_hr_val(v) for v in (s.get("values") or [])) if f is not None]
             if len(vals) > len(best): best = vals
     return best
 
