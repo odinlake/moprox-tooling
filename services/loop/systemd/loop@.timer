@@ -1,0 +1,14 @@
+[Unit]
+Description=Wake the %i loop agent
+
+[Timer]
+# Deliberately slow. These agents are not racing anything, and a long gap is what keeps each wake a
+# FRESH bounded call rather than a de-facto hot loop. Raise the cadence only after the ledger shows
+# the agent earning it.
+OnCalendar=*-*-* *:17:00
+RandomizedDelaySec=300
+# Persistent so a missed window runs once on the next boot instead of silently skipping a day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
