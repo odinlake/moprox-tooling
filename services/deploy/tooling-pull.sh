@@ -33,6 +33,7 @@ say "deployed $before -> $after ($(git log -1 --format=%s | cut -c1-70))"
 # A unit whose code changed keeps running the old module until it restarts (the stale-daemon trap
 # that once cost a false 'valet memory is blocked' report). Restart the long-lived importers only.
 if git diff --name-only "$before" "$after" | grep -qE '^services/(agents|forward)/'; then
-  systemctl restart dispatcher.service telegram-poll.service discord-theming.service 2>/dev/null \
+  # sudo -n: the unit runs as mikael; /etc/sudoers.d/tooling-pull grants exactly this one command.
+  sudo -n systemctl restart dispatcher.service telegram-poll.service discord-theming.service 2>/dev/null \
     && say "restarted agent daemons (services/agents or services/forward changed)"
 fi
