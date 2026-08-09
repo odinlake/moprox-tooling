@@ -13,12 +13,20 @@ set -Eeuo pipefail
 PROD="${PROD:-/opt/moprox-tooling}"
 BRANCH="${BRANCH:-main}"
 LOG="${LOG:-/home/mikael/.local/state/tooling-pull.log}"
-mkdir -p "$(dirname "$LOG")"; exec >>"$LOG" 2>&1
+mkdir -p "$(dirname "$LOG")"
+# Tee rather than redirect. `exec >>"$LOG" 2>&1` sent EVERYTHING to a file, so a failing unit showed
+# up in journald and the incident queue with no reason at all — 13 consecutive failures whose cause
+# ("insufficient permission for adding an object", from a root-owned .git) was only in a file nobody
+# was watching. Repo rule: an unexpected error reaches the journal.
+exec > >(tee -a "$LOG") 2> >(tee -a "$LOG" >&2)
 say() { echo "$(date -Is) $*"; }
+# <3> is the syslog level prefix journald turns into PRIORITY=3, so failures are findable with
+# search_logs(priority=3) across the fleet.
+die() { echo "<3>$(date -Is) $*" >&2; exit 1; }
 
-cd "$PROD" || { say "FATAL: $PROD missing"; exit 1; }
+cd "$PROD" || die "FATAL: $PROD missing"
 before=$(git rev-parse --short HEAD)
-git fetch -q origin "$BRANCH" || { say "WARN: fetch failed"; exit 1; }
+git fetch -q origin "$BRANCH" || die "fetch failed (check ownership of $PROD/.git — a root-owned object blocks the mikael-run unit)"
 after=$(git rev-parse --short "origin/$BRANCH")
 [ "$before" = "$after" ] && exit 0
 
