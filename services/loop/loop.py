@@ -127,6 +127,12 @@ def log_usage(agent, res, outcome):
            "cost_usd": (res or {}).get("total_cost_usd") or 0,
            "turns": (res or {}).get("num_turns"), "ms": (res or {}).get("duration_ms"),
            "in": u.get("input_tokens"), "out": u.get("output_tokens"),
+           # agents/usage.py computes ctx = in + cache_read + cache_write, and run.py writes all
+           # three. This writer used to emit only `in` (the UNCACHED remainder), so usage.py read
+           # the missing keys as 0 and reported loop-analyst's standing context as 47 tokens at
+           # 0% cache — 707 input tokens against 324,716 output over 457 turns. Keep all three.
+           "cache_read": u.get("cache_read_input_tokens", 0),
+           "cache_write": u.get("cache_creation_input_tokens", 0),
            "error": (res or {}).get("is_error")}
     with open(USAGE, "a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -431,6 +437,12 @@ def main():
         f.unlink(missing_ok=True)
 
     res, outcome = run_cycle_agent(agent, prompt)
+    # run_cycle_agent only reports what the HARNESS did to the process (hardcap/stuck). A run the
+    # CLI itself flags as failed comes back outcome="ok" with is_error set — 2026-08-08T08:32:18 was
+    # one: 27.8 min, 1 turn, 0 tokens, $0. That cost nothing, so the budget guard stays quiet too,
+    # and it took no strike, so an unbroken run of them would never reach MAX_STRIKES. Count it.
+    if outcome == "ok" and (res or {}).get("is_error"):
+        outcome = "error"
     log_usage(agent, res, outcome)
 
     if outcome != "ok":
