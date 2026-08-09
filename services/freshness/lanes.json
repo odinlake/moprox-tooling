@@ -6,7 +6,7 @@
     "",
     "This exists because the unit-failure queue only sees units that FAIL. Five of the analyst's",
     "first sixteen findings were the other class: a lane that kept exiting 0 while going quietly",
-    "wrong — notifications silent for 57 h after a flat phone battery, local news 78% unenriched for",
+    "wrong \u2014 notifications silent for 57 h after a flat phone battery, local news 78% unenriched for",
     "21 days, Ultrahuman coverage down to 4 h/day, Amex alerts arriving with no amount in them, the",
     "statement archive ending in a false cliff. Green unit, degenerate data, nobody notified.",
     "",
@@ -15,10 +15,9 @@
     "not 'something is broken'.",
     "",
     "Only lanes whose layout has actually been verified are listed. Declaring a path nobody checked",
-    "is the very failure this file is meant to catch — mail and local-news enrichment are absent for",
+    "is the very failure this file is meant to catch \u2014 mail and local-news enrichment are absent for",
     "exactly that reason."
   ],
-
   "lanes": [
     {
       "name": "notifications",
@@ -34,8 +33,14 @@
       "glob": "~/projects/private-data/notifications/notif-*.jsonl",
       "field": "ts",
       "window_h": 96,
-      "where": {"field": "app", "equals": "com.americanexpress.android.acctsvcs.uk"},
-      "predicate": {"field": "text", "matches": "[0-9]+[.,][0-9]{2}"},
+      "where": {
+        "field": "app",
+        "equals": "com.americanexpress.android.acctsvcs.uk"
+      },
+      "predicate": {
+        "field": "text",
+        "matches": "[0-9]+[.,][0-9]{2}"
+      },
       "min_fraction": 0.5,
       "min_records": 5,
       "note": "Bare 'There was a transaction on your card ending with 11005.' carries no amount, so spend is unrecoverable from this lane. Bare since 2026-08-06."
@@ -61,6 +66,24 @@
       "glob": "~/projects/private-data/polar/incoming/exercise_*.json",
       "max_age_h": 168,
       "note": "Same caveat as technogym-cardio."
+    },
+    {
+      "name": "ultrahuman-coverage",
+      "kind": "jsonl_fraction",
+      "glob": "~/projects/private-data/ultrahuman/daily.jsonl",
+      "field": "date",
+      "window_h": 240,
+      "where": {
+        "field": "hr_span_h",
+        "notnull": true
+      },
+      "predicate": {
+        "field": "hr_span_h",
+        "at_least": 12
+      },
+      "min_fraction": 0.6,
+      "min_records": 4,
+      "note": "Every day was PRESENT with a sleep summary while the HR series behind it was truncated to ~4 h. A row count cannot see that; this can."
     }
   ]
 }

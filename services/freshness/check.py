@@ -103,6 +103,11 @@ def _match(rec, spec):
         return v is not None and re.search(spec["matches"], str(v)) is not None
     if "notnull" in spec:
         return (v is not None) == bool(spec["notnull"])
+    if "at_least" in spec:
+        try:
+            return float(v) >= float(spec["at_least"])
+        except (TypeError, ValueError):
+            return False
     return False
 
 

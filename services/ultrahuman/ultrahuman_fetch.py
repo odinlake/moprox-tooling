@@ -35,7 +35,7 @@ Storage, per the 2026-08-02 sizing (53 KiB/day compact, 8.6 KiB gzipped, ~19 MiB
   --until YYYY-MM-DD  end of the window (default: today)
 """
 import argparse, gzip, json, sys, time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 import requests
@@ -50,6 +50,12 @@ TOKEN_URL = "https://partner.ultrahuman.com/api/partners/oauth/token"
 API       = "https://partner.ultrahuman.com/api/partners/v1/user_data"
 POLITE_S  = 1.2          # gap between day requests — no documented rate limit, so don't find one
 SKEW_S    = 300          # refresh this long before expiry rather than waiting for a 401
+# A day is only FINAL once we fetched it well after the day ended. The cloud lags the ring: on
+# 2026-08-09 a 10:34 fetch returned HR through 04:03 only, and the 19:20 run skipped the day because
+# the file already existed — so every day from 2026-08-02 froze at ~4 h of coverage while the ring
+# was worn and syncing normally. Refetching 08-08 afterwards returned 85 points over 23.9 h: the
+# data was always there, we just never went back for it. 06:00 the next morning is the margin.
+SETTLE_HOUR = 6
 
 
 def env():
@@ -119,6 +125,15 @@ def scalars(d, payload):
     hv = by.get("hrv") or {}
     rec["hrv_avg"] = hv.get("avg") if isinstance(hv, dict) else None
 
+    # Coverage of the intra-day HR series. Recorded because the failure this lane actually had was
+    # not a missing day — every day was present, with a sleep summary, and only the series behind it
+    # was truncated. A freshness check can see this; a row-count cannot.
+    hro = by.get("hr") or {}
+    hrv_ = (hro.get("values") if isinstance(hro, dict) else None) or []
+    tss = [x.get("timestamp") for x in hrv_ if isinstance(x, dict) and x.get("timestamp")]
+    rec["hr_points"] = len(hrv_)
+    rec["hr_span_h"] = round((max(tss) - min(tss)) / 3600.0, 2) if len(tss) > 1 else 0.0
+
     s = by.get("Sleep") or {}
     if isinstance(s, dict):
         rec["bedtime_start"] = s.get("bedtime_start")
@@ -134,6 +149,19 @@ def scalars(d, payload):
         rec["sleep_avg_hr"]  = qm.get("AVG HEART RATE")
         rec["sleep_avg_hrv"] = qm.get("AVG HRV")
     return rec
+
+
+def is_final(f, d):
+    """Was this day fetched late enough that it cannot still be filling in?
+
+    `f.exists()` is NOT the test — that is what froze eight days of partial data. A file written at
+    10:34 on the day itself holds whatever the cloud had by then, which is typically only the
+    overnight stretch.
+    """
+    if not f.exists():
+        return False
+    settled = datetime.combine(d + timedelta(days=1), dtime(SETTLE_HOUR, 0)).timestamp()
+    return f.stat().st_mtime >= settled
 
 
 def main():
@@ -152,7 +180,7 @@ def main():
     days = [since + timedelta(days=i) for i in range((until - since).days + 1)]
     for d in days:
         f = RAW / f"{d.year}" / f"{d.isoformat()}.json.gz"
-        if f.exists() and not a.backfill:
+        if is_final(f, d) and not a.backfill:
             continue
         try:
             payload = fetch_day(bearer, d)
