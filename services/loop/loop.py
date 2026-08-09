@@ -126,7 +126,13 @@ def log_usage(agent, res, outcome):
     rec = {"ts": int(time.time()), "agent": f"loop-{agent}", "outcome": outcome,
            "cost_usd": (res or {}).get("total_cost_usd") or 0,
            "turns": (res or {}).get("num_turns"), "ms": (res or {}).get("duration_ms"),
-           "in": u.get("input_tokens"), "out": u.get("output_tokens"),
+           # All three input counters, because the sole reader (agents/usage.py) computes
+           # ctx = in + cache_read + cache_write. Writing only `in` — the UNCACHED remainder —
+           # reported a fraction of the real context and made the loop look far cheaper per turn
+           # than it is. The estate's own telemetry was the least trustworthy data it held.
+           "in": u.get("input_tokens", 0), "out": u.get("output_tokens", 0),
+           "cache_read": u.get("cache_read_input_tokens", 0),
+           "cache_write": u.get("cache_creation_input_tokens", 0),
            # agents/usage.py computes ctx = in + cache_read + cache_write, and run.py writes all
            # three. This writer used to emit only `in` (the UNCACHED remainder), so usage.py read
            # the missing keys as 0 and reported loop-analyst's standing context as 47 tokens at

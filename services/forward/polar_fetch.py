@@ -18,6 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
+sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/lib"))
+import errlog
 from run import run_agent
 import tg
 import convo
@@ -134,17 +136,27 @@ def main():
         st2, ex = api("/v3/exercises/%s?samples=true" % eid, tok)
         if st2 != 200 or not ex:
             print("polar: fetch %s -> %s" % (eid, st2)); continue
-        hr = hr_from(ex); store_raw(ex, hr); seen.add(eid)
+        hr = hr_from(ex); store_raw(ex, hr)
         mins = len(hr) / 60.0
+        # seen is added at each TERMINAL outcome only. It used to be set next to store_raw, above,
+        # which meant a workout whose post threw was recorded as handled and never retried or
+        # posted again — a transient Telegram failure turned into permanent, silent loss of the
+        # session. Deciding not to post is terminal; failing to post is not.
         if len(hr) < MIN_HR_SECONDS:
-            print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins)); continue
+            print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins))
+            seen.add(eid); continue
         if upload_age_h(ex) > FRESH_WINDOW_H:
-            print("polar: %s stored (backfill) — not posting" % eid); continue
+            print("polar: %s stored (backfill) — not posting" % eid)
+            seen.add(eid); continue
         try:
             cat = post_session(ex, hr); posted += 1
             print("polar: POSTED %s (%s, %s, %.0f min)" % (eid, ex.get("sport"), cat, mins))
+            seen.add(eid)
         except Exception as e:
-            print("polar: post error %s: %s" % (eid, e))
+            # Left OUT of seen so the next run retries. Note the retry is still subject to
+            # FRESH_WINDOW_H above, so a failure that outlives the window stops being postable —
+            # the raw data is kept either way, and this err is now the thing that says so.
+            errlog.err("polar: posting exercise %s failed — left unposted, will retry next run" % eid, e)
     save_seen(seen)
     print("polar: done; posted %d" % posted)
 

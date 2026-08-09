@@ -1,0 +1,66 @@
+{
+  "_doc": [
+    "Per-lane freshness and plausibility checks. A breach logs a journal record with the sink's",
+    "MSGID_LANE_STALE, so it lands in the same incident queue as a systemd unit failure and the",
+    "analyst sees it via open_incidents().",
+    "",
+    "This exists because the unit-failure queue only sees units that FAIL. Five of the analyst's",
+    "first sixteen findings were the other class: a lane that kept exiting 0 while going quietly",
+    "wrong — notifications silent for 57 h after a flat phone battery, local news 78% unenriched for",
+    "21 days, Ultrahuman coverage down to 4 h/day, Amex alerts arriving with no amount in them, the",
+    "statement archive ending in a false cliff. Green unit, degenerate data, nobody notified.",
+    "",
+    "CAVEAT on the training lanes: a lane that is stale and an operator who did not train look",
+    "identical from here. Their windows are deliberately generous, and a breach means 'go and look',",
+    "not 'something is broken'.",
+    "",
+    "Only lanes whose layout has actually been verified are listed. Declaring a path nobody checked",
+    "is the very failure this file is meant to catch — mail and local-news enrichment are absent for",
+    "exactly that reason."
+  ],
+
+  "lanes": [
+    {
+      "name": "notifications",
+      "kind": "jsonl_newest",
+      "glob": "~/projects/private-data/notifications/notif-*.jsonl",
+      "field": "ts",
+      "max_age_h": 24,
+      "note": "The estate's only live Amex source. Went silent 57.1 h on 2026-07-29 (flat phone)."
+    },
+    {
+      "name": "amex-alert-detail",
+      "kind": "jsonl_fraction",
+      "glob": "~/projects/private-data/notifications/notif-*.jsonl",
+      "field": "ts",
+      "window_h": 96,
+      "where": {"field": "app", "equals": "com.americanexpress.android.acctsvcs.uk"},
+      "predicate": {"field": "text", "matches": "[0-9]+[.,][0-9]{2}"},
+      "min_fraction": 0.5,
+      "min_records": 5,
+      "note": "Bare 'There was a transaction on your card ending with 11005.' carries no amount, so spend is unrecoverable from this lane. Bare since 2026-08-06."
+    },
+    {
+      "name": "ultrahuman",
+      "kind": "jsonl_newest",
+      "glob": "~/projects/private-data/ultrahuman/daily.jsonl",
+      "field": "date",
+      "max_age_h": 36,
+      "note": "Ring data. Coverage collapse is a separate problem this check cannot see."
+    },
+    {
+      "name": "technogym-cardio",
+      "kind": "newest_file",
+      "glob": "~/projects/private-data/technogym/cardio/*.json",
+      "max_age_h": 168,
+      "note": "Generous window: no training is indistinguishable from a stalled fetch."
+    },
+    {
+      "name": "polar",
+      "kind": "newest_file",
+      "glob": "~/projects/private-data/polar/incoming/exercise_*.json",
+      "max_age_h": 168,
+      "note": "Same caveat as technogym-cardio."
+    }
+  ]
+}

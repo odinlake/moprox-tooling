@@ -1,0 +1,9 @@
+[Unit]
+Description=Check data lanes for staleness and implausible content
+Documentation=https://github.com/odinlake/moprox-tooling/blob/main/services/freshness/lanes.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/projects/moprox-tooling/services/freshness/check.py
+# Breaches are reported as lane-stale INCIDENTS, not as a unit failure — see check.py. A non-zero
+# exit here therefore means the checker itself is broken, and should be treated as such.
