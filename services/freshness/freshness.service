@@ -4,10 +4,14 @@ Documentation=https://github.com/odinlake/moprox-tooling/blob/main/services/fres
 
 [Service]
 Type=oneshot
-# %h is NOT usable here: in a system unit it resolves to the service MANAGER's home (/root)
-# regardless of User=, so the path must be absolute. This failed exactly that way once.
+# /opt, NOT ~/projects: the home checkout is the shared DEVELOPMENT tree that three sessions and
+# five agents work in, so running production code from it means a feature branch silently changes
+# what production executes — the whole reason tooling-pull.sh maintains /opt. This unit pointed at
+# ~/projects for its first hours and read a stale lane set because of it.
+# The path must also be absolute: %h in a system unit resolves to the MANAGER's home (/root),
+# regardless of User=, and this failed exactly that way once.
 User=mikael
 Group=mikael
-ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/freshness/check.py
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/freshness/check.py
 # Breaches are reported as lane-stale INCIDENTS, not as a unit failure — see check.py. A non-zero
 # exit here therefore means the checker itself is broken, and should be treated as such.
