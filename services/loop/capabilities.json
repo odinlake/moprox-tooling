@@ -1,0 +1,48 @@
+{
+  "_doc": [
+    "What the analyst is SUPPOSED to be able to reach. This file is the declaration; the loop probes",
+    "it at the start of every cycle and reports anything that does not match (see preflight() in",
+    "loop.py).",
+    "",
+    "It exists because the agent spent seventeen cycles with 2 of the estate's 11 MCP servers and a",
+    "job description naming four lanes it had no path to. Nothing failed — a tool you were never",
+    "given does not announce itself, it is simply absent from what you reach for. The only way that",
+    "becomes visible is if something states the intent separately and checks reality against it.",
+    "",
+    "So: when you grant the agent something new, add it HERE too. A capability that is not declared",
+    "is not checked, and an undeclared capability that silently disappears is exactly the failure",
+    "this file is meant to make impossible."
+  ],
+
+  "mcp": {
+    "logview":        "http://logview.lan:8016/mcp",
+    "corpus-search":  "http://mcp-search.lan:8020/mcp",
+    "email-search":   "http://mcp-search.lan:8002/mcp",
+    "docsearch":      "http://mcp-search.lan:8010/mcp",
+    "notif-search":   "http://mcp-search.lan:8013/mcp",
+    "finance-search": "http://mcp-search.lan:8014/mcp",
+    "news-search":    "http://mcp-search.lan:8015/mcp",
+    "mcp-google":     "http://mcp-google.lan:8000/mcp",
+    "agent-write":    "http://mcp-google.lan:8001/mcp",
+    "webscout":       "http://webscout.lan:8003/mcp",
+    "totolo":         "http://totolo.lan:8765/mcp"
+  },
+
+  "paths": [
+    "~/projects/moprox-tooling",
+    "~/projects/private-data",
+    "~/projects/moprox-memory",
+    "~/projects/private-data/polar/incoming",
+    "~/projects/private-data/technogym/cardio",
+    "~/projects/private-data/finance",
+    "~/projects/private-data/ultrahuman",
+    "~/projects/private-data/notifications",
+    "~/projects/private-data/mail",
+    "~/.local/share/moprox/agent-usage.jsonl"
+  ],
+
+  "creds": [
+    "~/.config/claude-dev/telegram.env",
+    "~/.config/claude-dev/telegram-firehose.env"
+  ]
+}

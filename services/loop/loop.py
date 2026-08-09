@@ -316,6 +316,55 @@ def promote(prop, evidence, agent):
     return True
 
 
+CAPS = Path(__file__).resolve().parent / "capabilities.json"
+
+
+def preflight():
+    """Check declared capabilities against reality. Returns a list of human-readable failures.
+
+    The agent cannot notice a tool it was never given — absence has no symptom from the inside. So
+    the intent is declared in capabilities.json and checked from the outside, every cycle. An MCP
+    server counts as reachable if it answers AT ALL: a streamable-http endpoint returns 406 to a
+    bare GET, and 403 is what a Squid block looks like, so any HTTP status means the path is open
+    and only a connection error is a real failure.
+    """
+    import urllib.request, urllib.error
+    try:
+        caps = json.loads(CAPS.read_text())
+    except Exception as exc:
+        err(f"preflight: cannot read {CAPS} — capabilities are unchecked this cycle", exc)
+        return []
+
+    bad = []
+    try:
+        registered = set(json.loads((HOME / ".claude.json").read_text()).get("mcpServers", {}))
+    except Exception as exc:
+        err("preflight: cannot read ~/.claude.json — MCP registration is unchecked", exc)
+        registered = None
+
+    for name, url in (caps.get("mcp") or {}).items():
+        if registered is not None and name not in registered:
+            bad.append(f"MCP {name}: declared but NOT REGISTERED in ~/.claude.json")
+            continue
+        try:
+            urllib.request.urlopen(url, timeout=6)
+        except urllib.error.HTTPError:
+            pass                                    # any status means we reached it
+        except Exception as exc:
+            bad.append(f"MCP {name}: unreachable at {url} ({type(exc).__name__})")
+
+    for raw in (caps.get("paths") or []):
+        if not Path(raw.replace("~", str(HOME), 1)).exists():
+            bad.append(f"path {raw}: declared as a lane but does not exist")
+
+    for raw in (caps.get("creds") or []):
+        f = Path(raw.replace("~", str(HOME), 1))
+        if not f.exists() or f.stat().st_size == 0:
+            bad.append(f"credential {raw}: missing or empty")
+
+    return bad
+
+
 def collect_proposals():
     PROPOSALS.mkdir(parents=True, exist_ok=True)
     out = []
@@ -365,6 +414,18 @@ def main():
         f"Do ONE increment this cycle. Write any proposal as a JSON file in {PROPOSALS} "
         f"(schema in CLAUDE.md). Finish by stating in one line what you did."
     )
+
+    gaps = preflight()
+    if gaps:
+        for g in gaps:
+            err(f"preflight: {g}", RuntimeError("declared capability unavailable"))
+        say(f"preflight: {len(gaps)} declared capabilities unavailable", 4, agent)
+        notify.send("PREFLIGHT — %d declared capabilities unavailable:\n%s"
+                    % (len(gaps), "\n".join("- " + g for g in gaps[:20])), agent)
+        prompt += ("\n\nDEGRADED — these were declared available to you and are NOT:\n"
+                   + "\n".join("- " + g for g in gaps)
+                   + "\nDo not work around them silently; if one blocks the increment you chose, "
+                     "say so as your result and pick something else.")
 
     for f, _ in collect_proposals():      # stale proposals from a killed cycle
         f.unlink(missing_ok=True)
