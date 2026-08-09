@@ -1,20 +1,13 @@
-# Check every data lane for staleness / implausible content. Triggered by freshness.timer.
-# Install to /etc/systemd/system/.
 [Unit]
 Description=Check data lanes for staleness and implausible content
 Documentation=https://github.com/odinlake/moprox-tooling/blob/main/services/freshness/lanes.json
 
 [Service]
 Type=oneshot
-# User/HOME are NOT optional and the ExecStart path is NOT %h. A system unit with no User= runs as
-# root, %h expands to /root, and this unit failed 2/INVALIDARGUMENT on its first fire because
-# /root/projects/moprox-tooling does not exist. Every lane glob in lanes.json is a `~` path too, so
-# a root run that DID find check.py would report all five lanes as "no files match" — five false
-# stale incidents from the one checker whose job is to be trusted. Same three lines as every other
-# unit here (polar-fetch, technogym-fetch, dashboard-update, loop@).
+# %h is NOT usable here: in a system unit it resolves to the service MANAGER's home (/root)
+# regardless of User=, so the path must be absolute. This failed exactly that way once.
 User=mikael
-Environment=HOME=/home/mikael
-Environment=PYTHONUNBUFFERED=1
+Group=mikael
 ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/freshness/check.py
 # Breaches are reported as lane-stale INCIDENTS, not as a unit failure — see check.py. A non-zero
 # exit here therefore means the checker itself is broken, and should be treated as such.
