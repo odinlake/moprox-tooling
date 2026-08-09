@@ -43,6 +43,8 @@ BUDGET_H     = float(os.environ.get("LOOP_BUDGET_WINDOW_H", 5))   # Max plan res
 BUDGET_CAP   = float(os.environ.get("LOOP_BUDGET_CAP_USD", 8.0))  # loop's own share of that window
 MAX_STRIKES  = int(os.environ.get("LOOP_MAX_STRIKES", 3))     # consecutive bad cycles before halting
 VERIFY_MAX_S = int(os.environ.get("LOOP_VERIFY_MAX_S", 300))
+ADVERSARIAL  = os.environ.get("LOOP_ADVERSARIAL", "1") != "0"
+REFUTE_MAX_S = int(os.environ.get("LOOP_REFUTE_MAX_S", 420))
 
 # Server-level MCP grants: `mcp__<server>` allows every tool that server exposes. Naming tools
 # individually is how the analyst ended up with 2 of the estate's 11 servers and a job
@@ -289,6 +291,86 @@ def verify(prop, agent):
     return ok, _clip(out, 200)
 
 
+# Two lenses, deliberately different. A verifier the agent wrote can pass for two unrelated
+# reasons: the CHECK is hollow (it does not actually test the claim), or the CHECK is fine but the
+# CLAIM says more than the evidence supports. One skeptic asked twice catches the first kind twice
+# and the second kind never, so the lenses are split along that seam.
+LENSES = [
+    ("check", "Does the verifier actually test the stated claim? Look for: an `expect` string that "
+              "would appear whatever the data said; a script that recomputes something narrower "
+              "than the claim; hard-coded values; a filter that quietly selects the confirming "
+              "cases; arithmetic that cannot come out any other way."),
+    ("claim", "Is the claim's inference sound given the evidence produced? Look for: correlation "
+              "stated as mechanism; a changepoint that is one of many equally good ones; n too "
+              "small for the confidence expressed; the non-matching cases never examined; a "
+              "generalisation wider than the window actually measured."),
+]
+
+
+def refute(prop, evidence, lens, agent):
+    """Spawn one independent skeptic. Returns a defect string, or None if it found nothing.
+
+    Read-oriented tools only, and it is told plainly that vague doubt is not refutation — an
+    adversary that can reject on a feeling rejects everything, which is as useless as accepting
+    everything. It must name something specific and checkable.
+    """
+    name, focus = lens
+    prompt = (
+        f"You are auditing another agent's finding. Your job is to REFUTE it if it is refutable.\n\n"
+        f"CLAIM: {prop.get('claim')}\n\nWHY IT MATTERS: {prop.get('why')}\n\n"
+        f"EXPECTED SUBSTRING: {prop.get('expect')}\n\n"
+        f"THE VERIFIER THAT PASSED:\n```python\n{str(prop.get('verify'))[:6000]}\n```\n\n"
+        f"ITS OUTPUT:\n{_clip(evidence, 1500)}\n\n"
+        f"YOUR LENS — {name}: {focus}\n\n"
+        f"You may read files and run read-only commands to check. Change nothing.\n"
+        f"Only refute if you can name a SPECIFIC, CHECKABLE defect — say what is wrong and how you "
+        f"know. Vague doubt, 'more data would help', and style objections are NOT refutations; if "
+        f"the finding survives your lens, say so.\n\n"
+        f"Your last line must be exactly one JSON object and nothing else:\n"
+        f'{{"refuted": true|false, "defect": "one sentence, empty if not refuted"}}'
+    )
+    cmd = [CLAUDE, "-p", prompt, "--permission-mode", "bypassPermissions",
+           "--allowedTools", "Read,Grep,Glob,Bash,mcp__logview,mcp__corpus-search",
+           "--add-dir", str(HOME / "projects/moprox-tooling"),
+           str(HOME / "projects/private-data"), str(HOME / "projects/moprox-memory")]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=REFUTE_MAX_S,
+                           stdin=subprocess.DEVNULL, cwd=str(HOME))
+    except subprocess.TimeoutExpired:
+        warn(f"refuter[{name}] timed out after {REFUTE_MAX_S}s — claim not audited on this lens")
+        return None
+    out = (r.stdout or "").strip()
+    if r.returncode != 0:
+        err(f"refuter[{name}] exited {r.returncode} — claim not audited on this lens",
+            RuntimeError(_clip(r.stderr or out, 200)))
+        return None
+    i, j = out.rfind("{"), out.rfind("}")
+    if i < 0 or j <= i:
+        warn(f"refuter[{name}] returned no JSON verdict — treating as no objection")
+        return None
+    try:
+        v = json.loads(out[i:j + 1])
+    except Exception as exc:
+        warn(f"refuter[{name}] verdict was not valid JSON ({exc}) — treating as no objection")
+        return None
+    if v.get("refuted") and str(v.get("defect", "")).strip():
+        return f"[{name}] {_clip(str(v['defect']).strip(), 300)}"
+    return None
+
+
+def adversarial(prop, evidence, agent):
+    """Run every lens. Returns the objections raised, empty if the finding survived."""
+    if not ADVERSARIAL:
+        return []
+    objections = []
+    for lens in LENSES:
+        d = refute(prop, evidence, lens, agent)
+        say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
+        if d:
+            objections.append(d)
+    return objections
+
+
 def promote(prop, evidence, agent):
     """Land a VERIFIED finding as a memory fact + journal line, then push.
 
@@ -422,7 +504,10 @@ def main():
     prompt = (
         f"Loop cycle {cyc}. Your standing instructions are in CLAUDE.md — follow them.\n\n"
         f"LEDGER (your durable state; do not re-derive what is already here):\n"
-        f"{json.dumps({k: led.get(k) for k in ('open','tried','accepted','inflight')}, indent=1)[:6000]}\n\n"
+        f"{json.dumps({k: led.get(k) for k in ('open','tried','accepted','disputed','inflight')}, indent=1)[:7000]}\n\n"
+        f"Anything under 'disputed' passed its own verifier and was then refuted by an "
+        f"independent audit; it is NOT published. Answering an objection — by fixing the check, "
+        f"narrowing the claim, or showing the objection wrong — is a legitimate increment.\n\n"
         f"Do ONE increment this cycle. Write any proposal as a JSON file in {PROPOSALS} "
         f"(schema in CLAUDE.md). Finish by stating in one line what you did."
     )
@@ -459,15 +544,30 @@ def main():
         notify.send(f"cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", agent)
         return 1
 
-    accepted = rejected = 0
+    accepted = rejected = disputed = 0
     for f, prop in collect_proposals():
         ok, detail = verify(prop, agent)
         claim = _clip(prop.get("claim", "?"), 90)
         if ok:
+            say(f"✓ verify PASS  {claim}  [{detail}]", 6, agent)
+            objections = adversarial(prop, detail, agent)
+            if objections:
+                # DISPUTED, not rejected. A rejected claim goes to `tried`, which the agent is told
+                # is finished work — so filing an unresolved objection there would bury a possibly
+                # true finding behind a door marked "already answered". Disputed claims come back
+                # in the prompt as an objection to ANSWER, which is the useful thing to do with one.
+                disputed += 1
+                led.setdefault("disputed", []).append(
+                    {"cycle": cyc, "claim": prop.get("claim"), "evidence": detail,
+                     "objections": objections})
+                say(f"⚑ DISPUTED  {claim}", 4, agent)
+                notify.send("DISPUTED — the verifier passed but the audit objected\n%s\n\n%s"
+                            % (prop.get("claim", "?"), "\n".join(objections)), agent)
+                f.unlink(missing_ok=True)
+                continue
             accepted += 1
             led.setdefault("accepted", []).append({"cycle": cyc, "claim": prop.get("claim"),
                                                    "evidence": detail})
-            say(f"✓ verify PASS  {claim}  [{detail}]", 6, agent)
             if promote(prop, detail, agent):
                 say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
             notify.send("FINDING (verified)\n%s\n\nwhy: %s\nevidence: %s"
@@ -481,24 +581,25 @@ def main():
         f.unlink(missing_ok=True)
 
     # A cycle that produced nothing is not a failure, but a run of them means back off.
-    led["strikes"] = 0 if (accepted or rejected) else led.get("strikes", 0)
+    led["strikes"] = 0 if (accepted or rejected or disputed) else led.get("strikes", 0)
     led["inflight"] = None
     led["tried"] = led.get("tried", [])[-200:]
     led["accepted"] = led.get("accepted", [])[-200:]
+    led["disputed"] = led.get("disputed", [])[-50:]
     save_ledger(led)
 
     cost = (res or {}).get("total_cost_usd") or 0
     turns = (res or {}).get("num_turns") or 0
     secs = int(((res or {}).get("duration_ms") or 0) / 1000)
-    say(f"▸ cycle {cyc} done · {accepted} accepted, {rejected} rejected · "
+    say(f"▸ cycle {cyc} done · {accepted} accepted, {disputed} disputed, {rejected} rejected · "
         f"${cost:.2f} · {turns} turns · {secs//60}m{secs%60:02d}s", 6, agent)
 
     # Report the cycle's own last line. A cycle that found nothing still reports: silence is what
     # made thirteen toolless cycles invisible, and "nothing worth doing" is a legitimate result the
     # operator is entitled to see. Only rejected-only cycles stay quiet-ish — they still say so.
     closing = _clip((res or {}).get("result") or "(no closing line)", 600)
-    notify.send("cycle %d · %d accepted, %d rejected · $%.2f · %dm%02ds\n\n%s"
-                % (cyc, accepted, rejected, cost, secs // 60, secs % 60, closing), agent)
+    notify.send("cycle %d · %d accepted, %d disputed, %d rejected · $%.2f · %dm%02ds\n\n%s"
+                % (cyc, accepted, disputed, rejected, cost, secs // 60, secs % 60, closing), agent)
     return 0
 
 
