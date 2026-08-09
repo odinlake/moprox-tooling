@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from errlog import err, warn, Skips        # repo hard rule: no silent errors
+import notify                              # the loop's one outward voice (firehose group)
 
 HOME     = Path.home()
 STATE    = HOME / ".local/share/moprox/loop"
@@ -43,13 +44,14 @@ BUDGET_CAP   = float(os.environ.get("LOOP_BUDGET_CAP_USD", 8.0))  # loop's own s
 MAX_STRIKES  = int(os.environ.get("LOOP_MAX_STRIKES", 3))     # consecutive bad cycles before halting
 VERIFY_MAX_S = int(os.environ.get("LOOP_VERIFY_MAX_S", 300))
 
-# Read tools from the log lane are allowed; acknowledge_incident deliberately is NOT. Reading the
-# queue is investigation; acking is DISPOSAL — silencing an incident is exactly the kind of act
-# the propose-don't-dispose rule reserves for a human or a verified finding.
+# Server-level MCP grants: `mcp__<server>` allows every tool that server exposes. Naming tools
+# individually is how the analyst ended up with 2 of the estate's 11 servers and a job
+# description citing lanes it could not open — an allowlist quietly became a capability policy
+# nobody had reviewed. If a server should be off limits, remove it here deliberately.
 TOOLS = ("Bash,Read,Write,Edit,Grep,Glob,WebSearch,WebFetch,Task,TodoWrite,NotebookEdit,"
-         "mcp__logview__search_logs,mcp__logview__open_incidents,"
-         "mcp__logview__get_incident_detail,mcp__logview__log_facets,"
-         "mcp__corpus-search__search,mcp__corpus-search__list_corpora")
+         "mcp__logview,mcp__corpus-search,mcp__mcp-google,mcp__agent-write,"
+         "mcp__email-search,mcp__docsearch,mcp__notif-search,mcp__finance-search,"
+         "mcp__news-search,mcp__webscout,mcp__totolo")
 
 
 # --- journal-friendly output ------------------------------------------------
@@ -336,8 +338,10 @@ def main():
 
     led = load_ledger()
     if led.get("strikes", 0) >= MAX_STRIKES:
-        say(f"halted: {led['strikes']} consecutive bad cycles. Investigate, then "
-            f"reset 'strikes' in {LEDGER}", 3, agent)
+        msg = (f"HALTED after {led['strikes']} consecutive bad cycles. Nothing will run until "
+               f"'strikes' is reset in {LEDGER}.")
+        say(msg, 3, agent)
+        notify.send(msg, agent)
         return 0
 
     spent = spent_recently(BUDGET_H)
@@ -373,6 +377,7 @@ def main():
         led["inflight"] = inflight or f"cycle {cyc} ({outcome})"
         save_ledger(led)
         say(f"✗ cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", 4, agent)
+        notify.send(f"cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", agent)
         return 1
 
     accepted = rejected = 0
@@ -386,6 +391,9 @@ def main():
             say(f"✓ verify PASS  {claim}  [{detail}]", 6, agent)
             if promote(prop, detail, agent):
                 say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
+            notify.send("FINDING (verified)\n%s\n\nwhy: %s\nevidence: %s"
+                        % (prop.get("claim", "?"), _clip(prop.get("why", ""), 400),
+                           _clip(detail, 300)), agent)
         else:
             rejected += 1
             led.setdefault("tried", []).append({"cycle": cyc, "claim": prop.get("claim"),
@@ -405,6 +413,13 @@ def main():
     secs = int(((res or {}).get("duration_ms") or 0) / 1000)
     say(f"▸ cycle {cyc} done · {accepted} accepted, {rejected} rejected · "
         f"${cost:.2f} · {turns} turns · {secs//60}m{secs%60:02d}s", 6, agent)
+
+    # Report the cycle's own last line. A cycle that found nothing still reports: silence is what
+    # made thirteen toolless cycles invisible, and "nothing worth doing" is a legitimate result the
+    # operator is entitled to see. Only rejected-only cycles stay quiet-ish — they still say so.
+    closing = _clip((res or {}).get("result") or "(no closing line)", 600)
+    notify.send("cycle %d · %d accepted, %d rejected · $%.2f · %dm%02ds\n\n%s"
+                % (cyc, accepted, rejected, cost, secs // 60, secs % 60, closing), agent)
     return 0
 
 
