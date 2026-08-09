@@ -472,9 +472,35 @@ def collect_proposals():
     return out
 
 
+REPOS = ("projects/moprox-tooling", "projects/private-data", "projects/moprox-memory")
+
+
+def refresh_repos():
+    """Bring the agent's repos to origin before the cycle reads its own instructions from them.
+
+    There is no pull timer on this box, so for a while the harness and the agent's CLAUDE.md only
+    changed when a human happened to pull by hand — a cycle could run against week-old instructions
+    and nothing would say so. Doing it here rather than on a timer ties the refresh to the moment it
+    matters and removes the race with a cycle already in flight.
+
+    --rebase, never reset --hard: the agent legitimately commits and pushes to these trees, and
+    discarding an unpushed finding to save a pull would be worse than running slightly stale.
+    """
+    for rel in REPOS:
+        d = HOME / rel
+        if not (d / ".git").exists():
+            continue
+        r = subprocess.run(["git", "pull", "-q", "--rebase"], cwd=str(d),
+                           capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            err(f"refresh: `git pull --rebase` failed in {rel} — this cycle runs on a stale tree",
+                RuntimeError(_clip(r.stderr or r.stdout, 200)))
+
+
 def main():
     agent = sys.argv[1] if len(sys.argv) > 1 else "analyst"
     STATE.mkdir(parents=True, exist_ok=True)
+    refresh_repos()
 
     if STOP.exists():
         say("STOP flag present — not running", 4, agent); return 0
@@ -559,6 +585,7 @@ def main():
                 disputed += 1
                 led.setdefault("disputed", []).append(
                     {"cycle": cyc, "claim": prop.get("claim"), "evidence": detail,
+                     "verify": _clip(str(prop.get("verify") or ""), 4000),
                      "objections": objections})
                 say(f"⚑ DISPUTED  {claim}", 4, agent)
                 notify.send("DISPUTED — the verifier passed but the audit objected\n%s\n\n%s"
@@ -566,8 +593,12 @@ def main():
                 f.unlink(missing_ok=True)
                 continue
             accepted += 1
-            led.setdefault("accepted", []).append({"cycle": cyc, "claim": prop.get("claim"),
-                                                   "evidence": detail})
+            led.setdefault("accepted", []).append(
+                {"cycle": cyc, "claim": prop.get("claim"), "evidence": detail,
+                 # Kept so a later audit can see what was actually run. Without it a retro-audit
+                 # has to reconstruct the check from the claim, which is exactly the guesswork the
+                 # verifier exists to remove.
+                 "verify": _clip(str(prop.get("verify") or ""), 4000)})
             if promote(prop, detail, agent):
                 say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
             notify.send("FINDING (verified)\n%s\n\nwhy: %s\nevidence: %s"
