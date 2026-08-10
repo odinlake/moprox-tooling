@@ -13,4 +13,4 @@ if [[ ! -s "$MEMORY_DIR/CONFLICTS.md" && -z "$(find "$MEMORY_DIR/journals" -name
 fi
 exec claude -p "$(cat "$HERE/steward-prompt.md")" \
   --permission-mode bypassPermissions \
-  --max-turns 40
+  --max-turns 120

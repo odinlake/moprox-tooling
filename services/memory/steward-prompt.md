@@ -24,5 +24,11 @@ Do, in order:
    this period (from `CHANGES.md`), what you merged/resolved/demoted, and anything that looks like it
    needs the operator's attention. Keep it under ~25 lines.
 
+**Work in priority order, and do not try to finish everything.** Conflicts first, then merges, then
+demotions, then the digest. You have a bounded number of turns; a pass that does the three most
+valuable things and stops cleanly is a SUCCESS, and one that dies partway through trying to do
+everything leaves the digest stale and the unit failed. If you run short, do the digest anyway — it
+is the part a human reads — and name what you left undone so the next pass starts there.
+
 Make only the edits above. Do not touch MEMORY.md / CHANGES.md / .reconcile-state.json (the reconciler
 rebuilds them). When done, stop — output a one-line summary of what you changed.
