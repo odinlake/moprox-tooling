@@ -16,6 +16,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import errlog
 
 CARDIO = os.path.expanduser("~/projects/private-data/technogym/cardio")
+# Sessions the operator has positively identified as not theirs. The account picks these up when a
+# machine is left logged in, and deleting them in the Technogym app does not remove them from the
+# API — verified 2026-08-10: all 102 stored sessions still return, idCr sequence unbroken. So the
+# exclusion has to live here. This is a statement of fact by the operator and outranks every
+# heuristic; the HR-agreement test stays as the net for ones nobody has noticed yet.
+EXCLUDE = os.path.expanduser("~/projects/private-data/technogym/not-mine.json")
 END_SEMANTICS_MAX_IDCR = 1012      # <= this: startedOn is the END of the session
 MATCH_TOLERANCE_S = 420            # 7 min: clocks drift, and the watch rarely starts with the belt
 # Start time ALONE is not enough to prove two records are the same session, but DURATION cannot be
@@ -65,8 +71,20 @@ def _parse_dt(s):
     return None
 
 
+def _excluded():
+    try:
+        with open(EXCLUDE) as f:
+            return {int(k) for k in (json.load(f).get("idCr") or [])}
+    except FileNotFoundError:
+        return set()
+    except Exception as exc:
+        errlog.err(f"technogym: cannot read {EXCLUDE} — foreign sessions will NOT be excluded", exc)
+        return set()
+
+
 def load_sessions():
     """[{start, dur_s, speed, idCr}] sorted by start. Empty list if the lane is absent."""
+    skip = _excluded()
     out = []
     for f in sorted(glob.glob(os.path.join(CARDIO, "*.json"))):
         try:
@@ -80,6 +98,8 @@ def load_sessions():
             if not when or dur <= 0:
                 continue
             idcr = int(d.get("idCr") or 0)
+            if idcr in skip:
+                continue
             start = when - timedelta(seconds=dur) if idcr <= END_SEMANTICS_MAX_IDCR else when
             out.append({"start": start, "dur_s": dur, "idCr": idcr,
                         "speed": [(float(t), float(v)) for t, v in (a.get("speed_kph") or [])]})
