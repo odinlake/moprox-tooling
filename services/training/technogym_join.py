@@ -22,6 +22,7 @@ WARMUP_KPH = 6.0                   # at or below this we are walking/standing, n
 # survive it (both edges shift together) but TIMING does not, which matters for any alignment
 # against HR. Applied in _segments().
 BELT_LEAD_S_PER_KPH = 1.0
+SPREAD_KPH = 1.5                   # a run spanning more than this is a progression, not one pace
 MIN_HOLD_S = 20.0                  # a speed must be HELD this long to be a real segment. The belt
                                    # settles over the first second or two of every rep (14.0, 13.8,
                                    # 13.3, 13.5) and ramps 0->9 in 1 s steps at the start; counting
@@ -106,23 +107,47 @@ def _segments(speed, dur_s):
 
 
 def summarise(belt):
-    """-> {'speeds': '15/8', 'reps': 10, 'work_kph': 15.0, 'rec_kph': 8.0, 'work_s': 60}
+    """-> {'speeds': '15/8', 'reps': 10, 'work_kph': 15.0, 'rec_kph': 8.0, 'work_s': 60, 'rec_s': 120}
 
     The label is what the operator would say about the session, not a statistic: one number for a
-    steady run, work/recovery for an interval session.
+    steady run, a range for a progression, work/recovery for intervals.
     """
     segs = _segments(belt["speed"], belt["dur_s"])
     train = [(v, h) for v, h in segs if v > WARMUP_KPH]
     if not train:
         return None
-    top = max(v for v, _ in train)
+    def dominant_of(items):
+        by = {}
+        for v, h in items:
+            by[v] = by.get(v, 0.0) + h
+        return max(by.items(), key=lambda kv: kv[1])[0] if by else None
 
-    # A "work" segment sits within 1 kph of the fastest sustained speed. Intervals alternate; a
-    # steady run does not. 1 kph is deliberate: today's first rep ran at 16 against 15 for the rest,
-    # and calling that a different kind of effort would be wrong.
-    work = [(v, h) for v, h in train if v >= top - 1.0]
-    rest = [(v, h) for v, h in train if v < top - 1.0]
-    reps = len(work)
+    # The work speed is the one the athlete spent the most TIME at among the fast band — not simply
+    # the fastest segment. A single 90 s burst at 16 kph at the end of a 5x4min session at 14 would
+    # otherwise become "top", push the real reps outside the work window, and the whole session would
+    # degrade to a range. Time-dominance is what makes the label describe the session.
+    fastest = max(v for v, _ in train)
+    top = dominant_of([(v, h) for v, h in train if v >= fastest - 2.5]) or fastest
+
+    # A "work" segment sits within 1 kph of that. 1 kph is deliberate: an opening rep at 16 against
+    # 15 for the rest is the same kind of effort, not a different one.
+    def is_work(v):
+        return v >= top - 1.0
+
+    # Collapse into consecutive runs of the same kind. Intervals ALTERNATE; a progression run does
+    # not, and without this check one — belt ramping 9.0 -> 12.0 over 27 min — was reported as
+    # "3x 11/10kph", inventing an interval session out of a steady climb. Grouping first means three
+    # rising speeds in a row count as ONE effort, which is what they were.
+    runs = []
+    for v, h in train:
+        kind = "w" if is_work(v) else "r"
+        if runs and runs[-1][0] == kind:
+            runs[-1][1].append((v, h))
+        else:
+            runs.append([kind, [(v, h)]])
+
+    w_at = [i for i, r in enumerate(runs) if r[0] == "w"]
+    reps = len(w_at)
 
     def dominant(items):
         by = {}
@@ -130,24 +155,40 @@ def summarise(belt):
             by[v] = by.get(v, 0.0) + h
         return max(by.items(), key=lambda kv: kv[1])[0] if by else None
 
-    wk = dominant(work)
-    rc = dominant(rest)
-
-    def med(items):
-        hs = sorted(h for _, h in items)
-        return hs[len(hs) // 2] if hs else None
-
-    med_work_s, med_rec_s = med(work), med(rest)
+    def med(vals):
+        vals = sorted(vals)
+        return vals[len(vals) // 2] if vals else None
 
     def fmt(v):
         return ("%g" % round(v, 1)) if v is not None else ""
 
-    if reps >= 3 and rc is not None:
-        label = "%s/%s" % (fmt(wk), fmt(rc))
-    else:
-        label = fmt(dominant(train))
-        reps = 0                          # steady effort: no interval count to report
-    return {"speeds": label, "reps": reps, "work_kph": wk, "rec_kph": rc,
-            "work_s": int(round(med_work_s)) if med_work_s else None,
-            "rec_s": int(round(med_rec_s)) if (med_rec_s and reps) else None,
-            "idCr": belt["idCr"]}
+    # Only the recoveries BETWEEN two work efforts count. The warm-up before the first rep and the
+    # cool-down after the last often sit at exactly the recovery speed — 8 kph either side of 8 kph
+    # recoveries — and including them pushed a 2 min recovery to a reported 3.3 min.
+    if reps >= 3:
+        inner = [runs[i] for i in range(w_at[0] + 1, w_at[-1]) if runs[i][0] == "r"]
+        work_pairs = [p for i in w_at for p in runs[i][1]]
+        rest_pairs = [p for r in inner for p in r[1]]
+        if rest_pairs:
+            return {"speeds": "%s/%s" % (fmt(dominant(work_pairs)), fmt(dominant(rest_pairs))),
+                    "reps": reps,
+                    "work_kph": dominant(work_pairs), "rec_kph": dominant(rest_pairs),
+                    "work_s": int(round(med([sum(h for _, h in runs[i][1]) for i in w_at]))),
+                    "rec_s": int(round(med([sum(h for _, h in r[1]) for r in inner]))),
+                    "idCr": belt["idCr"]}
+
+    # Not intervallic. Trim a leading or trailing segment that is SLOWER than the session's main
+    # speed — that is the warm-up and the cool-down, and they are not part of what was run. Without
+    # this a tempo session shaped 8 / 11 / 8 reported itself as the progression "8-11" when it was
+    # simply half an hour at 11.
+    body = list(train)
+    main = dominant(body)
+    while len(body) > 1 and body[0][0] < main:
+        body.pop(0)
+    while len(body) > 1 and body[-1][0] < main:
+        body.pop()
+
+    lo, hi = min(v for v, _ in body), max(v for v, _ in body)
+    label = "%s\u2013%s" % (fmt(lo), fmt(hi)) if (hi - lo) > SPREAD_KPH else fmt(dominant(body))
+    return {"speeds": label, "reps": 0, "work_kph": dominant(body), "rec_kph": None,
+            "work_s": None, "rec_s": None, "idCr": belt["idCr"]}
