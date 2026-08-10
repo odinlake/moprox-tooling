@@ -39,6 +39,14 @@
   th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--bd)}
   th{color:var(--mut);font-weight:500;font-size:.8rem}
   table.compact th,table.compact td{padding:.16rem .45rem;font-size:.82rem}
+  /* the session list is the densest table on the page and is read as a block, so it goes tighter */
+  table.sess th,table.sess td{padding:.1rem .34rem;font-size:.76rem;line-height:1.25}
+  table.sess th{font-size:.68rem}
+  table.sess .badge{font-size:.68rem;padding:0 .28rem}
+  /* A value nobody corroborated sits in the same column as a measured one, so it has to look
+     different: small, italic, muted. Measured values are plain. */
+  .est{font-size:.82em;font-style:italic;color:var(--mut)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
   .spark{display:block}
   .badge{display:inline-block;padding:.02rem .32rem;border-radius:4px;font-size:.68rem;font-weight:500;letter-spacing:.02em;border:1px solid currentColor;background:transparent;line-height:1.5;vertical-align:middle}
   .src{display:inline-block;font-size:.56rem;color:var(--mut);border:1px solid var(--bd);border-radius:3px;padding:0 .18rem;margin-left:.3rem;vertical-align:middle;letter-spacing:.02em}
@@ -282,8 +290,11 @@ async function loadTraining(){
     <div class="panel" id="m10panel" style="margin-top:1rem"></div>
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px">
-        <div style="max-height:560px;overflow:auto"><table class="compact">
-        <thead><tr><th>day</th><th style="text-align:center">type</th><th>dur</th><th>avg</th><th>max</th><th>trace</th></tr></thead>
+        <div style="max-height:560px;overflow:auto"><table class="compact sess">
+        <thead><tr><th>day</th><th style="text-align:center">type</th>
+          <th title="Belt speeds: work/recovery in kph. Italic = estimated from similar sessions, not corroborated.">spd</th>
+          <th class="num" title="Work intervals. Italic = inferred from heart rate only.">int</th>
+          <th class="num">dur</th><th class="num">avg</th><th class="num">max</th><th>trace</th></tr></thead>
         <tbody id="slist"></tbody></table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Selected session details</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
@@ -291,6 +302,10 @@ async function loadTraining(){
   const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
   const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
     return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};
+  // Measured (belt) or stated (operator) prints plain; anything else prints as a visible guess.
+  const cell = (v, src) => v==null||v==="" ? "" :
+    (src==="technogym"||src==="operator") ? `<span title="${src}">${v}</span>`
+                                          : `<span class="est" title="estimated — not corroborated">${v}</span>`;
   const render = idx => {
     curCut=Date.now()-WINS[idx][0]*86400*1000;
     S=all.filter(s=>new Date(s.date).getTime()>=curCut);
@@ -372,10 +387,12 @@ async function loadTraining(){
     $("#tfoot").textContent=`${Sf.length} of ${all.length} since ${all[all.length-1].date.slice(0,10)}`;
     let cmy=null,html="";                                 // month-grouped table (filtered)
     Sf.forEach((s,i)=>{const dt=new Date(s.date);const my=dt.toLocaleString('en-GB',{month:'long',year:'numeric'});
-      if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="6">${my}</td></tr>`;}
+      if(my!==cmy){cmy=my;html+=`<tr class="mhead"><td colspan="8">${my}</td></tr>`;}
       html+=`<tr class="sessrow" data-i="${i}"><td style="white-space:nowrap">${WD[dt.getDay()]} ${ord(dt.getDate())}</td>
         <td style="text-align:center"><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span>${srcChip(s)}</td>
-        <td>${s.dur_min.toFixed(0)}m</td><td>${s.hr_avg}</td><td>${s.hr_max}</td>
+        <td>${cell(s.spd, s.spd_src)}</td>
+        <td class="num">${s.nint ? cell(s.nint, s.nint_src) : ""}</td>
+        <td class="num">${s.dur_min.toFixed(0)}m</td><td class="num">${s.hr_avg}</td><td class="num">${s.hr_max}</td>
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
     $("#ovpanel").innerHTML = Sf.length ? overlayChart(Sf) : '<p class="muted">No sessions match.</p>';   // count is overlaid on the chart
@@ -395,7 +412,7 @@ function showDetail(s){
   const tr=s.trace, t=tr.map((_,i)=>i);
   const marks=s.reps.map(r=>({i:Math.round(r.t*(tr.length-1)),v:r.peak,c:CAT[s.cat]}));
   const repTable = s.reps.length ? `<table style="margin-top:.6rem"><tr><th>#</th><th>peak</th><th>recovery↓</th><th>work</th></tr>
-     ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough}</td><td>${r.work_s}s</td></tr>`).join("")}</table>` : "";
+     ${s.reps.map((r,i)=>`<tr><td>${i+1}</td><td>${r.peak}</td><td>${r.trough==null?'<span class="muted">—</span>':r.trough}</td><td>${r.work_s==null?'<span class="muted">—</span>':r.work_s+'s'}</td></tr>`).join("")}</table>` : "";
   const st=new Date(s.date), en=new Date(st.getTime()+s.dur_min*60000);
   $("#detail").innerHTML = `<h2>Selected session details</h2>
     <div class="row" style="justify-content:space-between"><span><span class="badge" style="color:${CAT[s.cat]}">${s.cat}</span>${srcChip(s)} ${s.date.slice(0,10)} <span class="muted">${hm(st.getTime()/1000)}–${hm(en.getTime()/1000)}</span> ${s.dur_min.toFixed(0)} min</span>

@@ -55,6 +55,58 @@ def downsample(x, n):
     step = len(x) / n
     return [round(float(np.mean(x[int(i*step):max(int(i*step)+1, int((i+1)*step))]))) for i in range(n)]
 
+SPEED_OVERRIDES = os.path.expanduser("~/projects/private-data/training/speed-overrides.json")
+
+
+def attach_speeds(sessions):
+    """Add speeds / n-intervals to each session, and say WHERE each came from.
+
+    Three tiers, and the dashboard renders the weak one differently on purpose:
+      operator   - the athlete said so in chat (speed-overrides.json). Authoritative.
+      technogym  - the belt's own record of what it was asked to do. Measured.
+      est        - nothing corroborates it: the speed is the median of CORROBORATED sessions of the
+                   same category, and the rep count is the HR detector's inference.
+
+    An estimate is shown in the same column as a measurement, so it has to announce itself — see
+    `spd_src` / `nint_src`, which the table renders in small italic.
+    """
+    try:
+        import technogym_join as TG
+    except Exception as exc:
+        errlog.err("build.py: technogym_join unavailable — no session will carry belt speeds", exc)
+        return
+    belts = TG.load_sessions()
+    try:
+        overrides = json.load(open(SPEED_OVERRIDES)) if os.path.exists(SPEED_OVERRIDES) else {}
+    except Exception as exc:
+        errlog.err(f"build.py: cannot read {SPEED_OVERRIDES} — operator corrections ignored", exc)
+        overrides = {}
+
+    for s in sessions:
+        s["spd"], s["spd_src"], s["nint_src"] = None, None, "est"
+        b = TG.match(belts, s.get("date", ""), s.get("dur_min"))
+        if b:
+            info = TG.summarise(b)
+            if info and info["speeds"]:
+                s["spd"], s["spd_src"] = info["speeds"], "technogym"
+                if info["reps"]:
+                    s["nint"], s["nint_src"] = info["reps"], "technogym"
+        o = overrides.get(s.get("date", "")[:19]) or overrides.get(s.get("date", "")[:10])
+        if o:                                    # the athlete outranks the machine
+            if o.get("speeds"): s["spd"], s["spd_src"] = o["speeds"], "operator"
+            if o.get("reps"):   s["nint"], s["nint_src"] = int(o["reps"]), "operator"
+
+    # Fill the gaps from what the corroborated sessions of the same category actually ran.
+    by_cat = {}
+    for s in sessions:
+        if s.get("spd_src") in ("technogym", "operator") and s.get("spd"):
+            by_cat.setdefault(s["cat"], []).append(s["spd"])
+    prior = {c: max(set(v), key=v.count) for c, v in by_cat.items()}      # most common label
+    for s in sessions:
+        if not s.get("spd") and prior.get(s["cat"]):
+            s["spd"], s["spd_src"] = prior[s["cat"]], "est"
+
+
 def make_session(hr, sport, date, sid, sess_id, source="polar"):
     """Classify one running session's per-second HR into the public-safe dashboard record, or None."""
     if len(hr) < 60: return None
@@ -69,11 +121,20 @@ def make_session(hr, sport, date, sid, sess_id, source="polar"):
     if cat in ("speed", "vo2max") and len(res.get("peaks_min", [])):
         blen = max(1.0, len(block))
         troughs = list(zip(res.get("troughs_min", []), res.get("troughs_hr", [])))
-        for pm, ph in zip(res["peaks_min"], res["peaks_hr"]):
+        # work_s was hardcoded to 0, so every rep in the dashboard read "0s" — a whole column of
+        # zeros that looked like a data outage. The engine has estimated bout durations all along;
+        # they just were never carried through. NOTE this is an HR-shaped estimate (time spent in the
+        # upper part of each peak-trough cycle) and runs ~100 s against the belt's 60 s target reps:
+        # the two measure different things, and where the belt is present it is the better answer.
+        bouts = list(res.get("bout_s") or [])
+        for i, (pm, ph) in enumerate(zip(res["peaks_min"], res["peaks_hr"])):
             before = [th for tm, th in troughs if tm < pm]
             reps.append({"t": round(pm * 60.0 / blen, 3), "peak": round(float(ph)),
-                         "trough": round(float(before[-1])) if before else round(float(np.min(block))),
-                         "work_s": 0})
+                         # None, not the trace minimum: "recovery" means the dip the athlete came
+                         # UP from, so for the first rep there is nothing to report — falling back to
+                         # min(block) reported the warm-up baseline as if it were a recovery.
+                         "trough": round(float(before[-1])) if before else None,
+                         "work_s": int(round(bouts[i])) if i < len(bouts) else None})
     tp = TRACE_POINTS if cat in ("easy", "tempo", "speed", "vo2max", "trail_easy") else TRACE_POINTS_THIN
     return dict(
         id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
@@ -179,6 +240,7 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
         if s["date"][:4].isdigit() and int(s["date"][:4]) < 2026:
             s["cat"] = "other"; s["reps"] = []
     if not sessions: sys.exit(f"no sessions from export ({raw_dir}) or incoming ({in_dir})")
+    attach_speeds(sessions)
     sessions.sort(key=lambda s: s["date"], reverse=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     json.dump({"generated": int(time.time()), "count": len(sessions),

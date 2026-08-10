@@ -391,23 +391,31 @@ def detect_peaks_troughs(block, ath: Athlete):
     start, stop = find_work_block(block, ath)
     sm = moving_average(block, SMOOTH_STRUCT_S)
 
-    seg = sm[start:stop+1]
-    if len(seg) < MIN_CYCLE_S:
+    if (stop - start + 1) < MIN_CYCLE_S:
         return np.array([], int), np.array([], int)
 
+    # Detect over the WHOLE trace, then keep what falls inside the work block — never the other way
+    # round. Slicing first destroys the first rep: the block starts where HR first crosses LT1, which
+    # in an interval session is partway UP the first rep, so that peak loses its left flank and its
+    # prominence computes against the slice edge (~2 bpm) instead of the true trough it rose from
+    # (~20 bpm). It then fails the PROMINENCE_BPM filter and vanishes. Observed 2026-08-10: ten reps
+    # run, nine reported, the missing one always the first.
     try:
         from scipy.signal import find_peaks
-        pk, _ = find_peaks(seg, distance=MIN_CYCLE_S, prominence=PROMINENCE_BPM)
-        tr, _ = find_peaks(-seg, distance=MIN_CYCLE_S, prominence=PROMINENCE_BPM)
+        pk, _ = find_peaks(sm, distance=MIN_CYCLE_S, prominence=PROMINENCE_BPM)
+        tr, _ = find_peaks(-sm, distance=MIN_CYCLE_S, prominence=PROMINENCE_BPM)
     except Exception:
-        pk = np.array(_find_peaks_simple(seg, MIN_CYCLE_S, PROMINENCE_BPM))
-        tr = np.array(_find_peaks_simple(-seg, MIN_CYCLE_S, PROMINENCE_BPM))
+        pk = np.array(_find_peaks_simple(sm, MIN_CYCLE_S, PROMINENCE_BPM))
+        tr = np.array(_find_peaks_simple(-sm, MIN_CYCLE_S, PROMINENCE_BPM))
+    pk = np.array([i for i in pk if start <= i <= stop], int)
+    tr = np.array([i for i in tr if start <= i <= stop], int)
+    seg = sm[start:stop+1]
 
     # recovery floor: troughs shouldn't be counted if they fall to near rest
     floor = ath.lt1_hr - 25     # JUDGEMENT: keep troughs above this
-    tr = np.array([i for i in tr if seg[i] > floor], int)
+    tr = np.array([i for i in tr if sm[i] > floor], int)
 
-    return pk + start, tr + start
+    return pk, tr          # already absolute indices into `block`
 
 
 def estimate_work_bout_durations(block, peaks, troughs, ath: Athlete):
@@ -644,6 +652,7 @@ def analyse(hr, duration_min, ath: Athlete, sport_label=""):
         pk, tr = detect_peaks_troughs(block, ath)
         out["peaks_min"] = t_min[pk]; out["peaks_hr"] = block[pk]
         out["troughs_min"] = t_min[tr]; out["troughs_hr"] = block[tr]
+        out["bout_s"] = estimate_work_bout_durations(block, pk, tr, ath)
         out["peak_env"] = fit_envelope(t_min[pk], block[pk]) if len(pk)>=3 else None
         out["trough_env"] = fit_envelope(t_min[tr], block[tr]) if len(tr)>=3 else None
     return out
