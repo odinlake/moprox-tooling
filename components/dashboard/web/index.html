@@ -313,7 +313,10 @@ async function loadTraining(){
     return `<span style="font-size:.82em;color:var(--mut)">${n}<span style="font-size:.78em">${s}</span></span>`;};
   // "10x 1+2m@15/8kph 47m" — reps, work+recovery, speeds, duration. Whatever is unknown is simply
   // absent rather than guessed at; duration is always real so it stays outside the est wrapper.
-  const mins = sec => { const n=Math.round(sec/6)/10; return n%1===0 ? String(n) : n.toFixed(1); };
+  // Whole numbers only in this table. It is read at a glance down a column, and a decimal costs
+  // more attention than it returns — 3.8+2.1 is 4+2 to anyone reading it.
+  const mins = sec => String(Math.max(1, Math.round(sec/60)));
+  const roundNums = t => String(t).replace(/\d+(\.\d+)?/g, m => String(Math.round(parseFloat(m))));
   const U = t => `<span class="u">${t}</span>`, UU = t => `<span class="uu">${t}</span>`;
   function structure(s){
     let core="", timed=false;
@@ -325,7 +328,7 @@ async function loadTraining(){
     // how fast it was run) and stacking them keeps each line short enough to scan down the column.
     // Dim every non-numeric character, not just '/': a progression reads "9–12" and the dash is a
     // separator like any other.
-    if(s.spd) core += (timed?"<br>":"")+String(s.spd).replace(/[^0-9.]+/g,m=>U(m))+UU("kph");
+    if(s.spd) core += (timed?"<br>":"")+roundNums(s.spd).replace(/[^0-9.]+/g,m=>U(m))+UU("kph");
     const corr = s.spd_src==="technogym"||s.spd_src==="operator";
     return core ? `<span class="${corr?"":"est"}">${core}</span>` : "";
   }
