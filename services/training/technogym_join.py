@@ -72,9 +72,10 @@ def _parse_dt(s):
 
 
 def _excluded():
+    """Keys the operator has declared not theirs: "1065#0" for one activity, "1065" for a session."""
     try:
         with open(EXCLUDE) as f:
-            return {int(k) for k in (json.load(f).get("idCr") or [])}
+            return {str(k) for k in (json.load(f).get("exclude") or [])}
     except FileNotFoundError:
         return set()
     except Exception as exc:
@@ -83,40 +84,45 @@ def _excluded():
 
 
 def load_sessions():
-    """[{start, dur_s, speed, idCr}] sorted by start. Empty list if the lane is absent."""
+    """One candidate per ACTIVITY, sorted by start. Empty list if the lane is absent.
+
+    A session record can hold several activities and they are NOT one workout split in pieces —
+    idCr 1065 carries three, of 35, 47.5 and 32.5 minutes, overlapping the same clock hour. Reading
+    only activities[0] reported a stranger's 9->12 kph ramp as the operator's 48 min easy run, and
+    separately made five real sessions look like aborted 30-second starts because a brief false start
+    happened to be recorded first. 15 of 102 sessions are affected.
+    """
     skip = _excluded()
     out = []
     for f in sorted(glob.glob(os.path.join(CARDIO, "*.json"))):
         try:
             d = json.load(open(f))
-            acts = d.get("activities") or []
-            if not acts:
-                continue
-            a = acts[0]
-            dur = float(a.get("durationS") or 0)
             when = _parse_dt(d.get("startedOn"))
-            if not when or dur <= 0:
-                continue
             idcr = int(d.get("idCr") or 0)
-            if idcr in skip:
+            if not when or str(idcr) in skip:
                 continue
-            start = when - timedelta(seconds=dur) if idcr <= END_SEMANTICS_MAX_IDCR else when
-            out.append({"start": start, "dur_s": dur, "idCr": idcr,
-                        "speed": [(float(t), float(v)) for t, v in (a.get("speed_kph") or [])]})
-        except Exception:
-            continue                     # one unreadable export must not cost the whole join
+            for i, a in enumerate(d.get("activities") or []):
+                key = f"{idcr}#{i}"
+                dur = float(a.get("durationS") or 0)
+                if dur <= 0 or key in skip:
+                    continue
+                start = when - timedelta(seconds=dur) if idcr <= END_SEMANTICS_MAX_IDCR else when
+                out.append({"start": start, "dur_s": dur, "idCr": idcr, "act": i, "key": key,
+                            "speed": [(float(t), float(v)) for t, v in (a.get("speed_kph") or [])]})
+        except Exception as exc:
+            errlog.warn(f"technogym: could not read {os.path.basename(f)} ({exc})")
     return sorted(out, key=lambda r: r["start"])
 
 
 def candidates(sessions, start_iso):
-    """Every belt session that could plausibly be this run, nearest start first."""
+    """Every belt activity that could plausibly be this run, nearest start first."""
     t0 = _parse_dt(start_iso)
     if t0 is None or not sessions:
         return []
     out = []
     for s in sessions:
         if s["dur_s"] < MIN_BELT_S:
-            continue                              # aborted press of Quick Start; nothing to attach
+            continue                              # a false start; nothing to attach
         gap = abs((s["start"] - t0).total_seconds())
         if gap <= MATCH_TOLERANCE_S:
             out.append((gap, s))
@@ -255,7 +261,7 @@ def summarise(belt):
                     "work_kph": dominant(work_pairs), "rec_kph": dominant(rest_pairs),
                     "work_s": int(round(med([sum(h for _, h in runs[i][1]) for i in w_at]))),
                     "rec_s": int(round(med([sum(h for _, h in r[1]) for r in inner]))),
-                    "idCr": belt["idCr"]}
+                    "idCr": belt["idCr"], "key": belt.get("key")}
 
     # Not intervallic. Trim a leading or trailing segment that is SLOWER than the session's main
     # speed — that is the warm-up and the cool-down, and they are not part of what was run. Without
@@ -271,10 +277,10 @@ def summarise(belt):
     lo, hi = min(v for v, _ in body), max(v for v, _ in body)
     label = "%s\u2013%s" % (fmt(lo), fmt(hi)) if (hi - lo) > SPREAD_KPH else fmt(dominant(body))
     return {"speeds": label, "reps": 0, "work_kph": dominant(body), "rec_kph": None,
-            "work_s": None, "rec_s": None, "idCr": belt["idCr"]}
+            "work_s": None, "rec_s": None, "idCr": belt["idCr"], "key": belt.get("key")}
 
 
-def choose(sessions, start_iso, trace, trace_step_s, hr_reps=None):
+def choose(sessions, start_iso, trace, trace_step_s, hr_reps=None, dur_min=None):
     """(belt, complaint) — the candidate that best matches this run.
 
     Nearest-start is NOT good enough once more than one session overlaps: a shared gym produces
@@ -303,14 +309,23 @@ def choose(sessions, start_iso, trace, trace_step_s, hr_reps=None):
         info = summarise(c) or {}
         rep_gap = abs((info.get("reps") or 0) - (hr_reps or 0)) if hr_reps is not None else 0
         gap = abs((c["start"] - t0).total_seconds())
-        scored.append((rep_gap, -(r if r is not None else 0.0), gap, c))
+        # Duration RANKS but never rejects — the distinction the operator drew. Activities of one
+        # session all start at the same instant, so proximity cannot separate them and length is the
+        # only evidence left; correlation alone chose a 25 min activity over the 48 min one that
+        # actually matched a 48 min run.
+        dur_gap = abs(c["dur_s"] / 60.0 - float(dur_min)) if dur_min else 0.0
+        # Duration first: both records cover the same clock period, so a length that matches is the
+        # strongest evidence available and the least noisy. Rep agreement then separates candidates
+        # of similar length — including ones of IDENTICAL length, where it is all that is left.
+        scored.append((round(dur_gap, 1), rep_gap, -(r if r is not None else 0.0), gap, c))
     if not scored:
         return None, ("all %d overlapping belt session(s) contradict the heart rate (%s)"
-                      % (len(cands), ", ".join("idCr %s r=%+.2f" % (c["idCr"], r)
+                      % (len(cands), ", ".join("%s r=%+.2f" % (c.get("key") or c["idCr"], r)
                                                for c, r in rejected if r is not None)))
-    scored.sort(key=lambda x: x[:3])
-    best = scored[0][3]
+    scored.sort(key=lambda x: x[:4])
+    best = scored[0][4]
     if len(cands) > 1:
-        return best, ("%d belt sessions overlap this run (%s); chose idCr %s"
-                      % (len(cands), ", ".join(str(c["idCr"]) for c in cands), best["idCr"]))
+        return best, ("%d belt activities overlap this run (%s); chose %s"
+                      % (len(cands), ", ".join(str(c.get("key") or c["idCr"]) for c in cands),
+                         best.get("key") or best["idCr"]))
     return best, None

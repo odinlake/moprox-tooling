@@ -87,7 +87,7 @@ def attach_speeds(sessions):
         # s["nint"] is still the HR-derived rep count here — attach_speeds only overwrites it once
         # a belt session has been accepted, so it is independent evidence at this point.
         b, complaint = TG.choose(belts, s.get("date", ""), s.get("trace"), s.get("trace_step_s"),
-                                 hr_reps=s.get("nint"))
+                                 hr_reps=s.get("nint"), dur_min=s.get("dur_min"))
         if complaint:
             # Either nothing agreed with the HR, or several sessions overlapped and one was chosen.
             # Both are worth saying out loud: a shared gym is how a stranger's workout gets published
