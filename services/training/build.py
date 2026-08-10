@@ -86,6 +86,15 @@ def attach_speeds(sessions):
         s["spd"], s["spd_src"], s["nint_src"] = None, None, "est"
         b = TG.match(belts, s.get("date", ""), s.get("dur_min"))
         if b:
+            ok, r = TG.hr_agrees(b, s.get("date", ""), s.get("trace"), s.get("trace_step_s"))
+            if not ok:
+                # Not a duration argument — the belt and the watch simply describe different
+                # efforts. Usually a session the account picked up that is not the operator's.
+                errlog.warn("technogym: idCr %s starts within %ds of the %s run but its speeds move "
+                            "AGAINST the heart rate (r=%+.2f) — treating it as a different session"
+                            % (b["idCr"], TG.MATCH_TOLERANCE_S, s.get("date", "")[:10], r))
+                b = None
+        if b:
             info = TG.summarise(b)
             if info and info["speeds"]:
                 s["spd"], s["spd_src"] = info["speeds"], "technogym"

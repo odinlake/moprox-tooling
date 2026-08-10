@@ -18,12 +18,19 @@ import errlog
 CARDIO = os.path.expanduser("~/projects/private-data/technogym/cardio")
 END_SEMANTICS_MAX_IDCR = 1012      # <= this: startedOn is the END of the session
 MATCH_TOLERANCE_S = 420            # 7 min: clocks drift, and the watch rarely starts with the belt
-# Start time ALONE is not enough to prove two records are the same session. Measured over 95 matched
-# pairs, belt and watch durations agree to within 0.4 min (median) and never exceed 3.2 min — then
-# there is a clean gap to 9, 13, 40 and 49 min, which are foreign or aborted belt sessions that
-# happened to start near a real run. One of them, a stranger's 35 min progression on 2026-06-11,
-# was published against the operator's 48 min easy run and described a workout nobody here did.
-MATCH_MAX_DUR_DIFF_MIN = 5.0
+# Start time ALONE is not enough to prove two records are the same session, but DURATION cannot be
+# the test either — it disagrees for perfectly good reasons in both directions. The operator often
+# leaves the belt running to watch the HR cool-down (watch longer than belt), and a flat watch
+# battery truncates the other side (belt longer than watch). On 2026-02-10 the belt ran 9 min past
+# the watch and is genuinely the operator's session.
+#
+# What does separate them is whether HR MOVES WITH the belt. Measured over 67 pairs with enough
+# speed variation to test: median r = +0.60, worst genuine = -0.07, and the one foreign session
+# (a stranger's progression on 2026-06-11, published against a 48 min easy run) sits alone at
+# r = -0.53 — belt speed climbing while heart rate falls. The threshold sits between.
+MIN_BELT_S = 300                   # under 5 min there is no usable structure, only an aborted start
+MIN_SPEED_HR_R = -0.25             # reject a candidate whose HR contradicts the belt this strongly
+HR_LAG_S = 25                      # HR trails a speed change by roughly this much
 WARMUP_KPH = 6.0                   # at or below this we are walking/standing, not training
 # The belt logs the TARGET speed at the instant it is commanded, not when it gets there — operator
 # calibration 2026-08-10: roughly 1 s per kph of change, ~10 s for a typical 8->15 step, varying by
@@ -93,24 +100,50 @@ def match(sessions, start_iso, dur_min):
     t0 = _parse_dt(start_iso)
     if t0 is None or not sessions:
         return None
-    best, best_score, near_misses = None, None, []
+    best, best_gap = None, None
     for s in sessions:
+        if s["dur_s"] < MIN_BELT_S:
+            continue                              # aborted press of Quick Start; nothing to attach
         gap = abs((s["start"] - t0).total_seconds())
-        if gap > MATCH_TOLERANCE_S:
-            continue
-        dd = abs(s["dur_s"] / 60.0 - float(dur_min or 0))
-        if dur_min and dd > MATCH_MAX_DUR_DIFF_MIN:
-            near_misses.append((s, gap, dd))
-            continue
-        score = gap / 60.0 + dd                  # minutes of disagreement, start and length alike
-        if best_score is None or score < best_score:
-            best, best_score = s, score
-    if best is None and near_misses:
-        s, gap, dd = min(near_misses, key=lambda x: x[2])
-        errlog.warn("technogym: idCr %s starts %ds from the %s run but lasts %.0f min against %.0f "
-                    "— not the same session, so no belt data is attached"
-                    % (s["idCr"], round(gap), str(start_iso)[:10], s["dur_s"] / 60.0, float(dur_min or 0)))
+        if gap <= MATCH_TOLERANCE_S and (best_gap is None or gap < best_gap):
+            best, best_gap = s, gap
     return best
+
+
+def speed_at(belt, t):
+    v = 0.0
+    for ts, sp in belt["speed"]:
+        if ts > t:
+            break
+        v = sp
+    return v
+
+
+def hr_agrees(belt, start_iso, trace, trace_step_s):
+    """(ok, r) — does the heart rate move with the belt? r is None when it cannot be judged.
+
+    Computed only over the OVERLAP of the two records, so a cool-down the watch kept recording and a
+    session the watch stopped short of both test on the part they share. A constant-speed run
+    carries no signal and is not judged.
+    """
+    if not trace or len(trace) < 20:
+        return True, None
+    try:
+        import numpy as np
+    except Exception:
+        return True, None
+    t0 = _parse_dt(start_iso)
+    off = (belt["start"] - t0).total_seconds()
+    step = trace_step_s or 1
+    xs, ys = [], []
+    for i, hr in enumerate(trace):
+        tb = i * step - off - HR_LAG_S
+        if 0 <= tb <= belt["dur_s"]:
+            xs.append(speed_at(belt, tb)); ys.append(hr)
+    if len(xs) < 20 or float(np.std(xs)) < 0.3 or float(np.std(ys)) < 0.5:
+        return True, None                        # nothing varies; the test says nothing
+    r = float(np.corrcoef(xs, ys)[0, 1])
+    return (r >= MIN_SPEED_HR_R), r
 
 
 def achieved_times(speed, dur_s):
