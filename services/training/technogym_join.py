@@ -9,12 +9,21 @@ For idCr <= 1012 it is the session END; from idCr >= 1013 it is the START. Verif
 Health workout HR as an independent third clock. Using it as START throughout mis-dates the 13
 oldest sessions by a full session length.
 """
-import glob, json, os, re
+import glob, json, os, re, sys
 from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+import errlog
 
 CARDIO = os.path.expanduser("~/projects/private-data/technogym/cardio")
 END_SEMANTICS_MAX_IDCR = 1012      # <= this: startedOn is the END of the session
 MATCH_TOLERANCE_S = 420            # 7 min: clocks drift, and the watch rarely starts with the belt
+# Start time ALONE is not enough to prove two records are the same session. Measured over 95 matched
+# pairs, belt and watch durations agree to within 0.4 min (median) and never exceed 3.2 min — then
+# there is a clean gap to 9, 13, 40 and 49 min, which are foreign or aborted belt sessions that
+# happened to start near a real run. One of them, a stranger's 35 min progression on 2026-06-11,
+# was published against the operator's 48 min easy run and described a workout nobody here did.
+MATCH_MAX_DUR_DIFF_MIN = 5.0
 WARMUP_KPH = 6.0                   # at or below this we are walking/standing, not training
 # The belt logs the TARGET speed at the instant it is commanded, not when it gets there — operator
 # calibration 2026-08-10: roughly 1 s per kph of change, ~10 s for a typical 8->15 step, varying by
@@ -73,15 +82,34 @@ def load_sessions():
 
 
 def match(sessions, start_iso, dur_min):
-    """Nearest belt session whose start is within tolerance. None if nothing lines up."""
+    """Best belt session for this run, or None.
+
+    Requires BOTH a start within tolerance and a compatible duration. A near-simultaneous start is
+    easy to come by — a shared machine, a forgotten logout, an aborted press of Quick Start — and
+    matching on it alone attaches someone else's workout to your day with no sign anything is wrong.
+    A rejection on duration is reported at warn level rather than passed over: it usually means the
+    account picked up a session that is not yours.
+    """
     t0 = _parse_dt(start_iso)
     if t0 is None or not sessions:
         return None
-    best, best_gap = None, None
+    best, best_score, near_misses = None, None, []
     for s in sessions:
         gap = abs((s["start"] - t0).total_seconds())
-        if gap <= MATCH_TOLERANCE_S and (best_gap is None or gap < best_gap):
-            best, best_gap = s, gap
+        if gap > MATCH_TOLERANCE_S:
+            continue
+        dd = abs(s["dur_s"] / 60.0 - float(dur_min or 0))
+        if dur_min and dd > MATCH_MAX_DUR_DIFF_MIN:
+            near_misses.append((s, gap, dd))
+            continue
+        score = gap / 60.0 + dd                  # minutes of disagreement, start and length alike
+        if best_score is None or score < best_score:
+            best, best_score = s, score
+    if best is None and near_misses:
+        s, gap, dd = min(near_misses, key=lambda x: x[2])
+        errlog.warn("technogym: idCr %s starts %ds from the %s run but lasts %.0f min against %.0f "
+                    "— not the same session, so no belt data is attached"
+                    % (s["idCr"], round(gap), str(start_iso)[:10], s["dur_s"] / 60.0, float(dur_min or 0)))
     return best
 
 

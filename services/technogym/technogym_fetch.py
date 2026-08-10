@@ -37,9 +37,12 @@ All of it is re-fetchable from the API if ever wanted. Result: ~1 KB/session vs 
   --since YYYY-MM-DD drop fetched sessions older than this (default: cold=2025-01-01, warm=today-45d)
   --first-idcr N    where a cold/backfill walk starts (default 1000, the account's first session)
 """
-import argparse, json, sys, time
+import argparse, json, os, sys, time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import errlog
 
 ENV      = Path.home() / ".config/claude-dev/mywellness.env"
 CARDIO   = Path.home() / "projects/private-data/technogym/cardio"   # compact per-session record
@@ -186,12 +189,77 @@ def compact_record(detail, cardios):
     }
 
 
+def probe_exists(s, uid, tok, cult, idcr):
+    """True / False / None — exists, definitively gone, or we could not tell.
+
+    fetch_detail() collapses "no such session" and "could not parse" into {}, which is fine for a
+    forward walk and unacceptable for anything that deletes. Here the three outcomes stay distinct,
+    and only a clean 200 whose payload carries no session counts as gone.
+    """
+    try:
+        r = s.get(f"{SVC}/Training/User/{uid}/GetPerformedWorkoutSessionByIdCr", timeout=30,
+                  params={"IdCr": idcr, "token": tok, "AppId": APP_ID, "_c": cult},
+                  headers={"Accept": "application/json"})
+    except Exception as exc:
+        errlog.err(f"technogym: probing idCr {idcr} failed", exc)
+        return None
+    if r.status_code != 200:
+        errlog.err(f"technogym: probing idCr {idcr} returned HTTP {r.status_code}",
+                   RuntimeError(r.text[:200]))
+        return None
+    try:
+        d = r.json().get("data") or {}
+    except ValueError as exc:
+        errlog.err(f"technogym: idCr {idcr} returned unparseable JSON", exc)
+        return None
+    return bool(d.get("startedOn"))
+
+
+def prune(apply_it):
+    """Drop local sessions the account no longer has. The fetcher only ever walks idCr FORWARD, so a
+    session deleted upstream — a stranger's workout picked up on a shared machine, an aborted start —
+    stays in the archive for good and keeps being joined to real runs.
+
+    Deletes ONLY on a definite negative. Anything we could not establish is left alone and logged.
+    """
+    import glob as _glob
+    e = env()
+    with requests.Session() as s:
+        uid, tok, cult = login(s, e)
+        gone, kept, unknown = [], 0, 0
+        for f in sorted(_glob.glob(str(CARDIO / "*.json"))):
+            idcr = os.path.basename(f).split(".")[0]
+            if not idcr.isdigit():
+                continue
+            state = probe_exists(s, uid, tok, cult, int(idcr))
+            if state is True:
+                kept += 1
+            elif state is False:
+                gone.append(f)
+            else:
+                unknown += 1
+            time.sleep(POLITE_S)
+    for f in gone:
+        print(f"  {'DELETING' if apply_it else 'would delete'} {os.path.basename(f)}")
+        if apply_it:
+            os.unlink(f)
+    print(f"prune: {kept} present, {len(gone)} gone upstream, {unknown} indeterminate"
+          + ("" if apply_it else "  (dry run — pass --apply to delete)"))
+    if unknown:
+        errlog.warn(f"technogym: {unknown} session(s) could not be verified and were left in place")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", action="store_true")
+    ap.add_argument("--prune", action="store_true",
+                    help="re-probe stored sessions and drop ones deleted upstream")
+    ap.add_argument("--apply", action="store_true", help="with --prune: actually delete")
     ap.add_argument("--since")
     ap.add_argument("--first-idcr", type=int, default=FIRST_IDCR)
     args = ap.parse_args()
+    if args.prune:
+        prune(args.apply); return
 
     CARDIO.mkdir(parents=True, exist_ok=True)
     SEEN.parent.mkdir(parents=True, exist_ok=True)
