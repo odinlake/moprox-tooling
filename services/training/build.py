@@ -84,16 +84,15 @@ def attach_speeds(sessions):
 
     for s in sessions:
         s["spd"], s["spd_src"], s["nint_src"] = None, None, "est"
-        b = TG.match(belts, s.get("date", ""), s.get("dur_min"))
-        if b:
-            ok, r = TG.hr_agrees(b, s.get("date", ""), s.get("trace"), s.get("trace_step_s"))
-            if not ok:
-                # Not a duration argument — the belt and the watch simply describe different
-                # efforts. Usually a session the account picked up that is not the operator's.
-                errlog.warn("technogym: idCr %s starts within %ds of the %s run but its speeds move "
-                            "AGAINST the heart rate (r=%+.2f) — treating it as a different session"
-                            % (b["idCr"], TG.MATCH_TOLERANCE_S, s.get("date", "")[:10], r))
-                b = None
+        # s["nint"] is still the HR-derived rep count here — attach_speeds only overwrites it once
+        # a belt session has been accepted, so it is independent evidence at this point.
+        b, complaint = TG.choose(belts, s.get("date", ""), s.get("trace"), s.get("trace_step_s"),
+                                 hr_reps=s.get("nint"))
+        if complaint:
+            # Either nothing agreed with the HR, or several sessions overlapped and one was chosen.
+            # Both are worth saying out loud: a shared gym is how a stranger's workout gets published
+            # as yours, and it happens without anything failing.
+            errlog.warn("technogym: %s run — %s" % (s.get("date", "")[:10], complaint))
         if b:
             info = TG.summarise(b)
             if info and info["speeds"]:

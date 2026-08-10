@@ -88,26 +88,25 @@ def load_sessions():
     return sorted(out, key=lambda r: r["start"])
 
 
-def match(sessions, start_iso, dur_min):
-    """Best belt session for this run, or None.
-
-    Requires BOTH a start within tolerance and a compatible duration. A near-simultaneous start is
-    easy to come by — a shared machine, a forgotten logout, an aborted press of Quick Start — and
-    matching on it alone attaches someone else's workout to your day with no sign anything is wrong.
-    A rejection on duration is reported at warn level rather than passed over: it usually means the
-    account picked up a session that is not yours.
-    """
+def candidates(sessions, start_iso):
+    """Every belt session that could plausibly be this run, nearest start first."""
     t0 = _parse_dt(start_iso)
     if t0 is None or not sessions:
-        return None
-    best, best_gap = None, None
+        return []
+    out = []
     for s in sessions:
         if s["dur_s"] < MIN_BELT_S:
             continue                              # aborted press of Quick Start; nothing to attach
         gap = abs((s["start"] - t0).total_seconds())
-        if gap <= MATCH_TOLERANCE_S and (best_gap is None or gap < best_gap):
-            best, best_gap = s, gap
-    return best
+        if gap <= MATCH_TOLERANCE_S:
+            out.append((gap, s))
+    return [s for _, s in sorted(out, key=lambda x: x[0])]
+
+
+def match(sessions, start_iso, dur_min=None):
+    """Back-compatible nearest-start match. Prefer choose(), which weighs the HR evidence."""
+    c = candidates(sessions, start_iso)
+    return c[0] if c else None
 
 
 def speed_at(belt, t):
@@ -253,3 +252,45 @@ def summarise(belt):
     label = "%s\u2013%s" % (fmt(lo), fmt(hi)) if (hi - lo) > SPREAD_KPH else fmt(dominant(body))
     return {"speeds": label, "reps": 0, "work_kph": dominant(body), "rec_kph": None,
             "work_s": None, "rec_s": None, "idCr": belt["idCr"]}
+
+
+def choose(sessions, start_iso, trace, trace_step_s, hr_reps=None):
+    """(belt, complaint) — the candidate that best matches this run.
+
+    Nearest-start is NOT good enough once more than one session overlaps: a shared gym produces
+    exactly that, and proximity alone let a stranger win by three seconds and publish itself as the
+    operator's workout with the real one never examined.
+
+    Nor is the speed/HR correlation enough on its own to RANK candidates, though it is a good filter.
+    A smooth progression scores r=+0.60 against an interval session's own heart rate while the true
+    interval belt scores +0.36 — heart rate lags and never falls as sharply as the belt does, so
+    smooth curves flatter themselves. Ranking on r alone therefore prefers the wrong session.
+
+    The decisive evidence is the REP COUNT, which the HR side derives independently of any belt: ten
+    peaks in the trace against ten work bouts on the belt is agreement that a stranger's session
+    cannot fake. Correlation stays as the filter, rep agreement does the ranking, and start proximity
+    only breaks ties.
+    """
+    cands = candidates(sessions, start_iso)
+    if not cands:
+        return None, None
+    t0 = _parse_dt(start_iso)
+    scored, rejected = [], []
+    for c in cands:
+        ok, r = hr_agrees(c, start_iso, trace, trace_step_s)
+        if not ok:
+            rejected.append((c, r)); continue
+        info = summarise(c) or {}
+        rep_gap = abs((info.get("reps") or 0) - (hr_reps or 0)) if hr_reps is not None else 0
+        gap = abs((c["start"] - t0).total_seconds())
+        scored.append((rep_gap, -(r if r is not None else 0.0), gap, c))
+    if not scored:
+        return None, ("all %d overlapping belt session(s) contradict the heart rate (%s)"
+                      % (len(cands), ", ".join("idCr %s r=%+.2f" % (c["idCr"], r)
+                                               for c, r in rejected if r is not None)))
+    scored.sort(key=lambda x: x[:3])
+    best = scored[0][3]
+    if len(cands) > 1:
+        return best, ("%d belt sessions overlap this run (%s); chose idCr %s"
+                      % (len(cands), ", ".join(str(c["idCr"]) for c in cands), best["idCr"]))
+    return best, None
