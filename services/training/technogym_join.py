@@ -44,6 +44,7 @@ WARMUP_KPH = 6.0                   # at or below this we are walking/standing, n
 # survive it (both edges shift together) but TIMING does not, which matters for any alignment
 # against HR. Applied in _segments().
 BELT_LEAD_S_PER_KPH = 1.0
+MIN_SPLIT_KPH = 2.0                # work and recovery clusters must differ by this much
 SPREAD_KPH = 1.5                   # a run spanning more than this is a progression, not one pace
 MIN_HOLD_S = 20.0                  # a speed must be HELD this long to be a real segment. The belt
                                    # settles over the first second or two of every rep (14.0, 13.8,
@@ -202,23 +203,35 @@ def summarise(belt):
     train = [(v, h) for v, h in segs if v > WARMUP_KPH]
     if not train:
         return None
-    def dominant_of(items):
-        by = {}
-        for v, h in items:
-            by[v] = by.get(v, 0.0) + h
-        return max(by.items(), key=lambda kv: kv[1])[0] if by else None
+    # Split work from recovery by finding the natural gap in the time-weighted speed distribution
+    # (a one-dimensional Otsu split), rather than taking a fixed band below the fastest segment.
+    #
+    # A band fails whenever a rep is not run at one speed. On 2026-05-15 each rep opened at 16-18 kph
+    # and settled to 13 for the remaining three minutes; with the band anchored at 16, the 13 kph
+    # bulk of every rep was classed as RECOVERY and merged with the 8 kph rest, so a 5x4+2min session
+    # reported itself as "0.9+4.9". The two clusters here are unmistakable — everything at 13 and
+    # above against everything at 8 — and the gap between them is what the split should find.
+    thr = None
+    vals = sorted({v for v, _ in train})
+    if len(vals) > 1:
+        best = None
+        for i in range(len(vals) - 1):
+            cut = (vals[i] + vals[i + 1]) / 2.0
+            lo = [(v, h) for v, h in train if v < cut]
+            hi = [(v, h) for v, h in train if v >= cut]
+            wl, wh = sum(h for _, h in lo), sum(h for _, h in hi)
+            if not wl or not wh:
+                continue
+            ml = sum(v * h for v, h in lo) / wl
+            mh = sum(v * h for v, h in hi) / wh
+            score = wl * wh * (mh - ml) ** 2          # between-class variance
+            if best is None or score > best[0]:
+                best = (score, cut, mh - ml)
+        if best and best[2] >= MIN_SPLIT_KPH:
+            thr = best[1]
 
-    # The work speed is the one the athlete spent the most TIME at among the fast band — not simply
-    # the fastest segment. A single 90 s burst at 16 kph at the end of a 5x4min session at 14 would
-    # otherwise become "top", push the real reps outside the work window, and the whole session would
-    # degrade to a range. Time-dominance is what makes the label describe the session.
-    fastest = max(v for v, _ in train)
-    top = dominant_of([(v, h) for v, h in train if v >= fastest - 2.5]) or fastest
-
-    # A "work" segment sits within 1 kph of that. 1 kph is deliberate: an opening rep at 16 against
-    # 15 for the rest is the same kind of effort, not a different one.
     def is_work(v):
-        return v >= top - 1.0
+        return thr is not None and v >= thr
 
     # Collapse into consecutive runs of the same kind. Intervals ALTERNATE; a progression run does
     # not, and without this check one — belt ramping 9.0 -> 12.0 over 27 min — was reported as
