@@ -40,7 +40,7 @@
   th{color:var(--mut);font-weight:500;font-size:.8rem}
   table.compact th,table.compact td{padding:.16rem .45rem;font-size:.82rem}
   /* the session list is the densest table on the page and is read as a block, so it goes tighter */
-  table.sess th,table.sess td{padding:.1rem .34rem;font-size:.76rem;line-height:1.25}
+  table.sess th,table.sess td{padding:.1rem .4rem;font-size:.76rem;line-height:1.25;white-space:nowrap}
   table.sess th{font-size:.68rem}
   table.sess .badge{font-size:.6rem;padding:0 .22rem;letter-spacing:0}
   /* A value nobody corroborated sits in the same column as a measured one, so it has to look
@@ -299,11 +299,15 @@ async function loadTraining(){
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px">
         <div style="max-height:560px;overflow:auto"><table class="compact sess">
+        <!-- Every text column shrinks to its content (width:1% does that under auto table layout)
+             and the trace takes all the slack. Leaving structure unconstrained handed it every
+             spare pixel, and since its content is left-aligned the surplus showed up as a wide
+             empty gap before the duration column. -->
         <thead><tr><th style="width:1%">day</th><th style="text-align:center;width:1%">type</th>
-          <th title="reps x work+recovery, then speeds. Italic = not corroborated by the treadmill or by you.">structure</th>
+          <th style="width:1%" title="reps x work+recovery, then speeds. Italic = not corroborated by the treadmill or by you.">structure</th>
           <th class="num" title="duration, minutes" style="width:1%">t</th>
           <th class="num" title="average → maximum heart rate" style="width:1%">hr</th>
-          <th style="width:28%">trace</th></tr></thead>
+          <th style="width:100%">trace</th></tr></thead>
         <tbody id="slist"></tbody></table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Selected session details</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
