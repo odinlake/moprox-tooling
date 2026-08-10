@@ -89,6 +89,7 @@ def attach_speeds(sessions):
             info = TG.summarise(b)
             if info and info["speeds"]:
                 s["spd"], s["spd_src"] = info["speeds"], "technogym"
+                s["wk_s"], s["rc_s"] = info.get("work_s"), info.get("rec_s")
                 if info["reps"]:
                     s["nint"], s["nint_src"] = info["reps"], "technogym"
         o = overrides.get(s.get("date", "")[:19]) or overrides.get(s.get("date", "")[:10])

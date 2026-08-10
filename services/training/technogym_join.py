@@ -132,7 +132,12 @@ def summarise(belt):
 
     wk = dominant(work)
     rc = dominant(rest)
-    med_work_s = sorted(h for _, h in work)[len(work) // 2] if work else None
+
+    def med(items):
+        hs = sorted(h for _, h in items)
+        return hs[len(hs) // 2] if hs else None
+
+    med_work_s, med_rec_s = med(work), med(rest)
 
     def fmt(v):
         return ("%g" % round(v, 1)) if v is not None else ""
@@ -144,4 +149,5 @@ def summarise(belt):
         reps = 0                          # steady effort: no interval count to report
     return {"speeds": label, "reps": reps, "work_kph": wk, "rec_kph": rc,
             "work_s": int(round(med_work_s)) if med_work_s else None,
+            "rec_s": int(round(med_rec_s)) if (med_rec_s and reps) else None,
             "idCr": belt["idCr"]}
