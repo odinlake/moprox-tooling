@@ -51,7 +51,16 @@
       "glob": "~/projects/private-data/ultrahuman/daily.jsonl",
       "field": "date",
       "max_age_h": 36,
-      "note": "Ring data. Coverage collapse is a separate problem this check cannot see."
+      "require": {
+        "any_of": [
+          {"field": "sleep_rhr", "notnull": true},
+          {"field": "night_rhr_avg", "notnull": true},
+          {"field": "steps", "notnull": true},
+          {"field": "active_minutes", "notnull": true},
+          {"field": "total_sleep_s", "notnull": true}
+        ]
+      },
+      "note": "Ring data. `date` is written by the fetcher's own loop, so an empty 200 still yields a dated row — without `require` this lane reads ok on a table with no measurement in it. The five fields are payload-borne and independent: hr_points alone would be too strict (20 of 143 real days have none while still carrying steps/vo2_max). Coverage collapse is a separate problem, held by ultrahuman-coverage."
     },
     {
       "name": "technogym-cardio",

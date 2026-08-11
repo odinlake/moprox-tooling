@@ -78,24 +78,44 @@ def check_newest_file(lane, skips):
 
 
 def check_jsonl_newest(lane, skips):
+    """Age of the newest record — counting only records that carry data, if the lane says which.
+
+    A date the *collector* synthesises (from a filename, a loop counter, `date.today()`) measures
+    whether the collector ran, not whether anything arrived: handed a successful-but-empty response
+    it still writes a row dated today, and the lane reads ok forever. `require` is how such a lane
+    names the payload evidence that makes a row count. Lanes whose timestamp comes from the event
+    itself — `notifications`, whose `ts` is the captured event's own clock — need no `require`,
+    because there no event means no row.
+    """
     paths = expand(lane["glob"])
     if not paths:
         return f"no files match {lane['glob']}"
-    newest = None
+    require = lane.get("require")
+    newest, seen = None, 0
     for r in read_jsonl(paths, skips):
+        seen += 1
+        if require and not _match(r, require):
+            continue
         t = parse_ts(r.get(lane["field"]))
         if t is not None and (newest is None or t > newest):
             newest = t
     if newest is None:
+        if require and seen:
+            return (f"{seen} record(s) present, none of them carrying data — no row satisfies "
+                    f"`require` in {len(paths)} file(s)")
         return f"no usable '{lane['field']}' value in {len(paths)} file(s)"
     age = (time.time() - newest) / HOUR
     if age > lane["max_age_h"]:
-        return (f"newest record is {age:.1f} h old (limit {lane['max_age_h']} h), "
+        what = "newest record carrying data" if require else "newest record"
+        return (f"{what} is {age:.1f} h old (limit {lane['max_age_h']} h), "
                 f"at {datetime.fromtimestamp(newest, timezone.utc).isoformat(timespec='seconds')}")
     return None
 
 
 def _match(rec, spec):
+    # `any_of` first: a composite spec names no field of its own.
+    if "any_of" in spec:
+        return any(_match(rec, s) for s in spec["any_of"])
     v = rec.get(spec["field"])
     if "equals" in spec:
         return v == spec["equals"]
