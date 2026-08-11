@@ -497,6 +497,46 @@ def refresh_repos():
                 RuntimeError(_clip(r.stderr or r.stdout, 200)))
 
 
+def ledger_digest(led, budget=26000):
+    """The prompt's view of the ledger — clipped per section, not by one slice off the top.
+
+    This used to be `json.dumps({...five keys...}, indent=1)[:7000]`. By cycle 49 the ledger was
+    188 kB and `disputed` began at char 100602, so the agent was told "your objections come back in
+    your ledger" while receiving none of them, and saw only the first 6 of 32 accepted claims.
+    Cycles 47 and 48 both answered the same cycle-46 objection as a result.
+
+    Accepted claims are deliberately the shortest: they are published, so their full text is in
+    moprox-memory. Disputed claims are not published anywhere, so this is the agent's only copy.
+    """
+    def entry(e, claim, objs=0, olen=350):
+        d = {"cycle": e.get("cycle")}
+        if e.get("claim"):
+            d["claim"] = _clip(e["claim"], claim)
+        for k in ("why", "note", "operator_note"):
+            if e.get(k):
+                d[k] = _clip(e[k], 300)
+        if objs:
+            d["objections"] = [_clip(o, olen) for o in (e.get("objections") or [])[:objs]]
+        return d
+
+    dis = list(led.get("disputed") or [])
+    out = {
+        "_reading": "accepted claims are clipped to a line — the full fact is published as "
+                    "moprox-memory/<slug>.md. disputed claims are published NOWHERE, so what is "
+                    "here is all there is; disputed_older is the same list, one line each.",
+        "open": led.get("open") or [],
+        "inflight": led.get("inflight"),
+        "tried": [entry(e, 300) for e in (led.get("tried") or [])[-20:]],
+        "accepted": [entry(e, 160) for e in (led.get("accepted") or [])],
+        "disputed_older": [entry(e, 140) for e in dis[:-6]],
+        "disputed": [entry(e, 450, objs=2) for e in dis[-6:]],
+    }
+    s = json.dumps(out, indent=1)
+    if len(s) > budget:
+        s = s[:budget] + f"\n… LEDGER DIGEST TRUNCATED at {budget} of {len(s)} chars — say so."
+    return s
+
+
 def main():
     agent = sys.argv[1] if len(sys.argv) > 1 else "analyst"
     STATE.mkdir(parents=True, exist_ok=True)
@@ -530,7 +570,7 @@ def main():
     prompt = (
         f"Loop cycle {cyc}. Your standing instructions are in CLAUDE.md — follow them.\n\n"
         f"LEDGER (your durable state; do not re-derive what is already here):\n"
-        f"{json.dumps({k: led.get(k) for k in ('open','tried','accepted','disputed','inflight')}, indent=1)[:7000]}\n\n"
+        f"{ledger_digest(led)}\n\n"
         f"Anything under 'disputed' passed its own verifier and was then refuted by an "
         f"independent audit; it is NOT published. Answering an objection — by fixing the check, "
         f"narrowing the claim, or showing the objection wrong — is a legitimate increment.\n\n"
