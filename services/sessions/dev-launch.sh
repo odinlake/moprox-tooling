@@ -43,6 +43,22 @@ STATE="$STATE_DIR/$ID.session"
 FORK_FLAG="$STATE_DIR/$ID.fork"   # dropped by dev-cycle.sh; see "THE FORK FLAG" above
 SUMMARY_STAMP="$STATE_DIR/$ID.recap"
 
+# Estate MCP servers (google / agent-write / webscout). Passed WITHOUT --strict-mcp-config, so these
+# ADD to whatever is configured at user scope rather than replacing it — the claude.ai connectors stay.
+# Scoped to the dev sessions here rather than registered at user scope on purpose: only valet and
+# theming pass --strict-mcp-config, so a user-scope entry would also land in coach, steward and every
+# other `claude -p` run from $HOME, which have no use for 56 Google/Drive/webscout tools.
+# Cost: measured 2026-08-11, the three servers' full tool schemas are ~17,700 tok (google 30 tools
+# ~14,255, webscout 21 ~2,755, agent-write 5 ~697) against ~242 tok for names alone. Claude Code DEFERS
+# tool schemas — names are announced, ToolSearch loads a schema on demand — which is how the hosted
+# claude.ai connectors behave in these sessions. Deferral for locally-configured HTTP servers is
+# expected but NOT directly confirmed; what IS confirmed is that the servers connect and work
+# (`claude -p --mcp-config <this> --allowedTools mcp__google__search_gmail_messages` returned real
+# Gmail results). If context ever looks bloated, measure before blaming this.
+MCP_CONFIG="${MOPROX_DEV_MCP_CONFIG:-/home/mikael/projects/moprox-tooling/services/sessions/mcp.json}"
+MCP_ARGS=()
+[ -r "$MCP_CONFIG" ] && MCP_ARGS=(--mcp-config "$MCP_CONFIG")
+
 # Startup recap: submitted automatically when a thread is RESUMED (never on a fresh session — there is
 # nothing to recap). Set MOPROX_DEV_SUMMARY_PROMPT='' to turn it off.
 SUMMARY_PROMPT="${MOPROX_DEV_SUMMARY_PROMPT-This session just reconnected after a restart. Without running any tools, give a 3-6 bullet recap of what we were working on and exactly where we left off, ending with the single most useful next step. Be terse. If the thread has no substantive history, reply only: (reconnected, no prior work in this thread).}"
@@ -115,7 +131,7 @@ if [ "$resume" = 1 ]; then
     say "skipping startup recap (one was issued less than $SUMMARY_MIN_GAP s ago)"
   fi
   started=$SECONDS
-  "$CLAUDE" --remote-control "moprox dev $ID" "$@" --append-system-prompt "$PROMPT"
+  "$CLAUDE" --remote-control "moprox dev $ID" "${MCP_ARGS[@]}" "$@" --append-system-prompt "$PROMPT"
   rc=$?
   # Only treat a FAST exit as "this transcript can't be resumed" — a long-lived session that later dies is
   # an ordinary restart and must keep its pointer.
@@ -129,4 +145,4 @@ fi
 sid=$(uuidgen)
 say "fresh session $sid ($reason)"
 printf '%s\n' "$sid" > "$STATE"
-exec "$CLAUDE" --remote-control "moprox dev $ID" --session-id "$sid" --append-system-prompt "$PROMPT"
+exec "$CLAUDE" --remote-control "moprox dev $ID" "${MCP_ARGS[@]}" --session-id "$sid" --append-system-prompt "$PROMPT"

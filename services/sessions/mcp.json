@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "google": {"type": "http", "url": "http://mcp-google.lan:8000/mcp"},
+    "agent-write": {"type": "http", "url": "http://mcp-google.lan:8001/mcp"},
+    "webscout": {"type": "http", "url": "http://webscout.lan:8003/mcp"}
+  }
+}
