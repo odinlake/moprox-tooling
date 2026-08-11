@@ -49,6 +49,37 @@ def hr_series(d):
 def _round_or_none(v):
     return None if v is None else round(v)
 
+# The warm-up FLOOR and the CLIMB above it — two numbers that answer different questions.
+#
+# Floor: where HR sits once it has caught up with the pace but before drift has gone anywhere.
+# The 30 s median at 4:00 is the athlete's own definition (2026-08-11), replacing the 4-8' mean
+# coach had been using. Measured over the 19 easy runs since 25 Jun the two agree at r=0.91 and
+# cost 4.1% vs 3.9% day-to-day CV, so it buys a cleaner quantity at no real accuracy: 4-8' spans
+# four minutes during which drift has already started, so it was part floor and part drift.
+# A median, not a mean, because the strap's failure mode is DROPOUT, not spikes.
+# 4:00-4:30 also sits inside a constant pace for EVERY session type — easy holds 9 kph from t=0,
+# quality days warm up at 8 kph until 5:00 — so one window serves all of them. It does NOT make
+# types comparable to each other: those are two different paces. Compare within a type, and within
+# a treadmill belt (the belt moves an easy floor by up to 16 bpm).
+#
+# Climb: settled minus floor — what was left to give after minute 4. Independent of the day's
+# baseline (r=-0.07 against pre-run standing HR) where the floor itself is not (r=0.78), so the
+# two carry genuinely different information and the dashboard plots both.
+FLOOR_WIN = (4.0, 4.5)        # minutes from the start of the recording; median
+SETTLED_WIN = (35.0, 45.0)    # mean
+WIN_COVERAGE = 0.8            # a window less full than this reports None rather than a partial mean
+
+def window_stat(hr, win, fn):
+    """`fn` over a minute-window of the RAW per-second trace (t=0 = recording start), or None.
+
+    Raw, not the engine's trimmed active block: the block starts where HR first crosses an activity
+    threshold, which moves t=0 by a different amount every session and would make "minute 4" mean a
+    different point in the run each time.
+    """
+    lo, hi = int(win[0] * 60), int(win[1] * 60)
+    seg = [f for f in (_hr_val(v) for v in hr[lo:hi]) if f is not None]
+    return round(float(fn(seg)), 1) if len(seg) >= WIN_COVERAGE * (hi - lo) else None
+
 def downsample(x, n):
     x = np.asarray(x, float)
     if len(x) <= n: return [round(float(v)) for v in x]
@@ -145,10 +176,14 @@ def make_session(hr, sport, date, sid, sess_id, source="polar"):
                          "trough": round(float(before[-1])) if before else None,
                          "work_s": int(round(bouts[i])) if i < len(bouts) else None})
     tp = TRACE_POINTS if cat in ("easy", "tempo", "speed", "vo2max", "trail_easy") else TRACE_POINTS_THIN
+    floor = window_stat(hr, FLOOR_WIN, np.median)
+    settled = window_stat(hr, SETTLED_WIN, np.mean)
     return dict(
         id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
         dur_min=round(len(hr) / 60.0, 1), hr_avg=round(float(np.mean(block))),
         hr_max=round(float(np.max(block))), max5=max5, med10=_round_or_none(med10(hr)),
+        floor=floor, settled=settled,
+        climb=(round(settled - floor, 1) if floor is not None and settled is not None else None),
         nint=cls.n_work_bouts,
         above_lt2=bool(cls.above_lt2), clamp=bool(cls.hr_clamp_suspected), reps=reps,
         trace=downsample(block, tp), trace_step_s=round(len(block) / min(len(block), tp)))

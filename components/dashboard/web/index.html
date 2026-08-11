@@ -232,42 +232,43 @@ function overlayChart(sess){
 // one number that is comparable across EVERY session type (max5 averages across interval
 // recoveries and reads 6-8 bpm low on speed/vo2max days). One dot per session; the curve is the
 // mean per CALENDAR WEEK, drawn per type, broken across gaps > 3 weeks so it never spans a layoff.
-function med10Chart(sess, lt1, lt2){
-  const pts=sess.filter(s=>s.med10).sort((a,b)=>a.date<b.date?-1:1);
-  if(!pts.length) return '<h2>Peak sustained HR</h2><p class="muted">No sessions with HR data match.</p>';
+// `key` picks the field; `thr` is [[value,label],...] drawn only when it lands inside the data's
+// own range. Three measures share this because they differ only in those two things.
+function progChart(sess, key, head, sub, unit, thr){
+  const pts=sess.filter(s=>s[key]!=null).sort((a,b)=>a.date<b.date?-1:1);
+  const title=`<h2>${head} <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">(${sub})</span></h2>`;
+  if(!pts.length) return title+'<p class="muted">No sessions with this measure match.</p>';
   const W=760,H=300,pL=32,pR=10,pT=14,pB=22;
   const t0=new Date(pts[0].date).getTime(), t1=new Date(pts[pts.length-1].date).getTime();
   const span=Math.max(86400000,t1-t0);
-  const vals=pts.map(s=>s.med10);
+  const vals=pts.map(s=>s[key]);
   let lo=Math.min(...vals), hi=Math.max(...vals);
-  [lt1,lt2].forEach(v=>{ if(v&&v>=lo-8&&v<=hi+8){lo=Math.min(lo,v);hi=Math.max(hi,v);} });  // only pull in a nearby threshold
+  (thr||[]).forEach(p=>{ const v=p[0]; if(v&&v>=lo-8&&v<=hi+8){lo=Math.min(lo,v);hi=Math.max(hi,v);} });  // only pull in a nearby threshold
   const pad=Math.max(3,(hi-lo)*0.08); lo=Math.floor((lo-pad)/5)*5; hi=Math.ceil((hi+pad)/5)*5;
   const px=t=>pL+(W-pL-pR)*(t-t0)/span, py=v=>pT+(H-pT-pB)*(1-(v-lo)/(hi-lo));
   let g=""; for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=py(v);
     g+=`<line x1="${pL}" y1="${y.toFixed(1)}" x2="${W-pR}" y2="${y.toFixed(1)}"/><text class="axis" x="2" y="${(y+3).toFixed(1)}">${v.toFixed(0)}</text>`;}
-  let thr=""; [[lt1,"LT1"],[lt2,"LT2"]].forEach(p=>{ const v=p[0]; if(!v||v<lo||v>hi) return;
-    thr+=`<line x1="${pL}" y1="${py(v).toFixed(1)}" x2="${W-pR}" y2="${py(v).toFixed(1)}" stroke="var(--fade)" stroke-dasharray="4 3"/>`
+  let thrm=""; (thr||[]).forEach(p=>{ const v=p[0]; if(!v||v<lo||v>hi) return;
+    thrm+=`<line x1="${pL}" y1="${py(v).toFixed(1)}" x2="${W-pR}" y2="${py(v).toFixed(1)}" stroke="var(--fade)" stroke-dasharray="4 3"/>`
        +`<text class="axis" x="${W-pR-2}" y="${(py(v)-3).toFixed(1)}" text-anchor="end">${p[1]}</text>`;});
   const days=span/86400000, fmt=days>900?{year:"numeric"}:days>150?{month:"short",year:"2-digit"}:{day:"numeric",month:"short"};
   let xl=""; for(let k=0;k<=4;k++){const t=t0+span*k/4;
     xl+=`<text class="axis" x="${px(t).toFixed(1)}" y="${H-6}" text-anchor="${k===0?"start":k===4?"end":"middle"}">${new Date(t).toLocaleDateString("en-GB",fmt)}</text>`;}
-  const dots=pts.map(s=>`<circle cx="${px(new Date(s.date).getTime()).toFixed(1)}" cy="${py(s.med10).toFixed(1)}" r="2.6" fill="${CAT[s.cat]}" fill-opacity="0.5"><title>${s.date.slice(0,10)} · ${catl(s.cat)} · ${s.med10} bpm</title></circle>`).join("");
+  const dots=pts.map(s=>`<circle cx="${px(new Date(s.date).getTime()).toFixed(1)}" cy="${py(s[key]).toFixed(1)}" r="2.6" fill="${CAT[s.cat]}" fill-opacity="0.5"><title>${s.date.slice(0,10)} · ${catl(s.cat)} · ${s[key]}${unit}</title></circle>`).join("");
   const MON=d=>{const t=new Date(d);t.setDate(t.getDate()-((t.getDay()+6)%7));t.setHours(0,0,0,0);return t.getTime();};
   let curves="";
   [...new Set(pts.map(s=>s.cat))].forEach(c=>{
     // group by calendar week; plot each week's mean at the MEAN TIMESTAMP of its sessions, not the
     // Monday — a Monday can precede the first session and push the curve outside the plot area.
     const wk={}; pts.filter(s=>s.cat===c).forEach(s=>{const k=MON(s.date);
-      (wk[k]=wk[k]||{v:[],t:[]}); wk[k].v.push(s.med10); wk[k].t.push(new Date(s.date).getTime());});
+      (wk[k]=wk[k]||{v:[],t:[]}); wk[k].v.push(s[key]); wk[k].t.push(new Date(s.date).getTime());});
     const ks=Object.keys(wk).map(Number).sort((a,b)=>a-b);
     const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
     let d="",prev=null;
     ks.forEach(k=>{const w=wk[k];
       d+=((prev!=null&&k-prev<=21*86400000)?"L":"M")+px(mean(w.t)).toFixed(1)+" "+py(mean(w.v)).toFixed(1)+" "; prev=k;});
     curves+=`<path d="${d}" fill="none" stroke="${CAT[c]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;});
-  return `<h2>Peak sustained HR <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">`
-    +`(max of a rolling 10s median)</span></h2>`
-    +`<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thr}${xl}${curves}${dots}</svg>`;
+  return title+`<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thrm}${xl}${curves}${dots}</svg>`;
 }
 async function loadTraining(){
   const data = await JD("training/sessions.json");
@@ -302,6 +303,8 @@ async function loadTraining(){
     </div>
     <div class="panel" id="ovpanel" style="margin-top:1rem"></div>
     <div class="panel" id="m10panel" style="margin-top:1rem"></div>
+    <div class="panel" id="floorpanel" style="margin-top:1rem"></div>
+    <div class="panel" id="climbpanel" style="margin-top:1rem"></div>
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px">
         <div style="max-height:560px;overflow:auto"><table class="compact sess">
@@ -437,7 +440,15 @@ async function loadTraining(){
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
     $("#ovpanel").innerHTML = Sf.length ? overlayChart(Sf) : '<p class="muted">No sessions match.</p>';   // count is overlaid on the chart
-    $("#m10panel").innerHTML = med10Chart(Sf, data.lt1, data.lt2);          // obeys both the type and time-bucket filters
+    // All three obey the type and time-bucket filters. The floor is only comparable WITHIN a type
+    // (easy holds 9 kph at minute 4, quality days are still on an 8 kph warm-up) and within a belt,
+    // which is why every one of these draws its curve per type rather than pooling them.
+    $("#m10panel").innerHTML = progChart(Sf, "med10", "Peak sustained HR",
+      "max of a rolling 10s median", " bpm", [[data.lt1,"LT1"],[data.lt2,"LT2"]]);
+    $("#floorpanel").innerHTML = progChart(Sf, "floor", "Warm-up floor",
+      "median HR over 4:00–4:30 · compare within one type and one belt", " bpm", []);
+    $("#climbpanel").innerHTML = progChart(Sf, "climb", "Climb above the floor",
+      "settled HR (35–45′) minus the floor · what was left to give after minute 4", " bpm", []);
     const rows=$("#slist").querySelectorAll(".sessrow");
     const pick=i=>{ rows.forEach(r=>r.classList.toggle("sel",+r.dataset.i===i)); showDetail(Sf[i]); };   // mark row + detail + highlight curve
     rows.forEach(r=>r.onclick=()=>pick(+r.dataset.i));
