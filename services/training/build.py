@@ -52,12 +52,18 @@ def _round_or_none(v):
 # The warm-up FLOOR and the CLIMB above it — two numbers that answer different questions.
 #
 # Floor: where HR sits once it has caught up with the pace but before drift has gone anywhere.
-# The 30 s median at 4:00 is the athlete's own definition (2026-08-11), replacing the 4-8' mean
-# coach had been using. Measured over the 19 easy runs since 25 Jun the two agree at r=0.91 and
-# cost 4.1% vs 3.9% day-to-day CV, so it buys a cleaner quantity at no real accuracy: 4-8' spans
-# four minutes during which drift has already started, so it was part floor and part drift.
-# A median, not a mean, because the strap's failure mode is DROPOUT, not spikes.
-# 4:00-4:30 also sits inside a constant pace for EVERY session type — easy holds 9 kph from t=0,
+# A 60 s MEDIAN centred on minute 4 (athlete's definition, 2026-08-11), replacing the 4-8' mean
+# coach had been using. Measured over the 19 easy runs since 25 Jun it is the least noisy of every
+# candidate tried — 3.6% day-to-day CV against 3.9% for the old 4-8' mean and 4.1% for a 30 s
+# median at the same centre — while agreeing with the old number at r=0.91. The gain over 4-8' is
+# that four minutes of window contains drift, so that number was part floor and part drift.
+#
+# The window length is set by the strap, not by physiology. The failure mode is DROPOUT, not
+# spikes (Polar H10, ageing battery), which is why this is a median; and a dropout is ~15 s, so a
+# 30 s window can be half-eaten by one. Injected 15 s holds move a 30 s median by 2.0 bpm at the
+# 95th percentile and a 60 s median by ~1.0. Do not shorten it below 60 s.
+#
+# 3:30-4:30 sits inside a constant pace for EVERY session type — easy holds 9 kph from t=0,
 # quality days warm up at 8 kph until 5:00 — so one window serves all of them. It does NOT make
 # types comparable to each other: those are two different paces. Compare within a type, and within
 # a treadmill belt (the belt moves an easy floor by up to 16 bpm).
@@ -65,7 +71,7 @@ def _round_or_none(v):
 # Climb: settled minus floor — what was left to give after minute 4. Independent of the day's
 # baseline (r=-0.07 against pre-run standing HR) where the floor itself is not (r=0.78), so the
 # two carry genuinely different information and the dashboard plots both.
-FLOOR_WIN = (4.0, 4.5)        # minutes from the start of the recording; median
+FLOOR_WIN = (3.5, 4.5)        # minutes from the start of the recording; median
 SETTLED_WIN = (35.0, 45.0)    # mean
 WIN_COVERAGE = 0.8            # a window less full than this reports None rather than a partial mean
 

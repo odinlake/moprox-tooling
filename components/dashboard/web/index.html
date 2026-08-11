@@ -446,7 +446,7 @@ async function loadTraining(){
     $("#m10panel").innerHTML = progChart(Sf, "med10", "Peak sustained HR",
       "max of a rolling 10s median", " bpm", [[data.lt1,"LT1"],[data.lt2,"LT2"]]);
     $("#floorpanel").innerHTML = progChart(Sf, "floor", "Warm-up floor",
-      "median HR over 4:00–4:30 · compare within one type and one belt", " bpm", []);
+      "median HR over 3:30–4:30 · compare within one type and one belt", " bpm", []);
     $("#climbpanel").innerHTML = progChart(Sf, "climb", "Climb above the floor",
       "settled HR (35–45′) minus the floor · what was left to give after minute 4", " bpm", []);
     const rows=$("#slist").querySelectorAll(".sessrow");
