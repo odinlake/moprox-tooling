@@ -31,6 +31,7 @@ HOME     = Path.home()
 STATE    = HOME / ".local/share/moprox/loop"
 LEDGER   = STATE / "ledger.json"
 PROPOSALS= STATE / "proposals"          # the agent drops {claim, verify, expect} files here
+VERIFIERS= STATE / "verifiers"          # every verifier ever run, verbatim, one file per cycle
 STOP     = STATE / "STOP"               # touch to halt every loop agent; checked first
 USAGE    = HOME / ".local/share/moprox/agent-usage.jsonl"   # shared with run.py
 AGENTS   = HOME / "projects/private-data/agents"
@@ -285,11 +286,26 @@ def run_cycle_agent(agent, prompt):
 
 
 # --- proof ------------------------------------------------------------------
-def verify(prop, agent):
+def verify(prop, cyc, agent):
     """Run the proposal's own check. The harness executes it; the agent only wrote it."""
     script = prop.get("verify")
     if not script:
         return False, "no verify script"
+    # Keep the source before running it. The ledger's copy is bounded and lives inside a JSON
+    # digest; this one is the program itself, on disk, forever. Cycles 26-59 were archived only in
+    # the ledger, where _clip() folded every newline and cut 32 of 34 at 4000 chars — 46% of the
+    # source gone — and the only reason those are recoverable at all is that /tmp had not been
+    # swept. Nothing here should depend on the agent remembering to save its own work.
+    try:
+        VERIFIERS.mkdir(parents=True, exist_ok=True)
+        # A cycle may drop more than one proposal; never let the second silently erase the first.
+        dst, n = VERIFIERS / f"c{cyc}.py", 1
+        while dst.exists() and dst.read_text() != str(script):
+            n += 1
+            dst = VERIFIERS / f"c{cyc}-{n}.py"
+        dst.write_text(str(script))
+    except OSError as exc:
+        warn(f"could not archive verifier for cycle {cyc}: {exc}")
     # A verifier that touches nothing cannot fail, so it proves nothing: `print("ok")` with
     # expect="ok" passes trivially. Require evidence that it actually consults the world. This is a
     # HEURISTIC, not a proof — a determined tautology still gets through, which is why the digest
@@ -633,7 +649,7 @@ def main():
 
     accepted = rejected = disputed = 0
     for f, prop in collect_proposals():
-        ok, detail = verify(prop, agent)
+        ok, detail = verify(prop, cyc, agent)
         claim = _clip(prop.get("claim", "?"), 90)
         if ok:
             say(f"✓ verify PASS  {claim}  [{detail}]", 6, agent)
