@@ -45,6 +45,10 @@ MAX_STRIKES  = int(os.environ.get("LOOP_MAX_STRIKES", 3))     # consecutive bad 
 VERIFY_MAX_S = int(os.environ.get("LOOP_VERIFY_MAX_S", 300))
 ADVERSARIAL  = os.environ.get("LOOP_ADVERSARIAL", "1") != "0"
 REFUTE_MAX_S = int(os.environ.get("LOOP_REFUTE_MAX_S", 420))
+# Verifier source, as shown to a refuter and as archived in the ledger. Both were bounded well
+# under what the agent actually writes (the longest so far is 10934 chars), so both were cutting.
+# Generous on purpose: the ledger digest never carries this field, so the only cost is disk.
+SRC_MAX      = int(os.environ.get("LOOP_SRC_MAX", 40000))
 
 # Server-level MCP grants: `mcp__<server>` allows every tool that server exposes. Naming tools
 # individually is how the analyst ended up with 2 of the estate's 11 servers and a job
@@ -68,6 +72,23 @@ def say(text, pri=6, agent=""):
 def _clip(s, n):
     s = " ".join(str(s).split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _src(s, n):
+    """Bound a block of SOURCE CODE. Keeps newlines, and says out loud when it cut.
+
+    _clip() is for log lines and prose: it folds all whitespace, newlines included, to single
+    spaces. Run a Python program through it and what comes out is not a Python program — it is
+    either a syntax error or, if the file opened with a `#!` line, one enormous comment that parses
+    to an empty module. Both were happening: the refuter was shown an unmarked 6000-char slice
+    (11 of 13 verifiers cut mid-statement) and the ledger kept a _clip'd copy (0 of 33 executable).
+    Line structure is the payload here, not decoration.
+    """
+    s = str(s)
+    if len(s) <= n:
+        return s
+    return s[:n] + (f"\n\n# ---- TRUNCATED HERE: {len(s) - n} of {len(s)} chars were cut. "
+                    f"What you are reading is NOT the whole program. ----")
 
 
 def _wrap(s, width=96):
@@ -319,7 +340,7 @@ def refute(prop, evidence, lens, agent):
         f"You are auditing another agent's finding. Your job is to REFUTE it if it is refutable.\n\n"
         f"CLAIM: {prop.get('claim')}\n\nWHY IT MATTERS: {prop.get('why')}\n\n"
         f"EXPECTED SUBSTRING: {prop.get('expect')}\n\n"
-        f"THE VERIFIER THAT PASSED:\n```python\n{str(prop.get('verify'))[:6000]}\n```\n\n"
+        f"THE VERIFIER THAT PASSED:\n```python\n{_src(prop.get('verify'), SRC_MAX)}\n```\n\n"
         f"ITS OUTPUT:\n{_clip(evidence, 1500)}\n\n"
         f"YOUR LENS — {name}: {focus}\n\n"
         f"You may read files and run read-only commands to check. Change nothing.\n"
@@ -625,7 +646,7 @@ def main():
                 disputed += 1
                 led.setdefault("disputed", []).append(
                     {"cycle": cyc, "claim": prop.get("claim"), "evidence": detail,
-                     "verify": _clip(str(prop.get("verify") or ""), 4000),
+                     "verify": _src(prop.get("verify") or "", SRC_MAX),
                      "objections": objections})
                 say(f"⚑ DISPUTED  {claim}", 4, agent)
                 notify.send("DISPUTED — the verifier passed but the audit objected\n%s\n\n%s"
@@ -638,7 +659,7 @@ def main():
                  # Kept so a later audit can see what was actually run. Without it a retro-audit
                  # has to reconstruct the check from the claim, which is exactly the guesswork the
                  # verifier exists to remove.
-                 "verify": _clip(str(prop.get("verify") or ""), 4000)})
+                 "verify": _src(prop.get("verify") or "", SRC_MAX)})
             if promote(prop, detail, agent):
                 say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
             notify.send("FINDING (verified)\n%s\n\nwhy: %s\nevidence: %s"
