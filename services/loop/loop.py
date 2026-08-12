@@ -32,6 +32,7 @@ STATE    = HOME / ".local/share/moprox/loop"
 LEDGER   = STATE / "ledger.json"
 PROPOSALS= STATE / "proposals"          # the agent drops {claim, verify, expect} files here
 VERIFIERS= STATE / "verifiers"          # every verifier ever run, verbatim, one file per cycle
+OBJECTIONS= STATE / "objections"        # every audit objection ever raised, verbatim, one per lens
 STOP     = STATE / "STOP"               # touch to halt every loop agent; checked first
 USAGE    = HOME / ".local/share/moprox/agent-usage.jsonl"   # shared with run.py
 AGENTS   = HOME / "projects/private-data/agents"
@@ -50,6 +51,12 @@ REFUTE_MAX_S = int(os.environ.get("LOOP_REFUTE_MAX_S", 420))
 # under what the agent actually writes (the longest so far is 10934 chars), so both were cutting.
 # Generous on purpose: the ledger digest never carries this field, so the only cost is disk.
 SRC_MAX      = int(os.environ.get("LOOP_SRC_MAX", 40000))
+# An audit objection, as captured from the refuter. This was _clip(..., 300) at the point of
+# capture, so the ledger never held more: 32 of the 34 objections ever raised came back at exactly
+# the cap, 36.6% of their text discarded, and for 15 of them the consequence clause — the part that
+# says what the defect MEANS for the claim — fell entirely in the discarded tail. The agent is told
+# answering an objection is a full increment while being shown two thirds of one.
+OBJ_MAX      = int(os.environ.get("LOOP_OBJ_MAX", 4000))
 
 # Server-level MCP grants: `mcp__<server>` allows every tool that server exposes. Naming tools
 # individually is how the analyst ended up with 2 of the estate's 11 servers and a job
@@ -391,12 +398,17 @@ def refute(prop, evidence, lens, agent):
         warn(f"refuter[{name}] verdict was not valid JSON ({exc}) — treating as no objection")
         return None
     if v.get("refuted") and str(v.get("defect", "")).strip():
-        return f"[{name}] {_clip(str(v['defect']).strip(), 300)}"
+        return f"[{name}] {_clip(str(v['defect']).strip(), OBJ_MAX)}"
     return None
 
 
-def adversarial(prop, evidence, agent):
-    """Run every lens. Returns the objections raised, empty if the finding survived."""
+def adversarial(prop, evidence, agent, cyc=0):
+    """Run every lens. Returns the objections raised, empty if the finding survived.
+
+    Each objection is also written to disk verbatim, for the same reason verifiers are: the ledger
+    is a bounded digest, and a disputed claim is published nowhere else, so the ledger's copy of the
+    objection was the only copy — and it was cut at 300 chars.
+    """
     if not ADVERSARIAL:
         return []
     objections = []
@@ -405,6 +417,15 @@ def adversarial(prop, evidence, agent):
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
         if d:
             objections.append(d)
+            try:
+                OBJECTIONS.mkdir(parents=True, exist_ok=True)
+                dst, n = OBJECTIONS / f"c{cyc}-{lens[0]}.txt", 1
+                while dst.exists() and dst.read_text() != d:
+                    n += 1
+                    dst = OBJECTIONS / f"c{cyc}-{lens[0]}-{n}.txt"
+                dst.write_text(d)
+            except OSError as exc:
+                warn(f"could not archive objection for cycle {cyc}: {exc}")
     return objections
 
 
@@ -545,7 +566,23 @@ def ledger_digest(led, budget=26000):
     Accepted claims are deliberately the shortest: they are published, so their full text is in
     moprox-memory. Disputed claims are not published anywhere, so this is the agent's only copy.
     """
-    def entry(e, claim, objs=0, olen=350):
+    def objection(cyc, o, olen):
+        """Prefer the verbatim archive on disk over the ledger's bounded copy.
+
+        Objections raised before the archive existed are in the ledger cut at 300 chars; the full
+        text was recovered from the refuters' own transcripts and written to OBJECTIONS, so this
+        lookup is what makes that repair visible. Only substitutes when the archived text really is
+        the same objection, extended.
+        """
+        name = o.split("]", 1)[0].lstrip("[") if o.startswith("[") else ""
+        try:
+            full = (OBJECTIONS / f"c{cyc}-{name}.txt").read_text().strip()
+        except OSError:
+            return _clip(o, olen)
+        stem = _clip(o, len(o)).rstrip("…")
+        return _clip(full if full.startswith(stem) else o, olen)
+
+    def entry(e, claim, objs=0, olen=1600):
         d = {"cycle": e.get("cycle")}
         if e.get("claim"):
             d["claim"] = _clip(e["claim"], claim)
@@ -553,7 +590,8 @@ def ledger_digest(led, budget=26000):
             if e.get(k):
                 d[k] = _clip(e[k], 300)
         if objs:
-            d["objections"] = [_clip(o, olen) for o in (e.get("objections") or [])[:objs]]
+            d["objections"] = [objection(e.get("cycle"), o, olen)
+                               for o in (e.get("objections") or [])[:objs]]
         return d
 
     dis = list(led.get("disputed") or [])
@@ -653,7 +691,7 @@ def main():
         claim = _clip(prop.get("claim", "?"), 90)
         if ok:
             say(f"✓ verify PASS  {claim}  [{detail}]", 6, agent)
-            objections = adversarial(prop, detail, agent)
+            objections = adversarial(prop, detail, agent, cyc)
             if objections:
                 # DISPUTED, not rejected. A rejected claim goes to `tried`, which the agent is told
                 # is finished work — so filing an unresolved objection there would bury a possibly
