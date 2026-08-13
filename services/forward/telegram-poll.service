@@ -9,6 +9,7 @@ Wants=network-online.target
 Type=simple
 User=mikael
 Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1   # else stdout is block-buffered and the journal lags/loses lines
 ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/telegram_poll.py
 Restart=always
 RestartSec=10

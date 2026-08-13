@@ -43,7 +43,7 @@ def router_worker():
         try:
             agent, reason = route.decide(rec)
             print("route:", agent, "(%s) |" % reason, (rec.get("text") or "")[:50])
-            convo.log_in((rec.get("text") or "").strip(), rec.get("msg_id"), rec.get("reply_to"), to=agent)
+            convo.log_in(route.text_of(rec), rec.get("msg_id"), rec.get("reply_to"), to=agent)
             Q[agent].put(rec)
         except Exception as e:
             print("router error:", e); tg.send("(routing error: %s)" % str(e)[:150], agent="steward")
@@ -89,7 +89,8 @@ def main():
                     except Exception as _e:
                         errlog.skip("dispatcher.py: inbox line", _e)
                         continue
-                    if (rec.get("text") or "").strip() and our_chat(rec):
+                    # An attachment with no caption is still a message ("here" + a PDF) — route it.
+                    if ((rec.get("text") or "").strip() or rec.get("files")) and our_chat(rec):
                         Q["router"].put(rec)
                 off += nl + 1
                 OFFSET.write_text(str(off))

@@ -16,7 +16,7 @@ import json, re, sys
 from pathlib import Path
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 from run import run_agent
-import tg, convo
+import tg, convo, tg_files
 
 DEV_INBOX = Path.home() / ".local/share/moprox/dev-requests.jsonl"
 ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming)\b[\s:,>\-]*", re.I)   # explicit address at the start
@@ -26,9 +26,19 @@ def _json(s):
     try: return json.loads(m.group(0)) if m else None
     except Exception: return None
 
+def text_of(rec):
+    """The message as an agent should see it: the operator's words plus, when they attached
+    something, where that file now IS on disk. An attachment with no caption still reads as a
+    message rather than an empty string (which is what used to get dropped)."""
+    text = (rec.get("text") or "").strip()
+    files = rec.get("files")
+    if not files: return text
+    return (text + "\n\n" if text else "") + "Attached to this message:\n" + tg_files.describe(files)
+
+
 def decide(rec):
     """Return (agent, reason). Deterministic signals win; steward LLM only for true ambiguity."""
-    text = (rec.get("text") or "").strip()
+    text = text_of(rec)
     m = ADDR.match(text)
     if m: return m.group(1).lower(), "explicit address"
     a = convo.agent_for_msg(rec.get("reply_to"))
@@ -54,9 +64,17 @@ HISTORY_NOTE = ("You are given only this latest message. You usually need no mor
                 "context. If THIS message refers to earlier conversation, run `convo tail [N]` (recent "
                 "turns, default 12) or `convo search <regex>` to pull just what you need.")
 
+# Added only when the operator actually attached something: the file is already downloaded, so the
+# agent's job is to open it, not to explain that it cannot.
+FILES_NOTE = ("The attached file(s) are ALREADY downloaded to this machine at the paths shown — open "
+              "them with Read. To put one in the operator's Google Drive, run `drive-put <path> "
+              "[folder]` (uploads into Drive /agent/<folder>, default 'inbox', and prints the link). "
+              "If a file failed to download, say so plainly and ask them to resend.")
+
 def handle(agent, rec):
     """Run the chosen agent on the routed message. History is optional — the agent reads it on demand."""
-    text = (rec.get("text") or "").strip()
+    text = text_of(rec)
+    if rec.get("files"): text = text + "\n\n" + FILES_NOTE
     reply_to = rec.get("msg_id") or None        # thread our reply under the operator's message
     if agent == "coach":
         reply = run_agent("coach",
@@ -105,7 +123,7 @@ def summarize_for_digest(old_text):
 
 def process_message(rec):
     """Convenience for the CLI: decide + log + handle inline (the dispatcher splits these)."""
-    text = (rec.get("text") or "").strip()
+    text = text_of(rec)
     if not text: return "empty"
     try:
         agent, reason = decide(rec)

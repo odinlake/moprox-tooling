@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Thin wrapper so agents can run `drive-put <file> [folder]` (stable command name for the permission
+# allowlist — no path/python3/~ matching pitfalls). Mirrors to ~/.local/bin/drive-put, like `convo`.
+# googleapiclient is not installed in the system python, so pick an interpreter that has it.
+set -euo pipefail
+for py in "$HOME/docindex/venv/bin/python" /usr/bin/python3; do
+  if [ -x "$py" ] && "$py" -c 'import googleapiclient' 2>/dev/null; then
+    exec "$py" /home/mikael/projects/moprox-tooling/services/drive/drive_put.py "$@"
+  fi
+done
+echo "drive-put: no python with googleapiclient (tried ~/docindex/venv, /usr/bin/python3)" >&2
+exit 1

@@ -6,8 +6,11 @@ near-real-time without webhooks. Creds from ~/.config/claude-dev/telegram.env.
 This is just the *capture* layer — routing replies to the right agent is layered on top (see the
 agent-architecture decision in docs/roadmap.md). Run as a Restart=always systemd service.
 """
-import json, os, time, urllib.parse, urllib.request
+import json, os, sys, time, urllib.parse, urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tg_files          # documents/photos/voice -> a real file on disk (see tg_files.py)
 
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
 INBOX  = Path(os.environ.get("TELEGRAM_INBOX", Path.home() / ".local/share/moprox/telegram-inbox.jsonl"))
@@ -59,8 +62,16 @@ def main():
             rec = {"ts": int(time.time()), "update_id": u["update_id"], "chat_id": m["chat"]["id"],
                    "msg_id": m.get("message_id"),
                    "from": (m.get("from") or {}).get("username") or (m.get("from") or {}).get("first_name"),
-                   "text": m.get("text", ""),
+                   "text": m.get("text", "") or m.get("caption", "") or "",
                    "reply_to": (m.get("reply_to_message") or {}).get("message_id")}
+            # Attachments: download them HERE, while the file_id is still valid. Telegram never
+            # replays an update once the offset advances, so a file not fetched now is a file the
+            # operator has to send again (tg_files.recover can re-forward, but only if we notice).
+            # A caption is the message's text, so "here's the letter — file it" routes normally.
+            files = tg_files.capture(tok, m)
+            if files:
+                rec["files"] = files
+                if m.get("media_group_id"): rec["media_group"] = m["media_group_id"]
             # Keep where a forward CAME FROM. The flattened record dropped it, so "forward me this and
             # act on it" silently lost its origin - and identifying a group by forwarding one of its
             # messages here produced nothing usable. Bot API 7.x sends forward_origin; older payloads
@@ -75,7 +86,8 @@ def main():
                 _u2 = _fo.get("sender_user") or m.get("forward_from") or {}
                 if _u2: rec["fwd_from_user"] = _u2.get("username") or _u2.get("first_name")
             with open(INBOX, "a") as f: f.write(json.dumps(rec) + "\n")
-            print("inbox <-", rec["from"], repr(rec["text"][:80]))
+            print("inbox <-", rec["from"], repr(rec["text"][:80]),
+                  "+%d file(s)" % len(files) if files else "")
         if r.get("result"): STATE.write_text(str(offset))
 
 if __name__ == "__main__":

@@ -25,6 +25,10 @@ BOOK  = HOME / ".local/share/moprox"                          # the book of work
 # only SYMLINKED into each agent dir, so the permission layer resolves the real path and denies the
 # write unless this directory is granted. Omitting it makes the agent silently unable to save memory.
 SHARED_MEM = HOME / "projects/moprox-memory"
+# Files the operator sent over Telegram (documents/photos/voice), downloaded by telegram_poll via
+# tg_files.py. An agent asked to "file this letter" must be able to READ the thing it was handed, so
+# every agent that talks to the operator gets this directory.
+TG_FILES = HOME / ".local/share/moprox/telegram-files"
 LOCAL_BIN = HOME / ".local/bin"
 # Resolve the CLI absolutely: under systemd the service PATH is minimal and won't find ~/.local/bin.
 CLAUDE = shutil.which("claude") or str(LOCAL_BIN / "claude")
@@ -36,6 +40,7 @@ DEV_DENY = ",".join("Bash(%s)" % p for p in (
     "reboot:*", "shutdown:*", "dd:*", "mkfs:*", "gh:*"))   # service mutation needs sudo (denied); read-only systemctl ok
 TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
+DRIVE_TOOL = "Bash(drive-put:*)"        # ...plus the one-verb Drive uploader (services/drive/drive-put)
 THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
 # theming pushes feature BRANCHES and opens PRs, but never bypasses protections: deny force-push +
 # direct master/main pushes, the dangerous `gh` verbs (merge a PR, delete/archive a repo), and the
@@ -52,23 +57,24 @@ AGENT_FLAGS = {
             "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob",
             "--disallowedTools", DEV_DENY,
             # shares THIS session's memory (also symlinked into the dev project dir so it auto-loads);
-            "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK), str(SHARED_MEM)],  # variadic: keep last
+            "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(BOOK), str(SHARED_MEM)],  # BOOK covers TG_FILES; variadic: keep last
     # coach: a real analyst — Python (matplotlib + the analysis engine), can build & SEND charts to
     # Telegram, do web research (WebSearch/WebFetch), edit its own memory. Catastrophic commands denied.
     "coach": ["--permission-mode", "acceptEdits",
               "--allowedTools", "Bash,Edit,Write,Read,Grep,Glob,WebSearch,WebFetch",
               "--disallowedTools", DEV_DENY,
               # tooling + private-data + dash data + the memory store (coach-memory.md lives there now)
-              "--add-dir", str(REPOS[1]), str(REPOS[2]), str(TRAINING_DATA), str(SHARED_MEM)],  # variadic: keep last
+              "--add-dir", str(REPOS[1]), str(REPOS[2]), str(TRAINING_DATA), str(SHARED_MEM),
+              str(TG_FILES)],  # variadic: keep last
     # steward: only the convo helper, to investigate routing history when answering meta questions
     "steward": ["--allowedTools", CONVO_TOOL],
     # valet: writes its own preference memory (learns what to surface) + the convo helper
     # valet: morning brief + afternoon catch-up; reads (only) the Google Workspace MCP (read-only,
     # impersonating Mikael) for overnight email + calendar, scoped to ONLY this agent.
     "valet": ["--permission-mode", "acceptEdits",
-              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s" % CONVO_TOOL,
+              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s,%s" % (CONVO_TOOL, DRIVE_TOOL),
               "--mcp-config", str(AGENTS["valet"] / "mcp.json"), "--strict-mcp-config",
-              "--add-dir", str(SHARED_MEM)],   # valet-memory.md lives in the memory store; variadic: keep last
+              "--add-dir", str(SHARED_MEM), str(TG_FILES)],   # valet-memory.md lives in the memory store; variadic: keep last
     # theming: theme-ontology expert. Answers data questions via the totolo MCP (scoped to ONLY this
     # agent with --mcp-config + --strict-mcp-config) and prepares branch-only edits to the theming repo.
     "theming": ["--permission-mode", "acceptEdits",
