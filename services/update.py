@@ -172,15 +172,29 @@ def main():
     # dns — cheap fetch from the exporter (leave the prior file if it's unreachable)
     t0 = time.monotonic()
     try:
-        raw = sp.run(["curl", "-fsS", "--max-time", "10", DNS_EXPORTER], check=True, text=True, capture_output=True).stdout
+        # 30 s, not 10: a cold exporter (restarted, cache empty) must read its whole log archive
+        # once before it can answer, and a scrape that gives up mid-body is what fills the DNS
+        # box's journal with BrokenPipe tracebacks. Warm scrapes answer in milliseconds.
+        raw = sp.run(["curl", "-fsS", "--max-time", "30", DNS_EXPORTER], check=True, text=True, capture_output=True).stdout
         d = json.loads(raw)
         (DATA / "dns").mkdir(exist_ok=True)
         (DATA / "dns/blocked.json").write_text(json.dumps(
             {"generated": int(time.time()), "totals": d.get("totals", {}), "blocked_days": d.get("blocked_days", [])},
             separators=(",", ":")))
         timings["dns"] = (round((time.monotonic() - t0) * 1000), (DATA / "dns/blocked.json").stat().st_size)
-    except sp.CalledProcessError:
-        pass
+    except sp.CalledProcessError as e:
+        # Keeping the prior file is right — a blank panel is worse than a stale one — but doing it
+        # SILENTLY hid a six-day outage (logrotate left dnsmasq writing to the rotated inode, so
+        # every scrape re-parsed a 210 MB log and timed out). Say so, and say how stale it is.
+        prev = DATA / "dns/blocked.json"
+        age = ""
+        if prev.exists():
+            try:
+                age = f", keeping data from {round((time.time() - json.loads(prev.read_text())['generated']) / 3600, 1)} h ago"
+            except (ValueError, KeyError):
+                age = ", keeping the previous file"
+        print(f"WARNING: dns feed not updated: curl exit {e.returncode} from {DNS_EXPORTER}{age}",
+              file=sys.stderr)
 
     # training — rebuild when the raw Polar input changed (avoids the expensive parse), or when the
     # published file is missing (e.g. a freshly-seeded data branch) so the feed is never absent.
