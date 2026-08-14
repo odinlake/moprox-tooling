@@ -26,7 +26,15 @@ die() { echo "<3>$(date -Is) $*" >&2; exit 1; }
 
 cd "$PROD" || die "FATAL: $PROD missing"
 before=$(git rev-parse --short HEAD)
-git fetch -q origin "$BRANCH" || die "fetch failed (check ownership of $PROD/.git — a root-owned object blocks the mikael-run unit)"
+# Report what git ACTUALLY said, at err level. This line used to name one guessed cause on every
+# failure ("a root-owned object blocks the mikael-run unit"). On 2026-08-13T14:35Z the real cause was
+# `git@github.com: Permission denied (publickey)` — present in the journal, but only at priority 6,
+# below the level the comment above sends triage to. The single priority-3 line said "check
+# ownership". A hard-coded diagnosis on a generic failure is worse than no diagnosis: it is confident
+# and wrong. Capture stderr so the cause and the alert are the same line.
+if ! fetch_err=$(git fetch -q origin "$BRANCH" 2>&1); then
+  die "fetch failed: $(printf '%s' "$fetch_err" | tr '\n' ' ' | cut -c1-300)"
+fi
 after=$(git rev-parse --short "origin/$BRANCH")
 [ "$before" = "$after" ] && exit 0
 
