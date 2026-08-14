@@ -501,9 +501,15 @@ def open_incidents():
         return ""
     lines = []
     for i in rows:
-        last = str(i.get("last_seen") or "")[:19]
+        # age_hours, not last_seen: the API's raw field is journald's MICROSECOND epoch, which
+        # renders as an 16-digit integer nobody can read at a glance.
+        try:
+            age = float(i.get("age_hours"))
+            when = f", last {age:.0f} h ago" if age < 48 else f", last {age / 24:.0f} d ago"
+        except (TypeError, ValueError):
+            when = ""
         lines.append(f"- [{i.get('score', '?')}] {i.get('host', '?')}/{i.get('unit', '?')} "
-                     f"x{i.get('count', '?')}{' last ' + last if last else ''}")
+                     f"({i.get('kind', '?')}) x{i.get('count', '?')}{when}")
     return ("\n\nOPEN INCIDENTS (the estate's queue — unit failures, stale lanes, and services "
             "logging errors below err level; highest score first):\n" + "\n".join(lines)
             + "\nThese are NOT assignments and nobody has triaged them. Investigating one is a "
