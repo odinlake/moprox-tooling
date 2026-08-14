@@ -34,6 +34,7 @@ import errlog
 import tg
 
 URL = os.environ.get("INCIDENT_URL", "http://logview.lan:8016/api/incidents?window=14d&limit=40")
+ISSUES_URL = os.environ.get("ISSUES_URL", "http://logview.lan:8016/api/issues?status=open&limit=50")
 STATE = Path(os.environ.get("INCIDENT_DIGEST_STATE",
                             Path.home() / ".local/state/incident-digest.json"))
 HIGH_SCORE = int(os.environ.get("INCIDENT_HIGH_SCORE", "8"))
@@ -69,6 +70,18 @@ def send(text):
 def fetch():
     with urllib.request.urlopen(URL, timeout=20) as r:
         return json.loads(r.read().decode()).get("incidents") or []
+
+
+def open_issues():
+    """Open issues are context, never a reason to post: an issue waiting on the operator is not
+    news every morning. Counted in a digest that goes out anyway, so the two halves of the board
+    are never read apart."""
+    try:
+        with urllib.request.urlopen(ISSUES_URL, timeout=15) as r:
+            return json.loads(r.read().decode()).get("issues") or []
+    except Exception as exc:
+        errlog.err("incident-digest: could not read the issue list", exc)
+        return []
 
 
 def key(i):
@@ -156,6 +169,11 @@ def main():
             lines.append(f"  {detail[:200]}")
     if quiet:
         lines.append(f"\n{len(quiet)} other open incident(s) unchanged and not repeated here.")
+    iss = open_issues()
+    if iss:
+        mine = sum(1 for i in iss if (i.get("owner") or "") == "operator")
+        lines.append(f"{len(iss)} open issue(s){f', {mine} waiting on you' if mine else ''}: "
+                     + "; ".join((i.get("title") or i.get("id", ""))[:70] for i in iss[:3]))
     lines.append("\nhttps://mo.lan/incidents/")
     text = "\n".join(lines)[:3900]
 
