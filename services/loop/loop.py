@@ -641,21 +641,52 @@ def ledger_digest(led, budget=26000):
         return d
 
     dis = list(led.get("disputed") or [])
-    out = {
-        "_reading": "accepted claims are clipped to a line — the full fact is published as "
-                    "moprox-memory/<slug>.md. disputed claims are published NOWHERE, so what is "
-                    "here is all there is; disputed_older is the same list, one line each.",
-        "open": led.get("open") or [],
-        "inflight": led.get("inflight"),
-        "tried": [entry(e, 300) for e in (led.get("tried") or [])[-20:]],
-        "accepted": [entry(e, 160) for e in (led.get("accepted") or [])],
-        "disputed_older": [entry(e, 140) for e in dis[:-6]],
-        "disputed": [entry(e, 450, objs=2) for e in dis[-6:]],
-    }
-    s = json.dumps(out, indent=1)
-    if len(s) > budget:
-        s = s[:budget] + f"\n… LEDGER DIGEST TRUNCATED at {budget} of {len(s)} chars — say so."
-    return s
+
+    def build(olen, n_old, clip_old, clip_acc, clip_dis, omitted):
+        # `disputed` sits ahead of the recoverable sections deliberately. It is the one thing in
+        # here that exists nowhere else, and the last-resort slice below eats the tail — so the
+        # tail must never be it. Until cycle 86 `disputed` was last, and cycle 86's own prompt was
+        # cut 1649 chars short: it lost the whole newest dispute (c82) and never knew.
+        old = dis[:-6]
+        return {
+            "_reading": "accepted claims are clipped to a line — the full fact is published as "
+                        "moprox-memory/<slug>.md. disputed claims are published NOWHERE, so what "
+                        "is here is all there is; disputed_older is the same list, one line each.",
+            "_omitted": omitted or "nothing — this digest is complete",
+            "open": led.get("open") or [],
+            "inflight": led.get("inflight"),
+            "disputed": [entry(e, clip_dis, objs=2, olen=olen) for e in dis[-6:]],
+            "tried": [entry(e, 300) for e in (led.get("tried") or [])[-20:]],
+            "accepted": [entry(e, clip_acc) for e in (led.get("accepted") or [])],
+            "disputed_older": [entry(e, clip_old) for e in old[-n_old:] if n_old],
+        }
+
+    # Fit by discarding named material in a fixed order, cheapest loss first, and SAYING what went.
+    # A digest that silently ends mid-sentence reads as a complete ledger; one that reports
+    # "24 disputed_older entries dropped" is a cycle that knows what it is missing.
+    n_old = len(dis[:-6])
+    ladder = [(1600, n_old, 140, 160, 450)]
+    ladder += [(1600, n, 140, 160, 450) for n in (30, 20, 10, 0) if n < n_old]
+    ladder += [(1600, 0, 140, 120, 450), (1200, 0, 140, 120, 450), (900, 0, 140, 90, 450),
+               (600, 0, 140, 60, 300), (400, 0, 100, 60, 200)]
+    for olen, n, clip_old, clip_acc, clip_dis in ladder:
+        omitted = []
+        if n < n_old:
+            omitted.append(f"disputed_older: {n_old - n} of {n_old} oldest entries dropped to fit "
+                           f"the digest budget ({budget} chars); the newest {n} are kept")
+        if clip_acc < 160:
+            omitted.append(f"accepted: claims clipped to {clip_acc} chars, not 160 — "
+                           f"full text is moprox-memory/<slug>.md")
+        if olen < 1600 or clip_dis < 450:
+            omitted.append(f"disputed: claims clipped to {clip_dis} and objections to {olen} "
+                           f"chars — objections are verbatim in "
+                           f"{OBJECTIONS}/c<cycle>-<lens>.txt, the claims NOWHERE else")
+        s = json.dumps(build(olen, n, clip_old, clip_acc, clip_dis, omitted), indent=1)
+        if len(s) <= budget:
+            return s
+    return s[:budget] + (f"\n… LEDGER DIGEST TRUNCATED at {budget} of {len(s)} chars even after "
+                         f"every reduction — say so. What was cut is the TAIL: disputed_older "
+                         f"first, then accepted; `disputed` is emitted early and is intact.")
 
 
 def main():
