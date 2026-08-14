@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the estate incident digest at 08:30 local
+[Timer]
+# Morning, before the working day, and well after the 07:00 loop cycle so anything the analyst
+# raised overnight is already in the queue. Persistent so a box that was off still reports once.
+OnCalendar=*-*-* 08:30:00
+Persistent=true
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target

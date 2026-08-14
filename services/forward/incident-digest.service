@@ -1,0 +1,13 @@
+# Daily estate-incident digest to the operator's Telegram — SILENT unless something is material.
+# Triggered by incident-digest.timer. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox daily incident digest (open incidents -> Telegram, only if material)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/incident_digest.py

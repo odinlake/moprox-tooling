@@ -471,6 +471,46 @@ def promote(prop, evidence, agent):
 CAPS = Path(__file__).resolve().parent / "capabilities.json"
 
 
+INCIDENTS_URL = os.environ.get("LOOP_INCIDENTS_URL",
+                               "http://logview.lan:8016/api/incidents?window=7d&limit=8")
+
+
+def open_incidents():
+    """The estate's open incident queue, as a prompt block. Empty string when there is nothing.
+
+    The queue is a PULL surface and nothing was pulling: in 72 cycles the analyst called
+    open_incidents() six times, and no timer, service or digest anywhere in the estate reads it at
+    all. So detections landed in a room with nobody in it — the freshness checker's lane breaches
+    and, since 2026-08-13, logscan's error-shaped-log findings. Injecting it makes the queue a
+    standing input rather than something the agent has to remember to ask about, the same way the
+    DEGRADED block turned capability gaps from invisible into unavoidable.
+
+    Not fatal, and deliberately not a task list: the agent decides whether an incident is the best
+    increment this cycle. It cannot ack them (that grant is withheld on purpose), so an incident it
+    investigates stays open until a human closes it.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(INCIDENTS_URL, timeout=10) as r:
+            d = json.loads(r.read().decode())
+    except Exception as exc:
+        err("open_incidents: could not read the incident queue — it is UNCHECKED this cycle", exc)
+        return ""
+    rows = d.get("incidents") or []
+    if not rows:
+        return ""
+    lines = []
+    for i in rows:
+        last = str(i.get("last_seen") or "")[:19]
+        lines.append(f"- [{i.get('score', '?')}] {i.get('host', '?')}/{i.get('unit', '?')} "
+                     f"x{i.get('count', '?')}{' last ' + last if last else ''}")
+    return ("\n\nOPEN INCIDENTS (the estate's queue — unit failures, stale lanes, and services "
+            "logging errors below err level; highest score first):\n" + "\n".join(lines)
+            + "\nThese are NOT assignments and nobody has triaged them. Investigating one is a "
+              "legitimate increment; so is ignoring them for something better. You cannot "
+              "acknowledge them, so say plainly in your closing line if one looks urgent.")
+
+
 def preflight():
     """Check declared capabilities against reality. Returns a list of human-readable failures.
 
@@ -652,6 +692,8 @@ def main():
         f"Do ONE increment this cycle. Write any proposal as a JSON file in {PROPOSALS} "
         f"(schema in CLAUDE.md). Finish by stating in one line what you did."
     )
+
+    prompt += open_incidents()
 
     gaps = preflight()
     if gaps:
