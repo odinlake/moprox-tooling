@@ -156,7 +156,7 @@ def main():
             lines.append(f"  {detail[:200]}")
     if quiet:
         lines.append(f"\n{len(quiet)} other open incident(s) unchanged and not repeated here.")
-    lines.append("\nmo.lan/logs → Incidents")
+    lines.append("\nhttps://mo.lan/incidents/")
     text = "\n".join(lines)[:3900]
 
     if dry:
