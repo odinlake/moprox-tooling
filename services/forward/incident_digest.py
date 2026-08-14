@@ -11,7 +11,7 @@ is how a six-day outage goes unread. So this posts only when at least one incide
 
   - new since the last digest, or
   - escalated (its count grew by ESCALATION_FACTOR or more), or
-  - high-scoring (>= HIGH_SCORE) and seen in the last day.
+  - high-scoring (>= HIGH_SCORE), seen in the last day, and not already reported this week.
 
 Anything else — a queue of known, unchanged, low-score items — is silence. Silence therefore means
 "nothing changed", not "nothing is wrong", and the message says how many quiet items are still open
@@ -45,6 +45,10 @@ FRESH_H = 24
 # visible in mo.lan/logs; it just does not earn a message. 48 h, so a single failure three days ago
 # stays out of the daily ping.
 NEW_MAX_AGE_H = float(os.environ.get("INCIDENT_NEW_MAX_AGE_H", "48"))
+# A chronic high-score incident would otherwise qualify as "material" every single day and become
+# the wallpaper this whole design is trying to avoid. Serious-but-known resurfaces weekly; serious-
+# and-CHANGING still comes through immediately, because escalation is checked before this.
+HIGH_REPEAT_DAYS = float(os.environ.get("INCIDENT_HIGH_REPEAT_DAYS", "7"))
 
 
 def send(text):
@@ -100,6 +104,7 @@ def main():
     except (FileNotFoundError, ValueError):
         state = {}
     seen = state.get("seen", {})            # key -> count at last digest
+    reported = state.get("reported", {})    # key -> when it last EARNED a message
 
     material, quiet = [], []
     for i in rows:
@@ -116,8 +121,9 @@ def main():
                 continue
         elif n >= max(was * ESCALATION_FACTOR, was + 1) and fresh:
             why = f"grew {was}->{n}"
-        elif int(i.get("score") or 0) >= HIGH_SCORE and fresh:
-            why = "high"
+        elif (int(i.get("score") or 0) >= HIGH_SCORE and fresh
+              and now - float(reported.get(k) or 0) >= HIGH_REPEAT_DAYS * 86400):
+            why = "still open"
         else:
             quiet.append(i)
             continue
@@ -130,7 +136,7 @@ def main():
         # Deliberate silence. Recorded, so a long quiet streak is visible in the state file rather
         # than being indistinguishable from a broken timer.
         state.update({"last_run": now, "last_posted": state.get("last_posted"),
-                      "quiet_runs": int(state.get("quiet_runs", 0)) + 1,
+                      "quiet_runs": int(state.get("quiet_runs", 0)) + 1, "reported": reported,
                       "seen": {key(i): int(i.get("count") or 0) for i in rows}})
         if not dry:
             STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +164,8 @@ def main():
         return 0
     if not send(text):
         return 1
-    state.update({"last_run": now, "last_posted": now, "quiet_runs": 0,
+    reported.update({key(i): now for i, _ in top})
+    state.update({"last_run": now, "last_posted": now, "quiet_runs": 0, "reported": reported,
                   "seen": {key(i): int(i.get("count") or 0) for i in rows}})
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(state))
