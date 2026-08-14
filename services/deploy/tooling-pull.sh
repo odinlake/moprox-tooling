@@ -9,6 +9,17 @@
 #
 # This clone is NOT a workspace: it is reset --hard to origin/main every run. Never edit it, never
 # commit in it — anything local is discarded without warning, which is the point.
+#
+# AND NEVER RUN git HERE AS ROOT. `sudo git pull` in this tree leaves the object fanout dirs it
+# happens to create owned by root; this unit runs as mikael, so the NEXT fetch that needs one of
+# those dirs — out of 256, so typically hours or DAYS later — dies with "insufficient permission for
+# adding an object". Measured twice, both by moprox-dev@one: 2026-08-08T19:32 -> 13 failures from
+# 19:55, and 2026-08-11T10:33 -> 58 failures from 08-14T05:15, i.e. 67 h after the cause. The delay
+# is what makes it recur: whoever types it gets no feedback, and the session that fixed it the first
+# time repeated it three days later.
+#
+# To deploy right now, do not reach for git at all:  sudo systemctl start tooling-pull.service
+# (the unit runs as mikael and is the only supported writer of this tree).
 set -Eeuo pipefail
 PROD="${PROD:-/opt/moprox-tooling}"
 BRANCH="${BRANCH:-main}"
