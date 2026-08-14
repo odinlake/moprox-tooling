@@ -10,4 +10,4 @@ User=mikael
 Environment=HOME=/home/mikael
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/forward/incident_digest.py
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/forward/incident_digest.py
