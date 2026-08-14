@@ -29,13 +29,13 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import errlog
+import tg
 
 URL = os.environ.get("INCIDENT_URL", "http://logview.lan:8016/api/incidents?window=14d&limit=40")
 STATE = Path(os.environ.get("INCIDENT_DIGEST_STATE",
                             Path.home() / ".local/state/incident-digest.json"))
-TG_ENV = Path(os.environ.get("TG_ENV", Path.home() / ".config/claude-dev/telegram.env"))
-API = "https://api.telegram.org/bot%s/sendMessage"
 HIGH_SCORE = int(os.environ.get("INCIDENT_HIGH_SCORE", "8"))
 ESCALATION_FACTOR = float(os.environ.get("INCIDENT_ESCALATION", "2.0"))
 TOP_N = int(os.environ.get("INCIDENT_TOP_N", "5"))
@@ -47,34 +47,18 @@ FRESH_H = 24
 NEW_MAX_AGE_H = float(os.environ.get("INCIDENT_NEW_MAX_AGE_H", "48"))
 
 
-def env(path):
-    out = {}
-    if path.exists():
-        for ln in path.read_text().splitlines():
-            ln = ln.strip()
-            if ln and not ln.startswith("#") and "=" in ln:
-                k, v = ln.split("=", 1)
-                out[k.strip()] = v.strip().strip("'\"")
-    return out
-
-
 def send(text):
-    """Post to the OPERATOR's chat — telegram.env only, never the firehose override. A failed post
-    is an err: 'nothing was wrong' and 'could not say what was wrong' must not look alike."""
-    d = env(TG_ENV)
-    tok, chat = d.get("TELEGRAM_BOT_TOKEN"), d.get("TELEGRAM_CHAT_ID")
-    if not tok or not chat:
-        errlog.err(f"incident-digest: no telegram credentials in {TG_ENV} — nothing was sent")
-        return False
-    body = json.dumps({"chat_id": chat, "text": text,
-                       "disable_web_page_preview": True}).encode()
-    req = urllib.request.Request(API % tok, data=body,
-                                 headers={"Content-Type": "application/json"})
+    """Post through the estate's ONE transport, tagged #watchdog.
+
+    An earlier version of this file rolled its own urllib post — which is how the first digest went
+    out with no #handle and no entry in the conversation log, so the operator could not tell which
+    agent had spoken. tg.send() is the single place that enforces the handle convention, converts
+    markdown, falls back to plain text on a MarkdownV2 error, and records the message in convo.
+    Duplicating a transport duplicates every one of those decisions, badly."""
     try:
-        urllib.request.urlopen(req, timeout=20).read()
-        return True
+        return bool(tg.send(text, agent="watchdog"))
     except Exception as exc:
-        errlog.err("incident-digest: telegram post failed", exc)
+        errlog.err("incident-digest: telegram post failed — this digest reached nobody", exc)
         return False
 
 

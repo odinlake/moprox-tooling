@@ -88,17 +88,19 @@ def post_session(ex, hr):
     dur_min = len(hr) / 60.0
     clean = [h for h in hr if 30 < h < 220]
     # Immediate receipt. Coach takes 3-7 min to produce its read (charting-library work can push the
-    # tail out), during which a synced session otherwise sits completely silent. Deliberately plain,
-    # untagged and factual — no classification, no numbers coach is about to interpret — so it reads
-    # as "received, working on it" and cannot be mistaken for the read itself.
+    # tail out), during which a synced session otherwise sits completely silent. Plain and factual —
+    # no classification, no numbers coach is about to interpret — so it reads as "received, working
+    # on it" and cannot be mistaken for the read itself. Tagged #polar (operator, 2026-08-14: every
+    # message carries a handle): a DIFFERENT handle from #coach serves that same separation better
+    # than no handle did, since an untagged message is the one nobody can attribute at all.
     # Best-effort: a Telegram failure here must never stop the handoff to coach.
     try:
         sport = (ex.get("sport") or "session").replace("_", " ").lower()
         if clean:
             tg.send("Got %.0f min %s session, HR %d to %d. Pinging coach…"
-                    % (dur_min, sport, min(clean), max(clean)))
+                    % (dur_min, sport, min(clean), max(clean)), agent="polar")
         else:
-            tg.send("Got %.0f min %s session. Pinging coach…" % (dur_min, sport))
+            tg.send("Got %.0f min %s session. Pinging coach…" % (dur_min, sport), agent="polar")
     except Exception as e:
         print("polar: receipt failed (continuing to coach): %s" % e)
     res = analyse_safe(clean, dur_min, ATH, ex.get("sport") or "")
