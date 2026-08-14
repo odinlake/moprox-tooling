@@ -193,8 +193,9 @@ def main():
                 age = f", keeping data from {round((time.time() - json.loads(prev.read_text())['generated']) / 3600, 1)} h ago"
             except (ValueError, KeyError):
                 age = ", keeping the previous file"
-        print(f"WARNING: dns feed not updated: curl exit {e.returncode} from {DNS_EXPORTER}{age}",
-              file=sys.stderr)
+        why = (e.stderr or "").strip().splitlines()
+        print(f"WARNING: dns feed not updated: curl exit {e.returncode} from {DNS_EXPORTER}{age}"
+              + (f": {why[-1]}" if why else ""), file=sys.stderr)
 
     # training — rebuild when the raw Polar input changed (avoids the expensive parse), or when the
     # published file is missing (e.g. a freshly-seeded data branch) so the feed is never absent.
@@ -242,5 +243,26 @@ def main():
         print(f"published data: feeds={sorted(changed_feeds)} files={len(changed)} timings={timings}")
     STATE.write_text(json.dumps(state))
 
+def report_child_error(e):
+    """Put the child's OWN message in the journal before the exception ends the run.
+
+    Every sp.run here uses capture_output=True, which routes the child's stderr onto the exception
+    object instead of our own stderr. Uncaught, systemd records `CalledProcessError: Command [...]
+    returned non-zero exit status 128` and nothing else — argv and a number. Thirteen publish
+    failures between 2026-07-17 and 2026-08-14 left no trace of what git actually said, and their
+    exit codes (128 nine times, 1 four times) say they were not even all the same fault.
+    """
+    cmd = " ".join(map(str, e.cmd)) if isinstance(e.cmd, (list, tuple)) else str(e.cmd)
+    print(f"FAILED: {cmd} -> exit {e.returncode}", file=sys.stderr)
+    for name, buf in (("stderr", e.stderr), ("stdout", e.stdout)):
+        txt = buf.decode(errors="replace") if isinstance(buf, (bytes, bytearray)) else (buf or "")
+        for line in txt.strip().splitlines():
+            print(f"  {name}: {line}", file=sys.stderr)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except sp.CalledProcessError as e:
+        report_child_error(e)
+        raise
