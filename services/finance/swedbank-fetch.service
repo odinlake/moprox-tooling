@@ -1,0 +1,12 @@
+# Pull Swedbank transactions (Enable Banking) into private-data. Install to /etc/systemd/system/.
+# Runs from the PRODUCTION checkout — never ~/projects, which three dev sessions edit.
+[Unit]
+Description=moprox Swedbank fetcher (Enable Banking -> private-data/statements/swedbank)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/finance/swedbank_fetch.py

@@ -1,0 +1,11 @@
+[Unit]
+Description=Fetch Swedbank transactions daily
+[Timer]
+# Daily is enough for a booked-transaction feed, but the cadence is not about freshness: Swedbank
+# serves a rolling 90-day window, so anything not fetched within 90 days is gone permanently. The
+# margin is huge; the point is that the timer must not be OFF for three months.
+OnCalendar=*-*-* 07:40:00
+RandomizedDelaySec=600
+Persistent=true
+[Install]
+WantedBy=timers.target
