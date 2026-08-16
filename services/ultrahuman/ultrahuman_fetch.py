@@ -128,11 +128,28 @@ def scalars(d, payload):
     # Coverage of the intra-day HR series. Recorded because the failure this lane actually had was
     # not a missing day — every day was present, with a sleep summary, and only the series behind it
     # was truncated. A freshness check can see this; a row-count cannot.
+    #
+    # hr_span_h is FIRST-TO-LAST and so is blind to everything between: on 2026-08-14 it reads 23.90
+    # off 84 samples whose largest single hole is 894 min. It answers "was the day truncated?", which
+    # was the 2026-08-09 fault, and nothing about whether the day was actually sampled. The two
+    # fields below are the interior view, on the same timestamps:
+    #   hr_cov_5m       fraction of the 5-min bins between first and last sample that hold a sample
+    #   hr_gap_max_min  largest gap between consecutive samples
+    # Span and coverage disagree hard in the current regime — over the 92 archive days with
+    # span >= 23 h, median hr_cov_5m is 0.44 and median hr_gap_max_min is 480.
     hro = by.get("hr") or {}
     hrv_ = (hro.get("values") if isinstance(hro, dict) else None) or []
-    tss = [x.get("timestamp") for x in hrv_ if isinstance(x, dict) and x.get("timestamp")]
+    tss = sorted(x["timestamp"] for x in hrv_ if isinstance(x, dict) and x.get("timestamp"))
     rec["hr_points"] = len(hrv_)
-    rec["hr_span_h"] = round((max(tss) - min(tss)) / 3600.0, 2) if len(tss) > 1 else 0.0
+    rec["hr_span_h"] = round((tss[-1] - tss[0]) / 3600.0, 2) if len(tss) > 1 else 0.0
+    if len(tss) > 1:
+        bins = len({t // 300 for t in tss})
+        total = (tss[-1] // 300) - (tss[0] // 300) + 1
+        rec["hr_cov_5m"] = round(bins / total, 3)
+        rec["hr_gap_max_min"] = round(max(b - a for a, b in zip(tss, tss[1:])) / 60.0, 1)
+    else:
+        rec["hr_cov_5m"] = 0.0
+        rec["hr_gap_max_min"] = None
 
     s = by.get("Sleep") or {}
     if isinstance(s, dict):

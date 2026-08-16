@@ -89,7 +89,7 @@
    },
    "min_fraction": 0.6,
    "min_records": 4,
-   "note": "Every day was PRESENT with a sleep summary while the HR series behind it was truncated to ~4 h. A row count cannot see that; this can."
+   "note": "Every day was PRESENT with a sleep summary while the HR series behind it was truncated to ~4 h. A row count cannot see that; this can. LIMIT: hr_span_h is first-to-last, so this lane tests truncation ONLY and is blind to interior holes \u2014 on 2026-08-16 it read 9/10 PASS while 9 of those same 10 days had hr_cov_5m 0.29-0.41 and a median single hole of 786 min. The interior view is hr_cov_5m / hr_gap_max_min (backfilled over the whole archive). No lane guards them yet on purpose: every coverage floor that would have caught the mid-June onset also fires on every day since, and a check that can never pass is a reminder, not a check (see 1ca29b3)."
   }
  ]
 }
