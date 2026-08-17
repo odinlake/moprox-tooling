@@ -60,13 +60,39 @@ def token(cfg):
                       algorithm="RS256", headers={"typ": "JWT", "kid": cfg["EB_APP_ID"]})
 
 
+RETRY_429 = 4                 # attempts, not retries: 1 try + 3 backoffs
+RETRY_BACKOFF_S = (5, 20, 60)
+
+
 def api(cfg, tok, path, **params):
+    """One GET, retrying a 429 rather than losing the day's window to it.
+
+    Enable Banking rate-limits per consent. On 2026-08-15 a single burst took out all 7 accounts at
+    once and the run reported success, which matters here more than in most lanes: the API keeps a
+    ROLLING 90-DAY window, so a day skipped is a day that eventually falls off the end and is gone
+    for good. Retrying costs seconds; not retrying costs history.
+
+    Retry-After is honoured when the server sends one — it knows its own window better than a fixed
+    schedule does — and capped, so a hostile or absurd value cannot park a timer-driven run forever.
+    Only 429 is retried: a 4xx that is not a rate limit will not fix itself by waiting."""
     url = cfg["EB_API_BASE"].rstrip("/") + path
     if params:
         url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v})
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        return json.loads(r.read().decode())
+    for attempt in range(RETRY_429):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == RETRY_429 - 1:
+                raise
+            wait = RETRY_BACKOFF_S[attempt]
+            hdr = e.headers.get("Retry-After") if e.headers else None
+            if hdr and hdr.strip().isdigit():
+                wait = min(int(hdr.strip()), 120)
+            errlog.warn(f"swedbank: 429 on {path} — waiting {wait}s "
+                        f"(attempt {attempt + 1}/{RETRY_429})")
+            time.sleep(wait)
 
 
 def slug(acct):
@@ -240,7 +266,7 @@ def main():
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
     accounts = sess.get("accounts") or []
-    store, added_total = {}, 0
+    store, added_total, failed = {}, 0, []
     for acct in accounts:
         sl, uid = slug(acct), acct["uid"]
         path = OUTDIR / f"{sl}.jsonl"
@@ -253,6 +279,7 @@ def main():
         except Exception as exc:
             errlog.err(f"swedbank: fetching {sl} ({uid}) failed — that account is NOT updated", exc)
             store[sl] = existing
+            failed.append(sl)
             continue
         before = len(existing)
         for t in rows:
@@ -266,13 +293,28 @@ def main():
             path.write_text("".join(json.dumps(t, ensure_ascii=False, sort_keys=True) + "\n"
                                     for t in ordered))
 
+    # A run that fetched NOTHING must not look like a run that found nothing new. Before this, the
+    # exit code, the systemd result, the artifact's `generated` stamp and the summary line were
+    # identical in both cases (analyst cycle 103, 2026-08-15: 7 of 7 accounts 429'd, exit 0, artifact
+    # restamped, no incident). The artifact is the load-bearing part — `generated` is a freshness
+    # claim, and restamping it from stored copies asserts a currency the run did not establish.
+    if failed and len(failed) == len(accounts):
+        errlog.err(f"swedbank: ALL {len(accounts)} accounts failed — artifact left untouched at its "
+                   f"previous stamp rather than restamped from stored copies")
+        return 1
     out = derive(accounts, store)
+    # Partial failure still writes: the accounts that DID fetch are real and their rows would
+    # otherwise be dropped on the floor. But the artifact says which ones are stale, so a consumer
+    # is never handed a total that quietly excludes an account, and the run still exits non-zero so
+    # systemd raises it.
+    out["stale_accounts"] = sorted(failed)
     if not dry:
         DERIVED.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n")
     print(f"swedbank: {out['n_txns']} transactions across {len(accounts)} accounts, "
           f"{out['period']['from']}..{out['period']['to']}, {added_total} new"
+          + (f", {len(failed)} STALE: {', '.join(sorted(failed))}" if failed else "")
           + (" (dry)" if dry else f" -> {DERIVED}"))
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
