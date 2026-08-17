@@ -373,7 +373,12 @@ def refute(prop, evidence, lens, agent):
         f"Your last line must be exactly one JSON object and nothing else:\n"
         f'{{"refuted": true|false, "defect": "one sentence, empty if not refuted"}}'
     )
-    cmd = [CLAUDE, "-p", prompt, "--permission-mode", "bypassPermissions",
+    # --output-format json for the usage envelope: two refuters run per cycle, each a full agent
+    # doing real reading, and NEITHER was ledgered anywhere — log_usage was called once per cycle,
+    # for the cycle agent only. Roughly 238 invocations to cycle 119 that no ledger on any host had
+    # ever seen, which is also why the Stats page could look plausible while being wrong.
+    cmd = [CLAUDE, "-p", prompt, "--output-format", "json",
+           "--permission-mode", "bypassPermissions",
            "--allowedTools", "Read,Grep,Glob,Bash,mcp__logview,mcp__corpus-search",
            "--add-dir", str(HOME / "projects/moprox-tooling"),
            str(HOME / "projects/private-data"), str(HOME / "projects/moprox-memory")]
@@ -388,6 +393,18 @@ def refute(prop, evidence, lens, agent):
         err(f"refuter[{name}] exited {r.returncode} — claim not audited on this lens",
             RuntimeError(_clip(r.stderr or out, 200)))
         return None
+    # Unwrap the json envelope: {result, usage, total_cost_usd, ...}. The verdict is the last JSON
+    # object inside `result`, exactly as before. If the format ever changes, fall back to reading
+    # stdout raw — the audit still runs, it just goes unledgered, and that says so.
+    try:
+        envelope = json.loads(out)
+    except Exception:
+        envelope = None
+    if isinstance(envelope, dict) and "result" in envelope:
+        log_usage(agent, envelope, f"refute[{name}]")
+        out = (envelope.get("result") or "").strip()
+    else:
+        warn(f"refuter[{name}] gave no json envelope — verdict read raw, tokens NOT ledgered")
     i, j = out.rfind("{"), out.rfind("}")
     if i < 0 or j <= i:
         warn(f"refuter[{name}] returned no JSON verdict — treating as no objection")

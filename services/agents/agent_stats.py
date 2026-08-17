@@ -11,21 +11,11 @@ import sys as _sys, pathlib as _pl
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
-LEDGER = Path.home() / ".local/share/moprox/agent-usage.jsonl"
+import ledger   # local + pulled-from-other-hosts rows, `loop-analyst` folded into `analyst`
 STMT   = Path.home() / ".local/share/moprox/agent-statements.json"
 # Roster comes from run.py so it cannot drift from the one that actually invokes agents.
 from run import AGENTS as _A
 AGENTS = sorted(_A)
-
-def _jsonl(p):
-    if not p.exists(): return []
-    out = []
-    for ln in p.read_text().splitlines():
-        try: out.append(json.loads(ln))
-        except Exception as _e:
-            errlog.skip("agent_stats.py: stats line", _e)
-            pass
-    return out
 
 def _n(r, k):
     """Token counts, defensively. `r.get(k, 0)` returns None when the key EXISTS with a null value —
@@ -72,7 +62,7 @@ def _icons():
     return out
 
 def main():
-    rows = _jsonl(LEDGER)
+    rows = ledger.rows()
     stmts = json.loads(STMT.read_text()) if STMT.exists() else {}
     data = {"generated": int(time.time()), "icons": _icons(),
             "windows": {"24h": window(rows, 86400, stmts), "30d": window(rows, 30 * 86400, stmts)}}

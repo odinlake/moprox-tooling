@@ -16,24 +16,28 @@ import sys as _sys, pathlib as _pl
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
-LEDGER = Path.home() / ".local/share/moprox/agent-usage.jsonl"
+import ledger   # local ledger + the ledgers pulled from other hosts, agent names normalised
 
 def rows():
-    if not LEDGER.exists(): return []
-    out = []
-    for ln in LEDGER.read_text().splitlines():
-        try: out.append(json.loads(ln))
-        except Exception as _e:
-            errlog.skip("usage.py: ledger line", _e)
-            pass
-    return out
+    return ledger.rows()
+
+def _n(r, k):
+    """A token count, defensively. `r.get(k, 0)` returns None when the key EXISTS with a null value
+    — the default only covers a MISSING key — so three error rows (in=None, written when a call
+    never produced a usage envelope) crashed this whole summary. agent_stats.py already guards the
+    same way; counted via errlog, not swallowed."""
+    v = r.get(k)
+    if isinstance(v, (int, float)): return v
+    if v is None and k in r:
+        errlog.skip("usage.py: null token field in usage ledger", ValueError("%s=None" % k))
+    return 0
 
 def summary():
     by = {}
     for r in rows():
         d = by.setdefault(r.get("agent", "?"), {"n": 0, "in": 0, "cr": 0, "cw": 0, "out": 0, "cost": 0.0})
-        d["n"] += 1; d["in"] += r.get("in", 0); d["cr"] += r.get("cache_read", 0)
-        d["cw"] += r.get("cache_write", 0); d["out"] += r.get("out", 0); d["cost"] += r.get("cost_usd") or 0.0
+        d["n"] += 1; d["in"] += _n(r, "in"); d["cr"] += _n(r, "cache_read")
+        d["cw"] += _n(r, "cache_write"); d["out"] += _n(r, "out"); d["cost"] += r.get("cost_usd") or 0.0
     if not by:
         print("no agent calls logged yet"); return
     print("%-9s %6s %14s %12s %7s %9s" % ("agent", "calls", "ctx(avg tok)", "out(total)", "cache", "$est"))

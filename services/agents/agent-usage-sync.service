@@ -1,0 +1,14 @@
+# Pull other hosts' agent-usage ledgers to this box, where the dashboard Stats tab is built.
+# Without this the analyst's loop cycles (which run on claude-loop and are ledgered THERE) are
+# absent from the page, which shows only its local statement calls. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox agent usage ledger sync (pull other hosts' ledgers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/agents/usage_sync.py
