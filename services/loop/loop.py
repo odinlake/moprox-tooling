@@ -43,6 +43,8 @@ IDLE_MAX_S   = int(os.environ.get("LOOP_IDLE_MAX_S", 600))    # silence before w
 HARD_MAX_S   = int(os.environ.get("LOOP_HARD_MAX_S", 5400))   # backstop; systemd caps this too
 BUDGET_H     = float(os.environ.get("LOOP_BUDGET_WINDOW_H", 5))   # Max plan resets on ~5 h windows
 BUDGET_CAP   = float(os.environ.get("LOOP_BUDGET_CAP_USD", 8.0))  # loop's own share of that window
+# NB: spent_recently() sums EVERY loop-* ledger row, refuters included since 9eddaf9c98. The
+# deployed cap lives in loop@.service (16) — this default is for a hand-run loop, not production.
 MAX_STRIKES  = int(os.environ.get("LOOP_MAX_STRIKES", 3))     # consecutive bad cycles before halting
 VERIFY_MAX_S = int(os.environ.get("LOOP_VERIFY_MAX_S", 300))
 ADVERSARIAL  = os.environ.get("LOOP_ADVERSARIAL", "1") != "0"

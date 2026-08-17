@@ -10,6 +10,12 @@ Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
 Environment=PYTHONUNBUFFERED=1
+# Raised 8 -> 16 on 2026-08-17, at the operator's call, when the two per-cycle refuters began
+# being ledgered (9eddaf9c98). They always cost this much; only now does spent_recently() see
+# them, so the old cap would have quietly halved the cadence to ~2 cycles per 5 h. Raising it
+# keeps the loop at ~4 while the accounting stays honest. This is a share of the Max plan's
+# ~5 h window, not a bill — spending more here is crowding coach/valet, not money.
+Environment=LOOP_BUDGET_CAP_USD=16
 # systemd does NOT read /etc/environment, and on a Squid-contained box that file is where the proxy
 # lives — without it claude has no route to the API at all: it retries silently, emits no events and
 # no stderr, and looks exactly like a hung agent until the idle watchdog fires. Same trap use-squid.sh
