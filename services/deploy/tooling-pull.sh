@@ -47,9 +47,9 @@ cd "$PROD" || die "FATAL: $PROD missing"
 # unit runs as mikael, so anything under .git it does not own was written by someone else, and the
 # only writer that ever has been is `sudo git`. Report it before the fetch that will eventually trip
 # over it, at err level, with the remedy — a latent fault nobody can see is worth less than a noisy
-# one. Deliberately not fatal: most fetches still succeed while poisoned (7 deploys ran between the
-# 2026-08-11 pull and the wave it caused), and refusing to deploy would turn a latent fault into an
-# immediate outage.
+# one. Deliberately not fatal: most fetches still succeed while poisoned (10 deploys ran between the
+# 2026-08-11 pull and the wave it caused, 66.7 h later), and refusing to deploy would turn a latent
+# fault into an immediate outage.
 # The `|| true` is load-bearing under `set -o pipefail`: find exits 1 on any unreadable directory,
 # and an unreadable directory here IS the fault we are looking for (root-owned, mode 700), so the
 # naive form would abort the deploy in exactly the case it exists to report.
