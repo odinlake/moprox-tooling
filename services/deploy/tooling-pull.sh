@@ -13,10 +13,14 @@
 # AND NEVER RUN git HERE AS ROOT. `sudo git pull` in this tree leaves the object fanout dirs it
 # happens to create owned by root; this unit runs as mikael, so the NEXT fetch that needs one of
 # those dirs — out of 256, so typically hours or DAYS later — dies with "insufficient permission for
-# adding an object". Measured twice, both by moprox-dev@one: 2026-08-08T19:32 -> 13 failures from
-# 19:55, and 2026-08-11T10:33 -> 58 failures from 08-14T05:15, i.e. 67 h after the cause. The delay
-# is what makes it recur: whoever types it gets no feedback, and the session that fixed it the first
-# time repeated it three days later.
+# adding an object". Measured THREE times, every one of them by moprox-dev@one: 2026-08-08T19:32 ->
+# 13 failures from 19:55; 2026-08-11T10:33 -> 57 failures from 08-14T05:15, i.e. 66.7 h after the
+# cause; 2026-08-17T12:34 -> 32 failures from 15:25 and still failing when counted, 2.8 h after the
+# cause. The lag is not a constant — 2.8 h vs 66.7 h — because the fetch only dies once a NEW object
+# hashes into one of the (up to 256) fanout dirs the root pull happened to create. That variability
+# is what makes it recur: whoever types it gets no feedback, and the rule below was already in this
+# file, deployed and live for 2.7 days, when it was broken the third time. Prose did not work; the
+# check below is the same knowledge in a form that runs.
 #
 # To deploy right now, do not reach for git at all:  sudo systemctl start tooling-pull.service
 # (the unit runs as mikael and is the only supported writer of this tree).
@@ -36,6 +40,26 @@ say() { echo "$(date -Is) $*"; }
 die() { echo "<3>$(date -Is) $*" >&2; exit 1; }
 
 cd "$PROD" || die "FATAL: $PROD missing"
+
+# The root-pull fault above was, for three occurrences, detectable only by its consequence — and the
+# consequence lags the cause by hours or days (67 h on 2026-08-11), which is precisely why the same
+# session repeated it. It is detectable by its CAUSE in one cheap call that needs no privilege: this
+# unit runs as mikael, so anything under .git it does not own was written by someone else, and the
+# only writer that ever has been is `sudo git`. Report it before the fetch that will eventually trip
+# over it, at err level, with the remedy — a latent fault nobody can see is worth less than a noisy
+# one. Deliberately not fatal: most fetches still succeed while poisoned (7 deploys ran between the
+# 2026-08-11 pull and the wave it caused), and refusing to deploy would turn a latent fault into an
+# immediate outage.
+# The `|| true` is load-bearing under `set -o pipefail`: find exits 1 on any unreadable directory,
+# and an unreadable directory here IS the fault we are looking for (root-owned, mode 700), so the
+# naive form would abort the deploy in exactly the case it exists to report.
+alien=$( { find .git -not -user "$(id -un)" -printf . 2>/dev/null || true; } | wc -c )
+if [ "$alien" -gt 0 ]; then
+  echo "<3>$(date -Is) POISONED: $alien path(s) under $PROD/.git are not owned by $(id -un) — a" \
+       "root git ran here. The next fetch needing one of them will die with 'insufficient permission" \
+       "for adding an object'. Fix: sudo chown -R $(id -un):$(id -gn) $PROD/.git" >&2
+fi
+
 before=$(git rev-parse --short HEAD)
 # Report what git ACTUALLY said, at err level. This line used to name one guessed cause on every
 # failure ("a root-owned object blocks the mikael-run unit"). On 2026-08-13T14:35Z the real cause was
