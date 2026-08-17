@@ -40,6 +40,93 @@ def tag(text, agent):
 
 _BOLD_HEADER = re.compile(r"\*[^*\n]+\*:?")   # a line that is ONLY a bold span (opt. trailing colon)
 
+
+def _pipe_table(lines):
+    """Do these lines look like a pipe table rather than code? -> column count, or 0.
+
+    The bar is deliberately high, because the caller rewrites what it matches: at least two lines,
+    every one carrying the SAME number of `|`, and at least two columns. Code that happens to
+    contain a pipe (a shell pipeline, an `or`-chain) almost never has an identical pipe count on
+    every consecutive line; a table always does.
+    """
+    rows = [l for l in lines if l.strip()]
+    if len(rows) < 2:
+        return 0
+    n = rows[0].count("|")
+    if n < 1 or any(r.count("|") != n for r in rows):
+        return 0
+    return n + 1
+
+
+def _is_separator(line):
+    """A markdown table's `--- | :---: | ---` row, in any of its spellings."""
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c != "")
+
+
+def _tables_to_markdown(text):
+    """Give telegramify a REAL table wherever an agent wrote a table-shaped thing.
+
+    telegramify-markdown aligns a proper markdown table into a monospace block with padded columns
+    and a `---+---` rule. It only does that for a table it recognises — one with a separator row —
+    and two near-misses are what agents actually write:
+
+      * bare pipe lines, no separator: not a table to CommonMark, so it ships as prose with every
+        `|` and `-` backslash-escaped. Unreadable.
+      * the same lines inside a ``` fence: preserved verbatim, by the rule that keeps real code
+        intact — so the columns stay ragged. This is what coach's session tables looked like
+        (operator, 2026-08-17): "metric | today | 20 Jul" with nothing lining up.
+
+    Both are repaired the same way: insert the separator row and let telegramify align it. A fence
+    carrying a language tag (```python) is left alone — the author declared it code, and being wrong
+    about that costs more than a ragged table.
+    """
+    out, i, lines = [], 0, (text or "").split("\n")
+    while i < len(lines):
+        ln = lines[i]
+        if ln.lstrip().startswith("```"):
+            info = ln.strip().strip("`").strip()
+            j = i + 1
+            while j < len(lines) and not lines[j].lstrip().startswith("```"):
+                j += 1
+            body = lines[i + 1:j]
+            if not info and _pipe_table(body) and not any(_is_separator(b) for b in body):
+                out.append(body[0])
+                out.append(" | ".join(["---"] * _pipe_table(body)))
+                out.extend(body[1:])
+            else:
+                out.extend(lines[i:min(j + 1, len(lines))])
+            i = j + 1
+            continue
+        # unfenced: a run of consecutive pipe lines with no separator among them
+        j = i
+        while j < len(lines) and lines[j].strip() and "|" in lines[j]:
+            j += 1
+        run = lines[i:j]
+        if _pipe_table(run):
+            # Consume the WHOLE run either way. Stepping through it line by line was the first bug
+            # here: past a real separator, the remaining data rows look like a fresh headerless
+            # table and pick up a second separator of their own.
+            # A table must be its own block. Butted straight against a prose line ("Read:" then
+            # the header row) CommonMark reads it as a lazy paragraph continuation, sees no table,
+            # and ships the whole thing escaped — separator and all. The blank lines are dropped
+            # again after conversion by the structural-spacing pass, so this costs no vertical gap.
+            if out and out[-1].strip():
+                out.append("")
+            if any(_is_separator(r) for r in run):
+                out.extend(run)                      # already a table — telegramify handles it
+            else:
+                out.append(run[0])
+                out.append(" | ".join(["---"] * _pipe_table(run)))
+                out.extend(run[1:])
+            if j < len(lines) and lines[j].strip():
+                out.append("")
+            i = j
+            continue
+        out.append(ln)
+        i += 1
+    return "\n".join(out)
+
 def _md(text):
     """Convert agents' markdown to Telegram MarkdownV2 (bold/italic/code/links + tables->monospace
     code block, with all the fiddly MarkdownV2 escaping handled). Returns None on any failure so the
@@ -60,7 +147,7 @@ def _md(text):
         if not in_f and re.fullmatch(r"[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*", ln): continue
         src.append(ln)
     try:
-        md = tgmd.markdownify("\n".join(src))
+        md = tgmd.markdownify(_tables_to_markdown("\n".join(src)))
     except Exception:
         return None
     out, in_fence = [], False
