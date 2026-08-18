@@ -12,7 +12,7 @@ Every agent is invoked with the recent shared transcript (convo.transcript), so 
 blind to "my previous message". The steward can also be the destination — it answers the operator
 directly about routing / the agent setup.
 """
-import json, re, sys
+import json, re, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 from run import run_agent
@@ -71,16 +71,35 @@ FILES_NOTE = ("The attached file(s) are ALREADY downloaded to this machine at th
               "[folder]` (uploads into Drive /agent/<folder>, default 'inbox', and prints the link). "
               "If a file failed to download, say so plainly and ask them to resend.")
 
+def _reply(agent, text, reply_to, started):
+    """Send the agent's final text — UNLESS it already spoke for itself during this run.
+
+    Coach answers the athlete DIRECTLY (it owns the single chart-with-caption post, and its persona
+    forbids following a reply with a second message). Its return value is therefore a report to
+    whoever invoked it — and the router used to send that too, so every coach answer arrived twice:
+    the reply, then "Replied (msg 316, one text message). What I told him: …" addressed to a
+    dispatcher script that cannot read it. polar_fetch.py already got this right (it invokes coach
+    and sends nothing); this is the same rule for the Telegram-reply path.
+    """
+    if convo.spoke_since(agent, started):
+        print("%s: replied for itself — not echoing its result" % agent)
+        return
+    tg.send(text, agent=agent, reply_to=reply_to)
+
+
 def handle(agent, rec):
     """Run the chosen agent on the routed message. History is optional — the agent reads it on demand."""
+    started = int(time.time())          # anything the agent sends after this is its own voice
     text = text_of(rec)
     if rec.get("files"): text = text + "\n\n" + FILES_NOTE
     reply_to = rec.get("msg_id") or None        # thread our reply under the operator's message
     if agent == "coach":
         reply = run_agent("coach",
-            "The athlete sent you (#coach) this on Telegram:\n%r\n\n%s\n\nReply concisely, in your voice."
+            "The athlete sent you (#coach) this on Telegram:\n%r\n\n%s\n\nReply concisely, in your "
+            "voice. If you send the reply yourself, your final text is a LOG LINE only — it is not "
+            "delivered, so do not write it as a message to anyone."
             % (text, HISTORY_NOTE), timeout=600)
-        tg.send(reply, agent="coach", reply_to=reply_to)
+        _reply("coach", reply, reply_to, started)
     elif agent == "dev":
         DEV_INBOX.parent.mkdir(parents=True, exist_ok=True)
         reply = run_agent("dev",
@@ -89,20 +108,20 @@ def handle(agent, rec):
             "exactly what you changed; if it's risky / irreversible / outward-facing / complex, do NOT do "
             "it — append a one-line JSON entry to the book of works at %s and say you've queued it. Reply "
             "concisely for Telegram, starting with #dev." % (text, HISTORY_NOTE, DEV_INBOX), timeout=900)
-        tg.send(reply, agent="dev", reply_to=reply_to)
+        _reply("dev", reply, reply_to, started)
     elif agent == "steward":
         reply = run_agent("steward",
             "The operator is talking to YOU (#steward) — usually about how messages are routed or the "
             "agent setup. Their message:\n%r\n\n%s\n\nAnswer directly and briefly (normal prose, NOT "
             "routing JSON), starting with #steward." % (text, HISTORY_NOTE), timeout=120)
-        tg.send(reply, agent="steward", reply_to=reply_to)
+        _reply("steward", reply, reply_to, started)
     elif agent == "valet":
         reply = run_agent("valet",
             "The operator sent you (#valet) this about the morning brief / news / their interests:\n%r\n\n"
             "%s\n\nReply briefly. If they're telling you what to surface more/less of, UPDATE your "
             "valet-memory.md so future briefs reflect it, and confirm. Start with #valet."
             % (text, HISTORY_NOTE), timeout=300)
-        tg.send(reply, agent="valet", reply_to=reply_to)
+        _reply("valet", reply, reply_to, started)
     elif agent == "theming":
         reply = run_agent("theming",
             "The operator sent you (#theming) this on Telegram:\n%r\n\n%s\n\nIf it's a question about "
@@ -110,7 +129,7 @@ def handle(agent, rec):
             "asks you to add or revise a theme/story, prepare the change on a BRANCH in ~/projects/"
             "theming (never master, never force) and say what you changed + that it awaits review. "
             "Reply concisely for Telegram, starting with #theming." % (text, HISTORY_NOTE), timeout=600)
-        tg.send(reply, agent="theming", reply_to=reply_to)
+        _reply("theming", reply, reply_to, started)
     return agent
 
 def summarize_for_digest(old_text):

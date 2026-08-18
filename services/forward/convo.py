@@ -55,6 +55,17 @@ def _load(path, n=None):
             pass
     return out
 
+def spoke_since(agent, ts):
+    """Did `agent` send a message of its OWN since `ts`?
+
+    tg.py logs every outbound message here, whoever triggered it, so this is how the router tells
+    "the agent already answered the operator" from "the agent returned text for the router to send".
+    Coach does the former — it owns its single chart-with-caption post — so its return value is a
+    report addressed to whatever invoked it.
+    """
+    return any(r.get("dir") == "out" and r.get("from") == agent and (r.get("ts") or 0) >= ts
+               for r in _load(LOG, 200))
+
 def agent_for_msg(msg_id):
     """Which agent sent the message the operator replied to (live first, then archive)."""
     if not msg_id: return None
