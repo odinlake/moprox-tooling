@@ -82,7 +82,10 @@ def _reply(agent, text, reply_to, started):
     and sends nothing); this is the same rule for the Telegram-reply path.
     """
     if convo.spoke_since(agent, started):
-        print("%s: replied for itself — not echoing its result" % agent)
+        # Keep the dropped text in the journal: it is the agent's own account of what it just did,
+        # and it is the only copy — the transcript holds the message it SENT, not this.
+        print("%s: replied for itself — not echoing its result: %s"
+              % (agent, " ".join((text or "").split())[:200]))
         return
     tg.send(text, agent=agent, reply_to=reply_to)
 
