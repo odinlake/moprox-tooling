@@ -8,6 +8,12 @@ TIMESTAMP TRAP (do not simplify this away): `startedOn` changes meaning partway 
 For idCr <= 1012 it is the session END; from idCr >= 1013 it is the START. Verified against Apple
 Health workout HR as an independent third clock. Using it as START throughout mis-dates the 13
 oldest sessions by a full session length.
+
+SECOND TIMESTAMP TRAP: a cardio record holds ONE `startedOn` and N activities, and the activities are
+neither simultaneous nor reliably sequential — 1065#1 starts 127 s BEFORE its own file's `startedOn`,
+and 1094 holds two that run concurrently on different machines. Giving them all the file timestamp is
+wrong on every non-first activity (median 2543 s, max 6754 s). The real per-activity times are in
+`indooractivities.json`, whose `on` is the activity END; see _activity_starts().
 """
 import glob, json, os, re, sys
 from datetime import datetime, timedelta, timezone
@@ -16,6 +22,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import errlog
 
 CARDIO = os.path.expanduser("~/projects/private-data/technogym/cardio")
+# The per-activity clock. One record per ACTIVITY (cardio has one per SESSION), each carrying its own
+# `on` = the activity END. Coverage ends 2026-07-30 while cardio runs on, so this is an OVERLAY on the
+# cardio timestamps, never a replacement — anything it does not cover keeps the old anchor.
+INDOOR = os.path.expanduser("~/projects/private-data/technogym/indooractivities.json")
+DIST_TOL_M = 2.0                   # HDistance vs distanceM: same quantity, different rounding
 # Sessions the operator has positively identified as not theirs. The account picks these up when a
 # machine is left logged in, and deleting them in the Technogym app does not remove them from the
 # API — verified 2026-08-10: all 102 stored sessions still return, idCr sequence unbroken. So the
@@ -58,6 +69,8 @@ def _parse_dt(s):
     if not s:
         return None
     t = str(s).strip().replace("Z", "+00:00")
+    t = re.sub(r"(\d{2}:\d{2}:\d{2})\.\d+", r"\1", t)     # indooractivities carries 7 fractional
+                                                          # digits; %f caps at 6 and would reject it
     t = re.sub(r"([+-]\d{2}):?(\d{2})$", r"\1\2", t)      # +01:00 -> +0100
     for fmt in ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%dT%H:%M:%S%z",
                 "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
@@ -84,6 +97,72 @@ def _excluded():
         return set()
 
 
+def _indoor_records():
+    """[{on, dur, dist, cal}] from indooractivities.json, END-timestamped. [] if absent."""
+    try:
+        with open(INDOOR) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        errlog.err(f"technogym: cannot read {INDOOR} — non-first activities keep the file timestamp",
+                   exc)
+        return []
+    out = []
+    for r in raw or []:
+        pr = {p.get("n"): p.get("v") for p in (r.get("performedData") or {}).get("pr") or []}
+        on = _parse_dt(r.get("on"))
+        if on is None or pr.get("Duration") is None:
+            continue
+        out.append({"on": on, "dur": float(pr["Duration"]),
+                    "dist": pr.get("HDistance"), "cal": pr.get("Calories")})
+    return out
+
+
+def _activity_starts(cardio_files):
+    """{"1082#1": datetime} — true per-activity START, for the activities that can be paired.
+
+    There is no shared key between the two files: `phId` is the MACHINE (2 distinct values over 113
+    records), not the activity. So the pairing is on the physics both sides report — DURATION exactly,
+    plus DISTANCE within rounding, with CALORIES only to break a tie. Greedy in idCr order, each
+    indooractivities record consumed at most once.
+
+    Measured 2026-08-18 over the whole archive: 124 activities, 110 pair uniquely, 3 stay ambiguous
+    (1041#0, 1047#0, 1055#0 — same duration AND distance AND calories as a sibling), 11 unpaired and
+    every one of those has idCr >= 1096, i.e. is past the end of indooractivities coverage. Ambiguous
+    and unpaired both fall back; neither is a guess.
+
+    `on` is the activity END, not its start. Cross-checked where the answer is independently known:
+    for activity 0 with idCr >= 1013 (where `startedOn` IS the start) `on - Duration` equals it within
+    1 s across all 80 such records, and for idCr <= 1012 (where `startedOn` is the END) `on` equals it
+    within 1 s across all 13. Same semantics on both sides of the idCr-1012 split, so the subtraction
+    is unconditional here — the split survives only in the fallback below.
+    """
+    recs = _indoor_records()
+    if not recs:
+        return {}
+    used, starts = set(), {}
+    for f in cardio_files:
+        try:
+            d = json.load(open(f))
+            idcr = int(d.get("idCr") or 0)
+        except Exception:
+            continue                                  # load_sessions reports the read failure
+        for i, a in enumerate(d.get("activities") or []):
+            dur = float(a.get("durationS") or 0)
+            dist = float(a.get("distanceM") or 0)
+            hit = [j for j, r in enumerate(recs)
+                   if j not in used and r["dur"] == dur
+                   and r["dist"] is not None and abs(float(r["dist"]) - dist) <= DIST_TOL_M]
+            if len(hit) > 1:
+                hit = [j for j in hit if recs[j]["cal"] == float(a.get("calories") or 0)]
+            if len(hit) != 1:
+                continue                              # ambiguous or absent — fall back
+            used.add(hit[0])
+            starts[f"{idcr}#{i}"] = recs[hit[0]]["on"] - timedelta(seconds=recs[hit[0]]["dur"])
+    return starts
+
+
 def load_sessions():
     """One candidate per ACTIVITY, sorted by start. Empty list if the lane is absent.
 
@@ -94,8 +173,11 @@ def load_sessions():
     happened to be recorded first. 15 of 102 sessions are affected.
     """
     skip = _excluded()
+    files = sorted(glob.glob(os.path.join(CARDIO, "*.json")),
+                   key=lambda p: int(re.sub(r"\D", "", os.path.basename(p)) or 0))
+    starts = _activity_starts(files)
     out = []
-    for f in sorted(glob.glob(os.path.join(CARDIO, "*.json"))):
+    for f in files:
         try:
             d = json.load(open(f))
             when = _parse_dt(d.get("startedOn"))
@@ -107,7 +189,11 @@ def load_sessions():
                 dur = float(a.get("durationS") or 0)
                 if dur <= 0 or key in skip:
                     continue
-                start = when - timedelta(seconds=dur) if idcr <= END_SEMANTICS_MAX_IDCR else when
+                # The per-activity clock when we have it; the file's single timestamp only as the
+                # fallback, and then under the idCr-1012 END/START split.
+                start = starts.get(key)
+                if start is None:
+                    start = when - timedelta(seconds=dur) if idcr <= END_SEMANTICS_MAX_IDCR else when
                 out.append({"start": start, "dur_s": dur, "idCr": idcr, "act": i, "key": key,
                             "speed": [(float(t), float(v)) for t, v in (a.get("speed_kph") or [])]})
         except Exception as exc:
