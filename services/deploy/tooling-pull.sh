@@ -57,7 +57,21 @@ alien=$( { find .git -not -user "$(id -un)" -printf . 2>/dev/null || true; } | w
 if [ "$alien" -gt 0 ]; then
   echo "<3>$(date -Is) POISONED: $alien path(s) under $PROD/.git are not owned by $(id -un) — a" \
        "root git ran here. The next fetch needing one of them will die with 'insufficient permission" \
-       "for adding an object'. Fix: sudo chown -R $(id -un):$(id -gn) $PROD/.git" >&2
+       "for adding an object'. Repairing now; the rule is: never run git as root in $PROD." >&2
+  # ...and repair it, rather than printing the remedy for a human to run. Detection alone still
+  # requires someone to be reading priority-3 logs between the poisoning and the wave, and the whole
+  # reason this fault recurs is that nobody is: waves 1-3 each ran 23 min to 67 h before anyone
+  # noticed. The chown is idempotent, needs no new sudoers entry (mikael has NOPASSWD:ALL today), and
+  # is safe precisely because this unit is the only supported writer of the tree — nothing else here
+  # is meant to be owned by anyone else. Report at err either way: a rule broken silently and fixed
+  # silently is a rule nobody learns, and the point of the noise is to reach whoever broke it.
+  if sudo -n chown -R "$(id -un):$(id -gn)" "$PROD" 2>/dev/null; then
+    echo "<3>$(date -Is) repaired $alien path(s) — deploys unblocked, but fix the habit:" \
+         "the timer pulls every 5 min, and 'sudo systemctl start tooling-pull.service' deploys NOW" >&2
+  else
+    echo "<3>$(date -Is) repair FAILED — deploys will freeze on the next fetch that needs one of" \
+         "those objects. Run: sudo chown -R $(id -un):$(id -gn) $PROD" >&2
+  fi
 fi
 
 before=$(git rev-parse --short HEAD)
