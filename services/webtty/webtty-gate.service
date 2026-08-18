@@ -1,0 +1,16 @@
+# Re-apply the webtty ingress gate at boot. Oneshot so it self-heals across reboots regardless of
+# whether the distro nftables.service is enabled. Source of truth: moprox-tooling/services/webtty.
+# webtty.service Requires= this, so the shell can never listen before the gate is up.
+[Unit]
+Description=webtty ingress gate (nftables) — web box only
+After=nftables.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/nftables-webtty.conf
+ExecReload=/usr/sbin/nft -f /etc/nftables-webtty.conf
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

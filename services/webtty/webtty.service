@@ -1,0 +1,32 @@
+# A browser terminal on claude-dev, served at https://mo.lan/tty behind Authelia.
+# Source of truth: moprox-tooling/services/webtty (install.sh). Install to /etc/systemd/system/.
+#
+# It exists because claude-dev has no house-LAN leg: the Proxmox noVNC console is the only other
+# way in, and it cannot paste, which makes an interactive `/login` (the usual reason to need a
+# shell here) painful on a phone.
+[Unit]
+Description=webtty — browser terminal (mo.lan/tty)
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/webtty
+# Requires, not just After: the gate must be up before a shell is listening, or there is a window
+# where every host on the agent subnet can reach port 7681.
+Requires=webtty-gate.service
+After=webtty-gate.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=TERM=xterm-256color
+Environment=LANG=C.UTF-8
+# --base-path /tty, not a stripped prefix in Caddy: ttyd generates its own asset and websocket URLs
+# and they must match what the browser actually requested.
+# tmux new -A -s web (attach-or-create) is what makes this survivable on a phone -- an OAuth bounce
+# out to the browser and back lands in the SAME session rather than a dead shell.
+ExecStart=/usr/local/bin/ttyd --writable --check-origin --port 7681 --interface eth0 \
+          --base-path /tty /usr/bin/tmux new -A -s web
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
