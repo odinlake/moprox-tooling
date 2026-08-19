@@ -78,8 +78,19 @@ def main():
     print(f"annotated={ok} failed={failed} brief-worthy={kept}", flush=True)
     # A total wipeout is a broken classifier, not a quiet day. Exit non-zero so the unit goes red,
     # which puts it in logview's incident queue instead of dying silently in a green log line.
+    #
+    # But "all of them" has to mean something. On 2026-08-17T20:50 this fired on 1/1 — a single
+    # `claude -p` returned non-JSON, the batch happened to hold one post, and the unit went red for a
+    # classifier that was fine on the next run and every run since. One sample cannot distinguish a
+    # broken classifier from a flaky call, so below MIN_WIPEOUT this warns and exits clean. Nothing is
+    # lost by waiting: a failed post is never annotated (see above), so it stays pending and the
+    # backlog is still the alarm — it just takes a real wipeout to say so.
+    MIN_WIPEOUT = 3
     if pending and ok == 0:
-        sys.exit(f"every classification failed ({failed}/{len(pending)}) — classifier is broken")
+        if len(pending) >= MIN_WIPEOUT:
+            sys.exit(f"every classification failed ({failed}/{len(pending)}) — classifier is broken")
+        print(f"  ! all {failed} of this batch failed, below the {MIN_WIPEOUT}-post bar for calling "
+              f"the classifier broken — left pending for the next run", flush=True)
 
 
 if __name__ == "__main__":

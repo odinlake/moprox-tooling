@@ -113,8 +113,25 @@ def flat_publish(wt, branch):
     new = sp.run(["git", "commit-tree", tree, "-m", msg], cwd=str(wt), env=env,
                  check=True, text=True, capture_output=True).stdout.strip()
     git(wt, "reset", "--hard", "-q", new)
-    sp.run(["git", "push", "-qf", "origin", branch], cwd=str(wt), check=True, capture_output=True)
-    return True
+    # capture_output swallows git's stderr, so a failed push used to raise a CalledProcessError whose
+    # traceback said only "exit status 128" — 7 failures between 2026-08-06 and 2026-08-14 are on the
+    # incident board and NONE of them can be diagnosed, because the one line that said why was
+    # discarded. Print it.
+    #
+    # Retry once first. The commit is parentless and the push is a force, so it is idempotent, and
+    # this runs on a 2-minute timer — a transient blip republishes by itself on the next tick and is
+    # not worth an incident. A push that fails TWICE is a different animal (auth, a poisoned object
+    # store, GitHub down) and should still go red, now with git's own words attached.
+    for attempt in (1, 2):
+        p = sp.run(["git", "push", "-qf", "origin", branch], cwd=str(wt), text=True, capture_output=True)
+        if p.returncode == 0:
+            return True
+        err = (p.stderr or p.stdout or "").strip().replace("\n", " ")[:400]
+        if attempt == 1:
+            print(f"<4>update: push {branch} failed (rc={p.returncode}), retrying: {err}",
+                  file=sys.stderr, flush=True)
+            time.sleep(3)
+    sys.exit(f"<3>update: push {branch} failed twice (rc={p.returncode}): {err}")
 
 def purge_jsdelivr(paths):
     """Best-effort CDN purge of the files we just pushed, so the dashboard sees them within a cadence.
