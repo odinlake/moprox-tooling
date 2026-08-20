@@ -237,11 +237,13 @@ function overlayChart(sess){
 // chart because they are the same quantity in bpm at two points in the run, and the gap between
 // them is the thing worth seeing. Climb has its own because it is a difference, not a level.
 // `thr` is [[value,label],...] drawn only when it lands inside the data's own range.
-function progChart(sess, series, head, thr){
+function progChart(sess, series, head, thr, agg){
   const rows=series.map(se=>({...se, pts:sess.filter(s=>s[se.key]!=null).sort((a,b)=>a.date<b.date?-1:1)}));
   const legend=rows.map(se=>`<span class="seg"><svg width="16" height="8" style="width:16px;flex:none">`
     +`<line x1="0" y1="4" x2="16" y2="4" stroke="var(--mut)" stroke-width="2"${se.dash?' stroke-dasharray="4 3"':''}/></svg>`
-    +`${se.label}</span>`).join("");
+    +`${se.label}</span>`).join("")
+    +(agg?`<span class="seg"><svg width="16" height="8" style="width:16px;flex:none">`
+      +`<line x1="0" y1="4" x2="16" y2="4" stroke="var(--fg)" stroke-width="3"/></svg>${agg.label}</span>`:"");
   const title=`<h2>${head}</h2><div class="row" style="gap:.9rem;margin:-.3rem 0 .5rem">${legend}</div>`;
   if(!rows.some(se=>se.pts.length)) return title+'<p class="muted">No sessions with this measure match.</p>';
   const all=rows.flatMap(se=>se.pts);
@@ -278,8 +280,29 @@ function progChart(sess, series, head, thr){
       ks.forEach(k=>{const w=wk[k];
         d+=((prev!=null&&k-prev<=21*86400000)?"L":"M")+px(mean(w.t)).toFixed(1)+" "+py(mean(w.v)).toFixed(1)+" "; prev=k;});
       curves+=`<path d="${d}" fill="none" stroke="${CAT[c]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"`
+        +(agg?' stroke-opacity="0.28"':'')          // the pooled line leads; per-type curves stay as context
         +(se.dash?' stroke-dasharray="4 3"':'')+`/>`;});});
-  return title+`<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thrm}${xl}${curves}${dots}</svg>`;
+  // The pooled weekly mean of ONE measure across every session on screen (not per type). Drawn for
+  // `floor` because the first five minutes are the same job whatever the session is: across the
+  // classified run types the mean floor spans 1.7 bpm (easy 124.1, tempo 123.7, vo2max 123.9,
+  // speed 125.4) where peak spans 38. So the per-type split that peak needs is noise here, and one
+  // line reads the drift the five split ones only hint at. It pools whatever the type + window
+  // filters currently show — including `other` (the 2013-2023 archive, floor ~150) if that is
+  // selected, which lifts the line ~25 bpm and is a real difference, not a bug.
+  let aggline="";
+  if(agg){
+    const apts=sess.filter(s=>s[agg.key]!=null);
+    const wk={}; apts.forEach(s=>{const k=MON(s.date);
+      (wk[k]=wk[k]||{v:[],t:[]}); wk[k].v.push(s[agg.key]); wk[k].t.push(new Date(s.date).getTime());});
+    const ks=Object.keys(wk).map(Number).sort((a,b)=>a-b), amean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+    let d="",prev=null,adots="";
+    ks.forEach(k=>{const w=wk[k], x=px(amean(w.t)), y=py(amean(w.v)), m=amean(w.v);
+      d+=((prev!=null&&k-prev<=21*86400000)?"L":"M")+x.toFixed(1)+" "+y.toFixed(1)+" "; prev=k;
+      adots+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.8" fill="var(--fg)">`
+        +`<title>week of ${new Date(k).toISOString().slice(0,10)} · ${m.toFixed(1)} bpm · ${w.v.length} session${w.v.length>1?"s":""}</title></circle>`;});
+    aggline=`<path d="${d}" fill="none" stroke="var(--fg)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>`+adots;
+  }
+  return title+`<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thrm}${xl}${curves}${dots}${aggline}</svg>`;
 }
 async function loadTraining(){
   const data = await JD("training/sessions.json");
@@ -450,13 +473,16 @@ async function loadTraining(){
         <td style="color:${CAT[s.cat]}">${spark(s)}</td></tr>`;});
     $("#slist").innerHTML=html;
     $("#ovpanel").innerHTML = Sf.length ? overlayChart(Sf) : '<p class="muted">No sessions match.</p>';   // count is overlaid on the chart
-    // Both obey the type and time-bucket filters. A floor is comparable only WITHIN a type (easy
-    // holds 9 kph at minute 4, quality days are still on an 8 kph warm-up) and within a belt, which
-    // is why the curves are drawn per type rather than pooled.
+    // Both obey the type and time-bucket filters. PEAK is comparable only within a type, so its
+    // curves stay split by colour. FLOOR is not: the first five minutes are the same job whatever
+    // the session is (measured 2026-08-20 — 1.7 bpm between the classified run types, against 38
+    // for peak), so it also gets ONE pooled weekly line, drawn prominently with the per-type curves
+    // faded behind it. Operator's call, and the numbers agree.
     $("#m10panel").innerHTML = progChart(Sf, [
       {key:"med10", label:"peak — max of a rolling 10s median"},
       {key:"floor", label:"floor — median HR over 3:30–4:30", dash:true}],
-      "Peak and floor", [[data.lt1,"LT1"],[data.lt2,"LT2"]]);
+      "Peak and floor", [[data.lt1,"LT1"],[data.lt2,"LT2"]],
+      {key:"floor", label:"weekly floor — all types pooled"});
     $("#climbpanel").innerHTML = progChart(Sf, [
       {key:"climb", label:"settled 35–45′ minus floor"}], "Climb", []);
     const rows=$("#slist").querySelectorAll(".sessrow");
