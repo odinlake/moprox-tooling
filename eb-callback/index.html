@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moprox — bank connection callback</title>
+<style>
+  body{margin:0;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:#0d1117;color:#e6edf3;line-height:1.6}
+  main{max-width:720px;margin:0 auto;padding:2.5rem 1.25rem}
+  h1{font-size:1.3rem}
+  #msg{color:#3fb950;font-weight:600}
+  pre{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  button{background:#21262d;border:1px solid #30363d;color:#e6edf3;border-radius:8px;padding:.5rem .9rem;cursor:pointer;font-size:.9rem}
+  .muted{color:#8b949e;font-size:.9rem}
+</style>
+</head>
+<body><main>
+<h1>Bank connection callback</h1>
+<p id="msg">Reading response…</p>
+<pre id="out"></pre>
+<button id="copy">Copy authorisation code</button>
+<p class="muted">This page only displays the values the bank returned in the URL. Paste the
+<code>code</code> back to the connector to complete the link. Nothing is stored here.</p>
+<script>
+  const p = new URLSearchParams(location.search);
+  const o = {}; for (const [k, v] of p) o[k] = v;
+  const keys = Object.keys(o);
+  document.getElementById("out").textContent = keys.length ? JSON.stringify(o, null, 2) : "(no parameters in the URL)";
+  document.getElementById("msg").textContent = o.code
+    ? "Authorisation code received — copy it back to the connector."
+    : (keys.length ? "Response received." : "No parameters found in the URL.");
+  document.getElementById("copy").onclick = () => {
+    const v = o.code || JSON.stringify(o);
+    navigator.clipboard.writeText(v).then(() => { document.getElementById("copy").textContent = "Copied ✓"; });
+  };
+</script>
+</main></body>
+</html>
