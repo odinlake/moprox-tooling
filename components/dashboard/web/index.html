@@ -83,17 +83,16 @@
         max-width:min(30rem,92vw);padding:1rem 1.1rem;font-size:.85rem;line-height:1.55}
   dialog.info::backdrop{background:rgba(0,0,0,.35)}
   dialog.info h3{margin:0 0 .6rem;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
-  dialog.info dl{margin:0 0 .8rem;display:grid;grid-template-columns:auto 1fr;gap:.4rem .6rem;align-items:center}
-  dialog.info dd{margin:0}
+  dialog.info .def{display:flex;gap:.65rem;align-items:baseline;margin:0 0 .7rem}
+  dialog.info .def .sw{flex:none;line-height:0}
+  dialog.info .lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);
+        display:block;margin-bottom:.1rem}
+  dialog.info .dv{font-size:.95rem;color:var(--fg);line-height:1.35}
+  dialog.info .defs{margin:0 0 .9rem;padding:0 0 .7rem;border-bottom:1px solid var(--bd)}
   dialog.info p{margin:.5rem 0;color:var(--mut)}
-  dialog.info dd b{color:var(--fg)}
-  dialog.info code{font:600 .8rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--btn);
-        border:1px solid var(--bd);border-radius:5px;padding:.06rem .35rem;color:var(--fg);white-space:nowrap}
   /* Heading and (i) float in the chart's own top margin (pT) instead of taking a row of their own:
      the plot needs that band for breathing room anyway, and the title is not worth 1.4rem of panel. */
   .chartwrap{position:relative}
-  .chartwrap h2{position:absolute;left:0;top:1px;margin:0;pointer-events:none;
-        font-size:.68rem;color:var(--fade)}   /* faint enough to sit over the axis labels */
   .chartwrap .ibtn{position:absolute;right:2px;top:0;margin:0}
   dialog.info .close{margin-top:.4rem;background:var(--btn);border:1px solid var(--bd);color:var(--mut);
         border-radius:6px;padding:.25rem .7rem;cursor:pointer;font-size:.8rem}
@@ -273,19 +272,21 @@ function progChart(sess, series, head, thr, agg, info, dom){
   // like the rest. So per-type series get a swatch built from the type palette, and only the pooled
   // line gets --fg, which is exactly what is on screen.
   const PAL=["easy","tempo","vo2max","speed"].map(c=>CAT[c]);
+  const SW='style="width:30px;height:9px;flex:none;display:inline-block"';   // beats the global svg{width:100%}
   const swatch=se=>se.wide
-    ? `<svg width="26" height="8" style="flex:none"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--fg)" stroke-width="3"/></svg>`
-    : `<svg width="26" height="8" style="flex:none">`+PAL.map((col,i)=>{
-        const w=26/PAL.length, x=i*w;
-        return `<line x1="${(x+(se.dash?0.8:0)).toFixed(1)}" y1="4" x2="${(x+w-(se.dash?1.8:0)).toFixed(1)}" y2="4" stroke="${col}" stroke-width="2"/>`;
+    ? `<svg ${SW} viewBox="0 0 30 9"><line x1="0" y1="4.5" x2="30" y2="4.5" stroke="var(--fg)" stroke-width="3.5"/></svg>`
+    : `<svg ${SW} viewBox="0 0 30 9">`+PAL.map((col,i)=>{
+        const w=30/PAL.length, x=i*w;
+        return `<line x1="${(x+(se.dash?1:0)).toFixed(1)}" y1="4.5" x2="${(x+w-(se.dash?2:0)).toFixed(1)}" y2="4.5" stroke="${col}" stroke-width="2.5"/>`;
       }).join("")+`</svg>`;
-  const entry=(se,wide)=>`<dt>${swatch(wide?{wide:true}:se)}</dt>`
-    +`<dd><b>${se.label}</b>${se.desc?`<br><code>${se.desc}</code>`:""}</dd>`;
-  const legend=rows.map(se=>entry(se)).join("")+(agg?entry(agg,true):"");
+  // Name as a quiet label, definition as the sentence you actually came to read.
+  const entry=(se,wide)=>`<div class="def"><span class="sw">${swatch(wide?{wide:true}:se)}</span>`
+    +`<span><span class="lbl">${se.label}</span><span class="dv">${se.desc||""}</span></span></div>`;
+  const legend=`<div class="defs">`+rows.map(se=>entry(se)).join("")+(agg?entry(agg,true):"")+`</div>`;
   const id="i"+head.replace(/[^a-z]/gi,"").toLowerCase();
-  const title=`<h2>${head}</h2><button class="ibtn" aria-label="About ${head}" `
+  const title=`<button class="ibtn" aria-label="About ${head}" `
     +`onclick="document.getElementById('${id}').showModal()">i</button>`
-    +`<dialog class="info" id="${id}"><h3>${head}</h3><dl>${legend}</dl>${info||""}`
+    +`<dialog class="info" id="${id}"><h3>${head}</h3>${legend}${info||""}`
     +`<form method="dialog"><button class="close">Close</button></form></dialog>`;
   if(!rows.some(se=>se.pts.length)) return `<div class="chartwrap">${title}</div><p class="muted">No sessions with this measure match.</p>`;
   const all=rows.flatMap(se=>se.pts);
