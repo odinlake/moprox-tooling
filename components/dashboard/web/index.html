@@ -73,6 +73,21 @@
   .toggle button.active{color:var(--fg);background:var(--btnAct)}
   svg{display:block;width:100%;height:auto}
   .axis{fill:var(--mut);font-size:10px}.grid line{stroke:var(--grid)}.sfloor{stroke:var(--bd)}
+  /* (i) opens the legend. The legend used to sit under every heading, costing two lines of chrome
+     on each chart to say things you only need once. Behind the icon it can afford to be verbose. */
+  .ibtn{background:transparent;border:1px solid var(--bd);color:var(--mut);width:16px;height:16px;
+        border-radius:50%;font:italic 600 10px/1 Georgia,serif;cursor:pointer;padding:0;margin-left:.4rem;
+        vertical-align:1px}
+  .ibtn:hover{color:var(--fg);border-color:var(--mut)}
+  dialog.info{background:var(--panel);color:var(--fg);border:1px solid var(--bd);border-radius:10px;
+        max-width:min(30rem,92vw);padding:1rem 1.1rem;font-size:.85rem;line-height:1.55}
+  dialog.info::backdrop{background:rgba(0,0,0,.35)}
+  dialog.info h3{margin:0 0 .6rem;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+  dialog.info dl{margin:0 0 .8rem;display:grid;grid-template-columns:auto 1fr;gap:.4rem .6rem;align-items:center}
+  dialog.info dd{margin:0}
+  dialog.info p{margin:.5rem 0}
+  dialog.info .close{margin-top:.4rem;background:var(--btn);border:1px solid var(--bd);color:var(--mut);
+        border-radius:6px;padding:.25rem .7rem;cursor:pointer;font-size:.8rem}
   .agi svg{width:17px;height:17px;vertical-align:-4px}
   a{color:var(--accent)}
 
@@ -237,12 +252,22 @@ function overlayChart(sess){
 // chart because they are the same quantity in bpm at two points in the run, and the gap between
 // them is the thing worth seeing. Climb has its own because it is a difference, not a level.
 // `thr` is [[value,label],...] drawn only when it lands inside the data's own range.
-function progChart(sess, series, head, thr, agg){
+function progChart(sess, series, head, thr, agg, info){
   const rows=series.map(se=>({...se, pts:sess.filter(s=>s[se.key]!=null).sort((a,b)=>a.date<b.date?-1:1)}));
-  const legend=rows.map(se=>`<span class="seg"><svg width="16" height="8" style="width:16px;flex:none">`
-    +`<line x1="0" y1="4" x2="16" y2="4" stroke="var(--mut)" stroke-width="2"${se.dash?' stroke-dasharray="4 3"':''}/></svg>`
-    +`${se.label}</span>`).join("");
-  const title=`<h2>${head}</h2><div class="row" style="gap:.9rem;margin:-.3rem 0 .5rem">${legend}</div>`;
+  // The legend lives behind the (i), together with the prose that explains what each measure IS.
+  // A swatch reading "floor" told you nothing you could act on, and one reading "floor — median HR
+  // over 3:30-4:30" was a paragraph pretending to be a label. So: nothing above the chart but its
+  // name, and everything worth knowing one click away, generated from the same `series` the chart
+  // draws so the two cannot drift.
+  const swatch=se=>`<svg width="22" height="8" style="flex:none"><line x1="0" y1="4" x2="22" y2="4"`
+    +` stroke="var(--mut)" stroke-width="${se.wide?3:2}"${se.dash?' stroke-dasharray="4 3"':''}/></svg>`;
+  const legend=rows.map(se=>`<dt>${swatch(se)}</dt><dd>${se.label}${se.desc?` — <span class="muted">${se.desc}</span>`:""}</dd>`).join("")
+    +(agg?`<dt>${swatch({wide:true})}</dt><dd>${agg.label}${agg.desc?` — <span class="muted">${agg.desc}</span>`:""}</dd>`:"");
+  const id="i"+head.replace(/[^a-z]/gi,"").toLowerCase();
+  const title=`<h2>${head}<button class="ibtn" aria-label="About ${head}" `
+    +`onclick="document.getElementById('${id}').showModal()">i</button></h2>`
+    +`<dialog class="info" id="${id}"><h3>${head}</h3><dl>${legend}</dl>${info||""}`
+    +`<form method="dialog"><button class="close">Close</button></form></dialog>`;
   if(!rows.some(se=>se.pts.length)) return title+'<p class="muted">No sessions with this measure match.</p>';
   const all=rows.flatMap(se=>se.pts);
   const W=760,H=300,pL=32,pR=10,pT=14,pB=22;
@@ -477,12 +502,34 @@ async function loadTraining(){
     // for peak), so it also gets ONE pooled weekly line, drawn prominently with the per-type curves
     // faded behind it. Operator's call, and the numbers agree.
     $("#m10panel").innerHTML = progChart(Sf, [
-      {key:"med10", label:"peak"},                 // med10 — max of a rolling 10s median
-      {key:"floor", label:"floor", dash:true}],     // median HR over 3:30-4:30
+      {key:"med10", label:"peak", desc:"max of a rolling 10-second median, over samples ≥100 bpm"},
+      {key:"floor", label:"floor", desc:"median HR over 3:30–4:30", dash:true}],
       "Peak and floor", [[data.lt1,"LT1"],[data.lt2,"LT2"]],
-      {key:"floor", label:"weekly floor — all types pooled"});
+      {key:"floor", label:"weekly floor, pooled", desc:"every session shown, whatever its type"},
+      `<p>One <b>dot</b> per session, coloured by type — filled for peak, hollow for floor. Each
+       thin <b>curve</b> is that type's mean per calendar week, plotted at the week's mean date; a
+       gap of more than three weeks breaks it, so a curve never spans a layoff.</p>
+       <p><b>Peak</b> uses med10 rather than a plain max because a single stray beat is not a
+       capacity. It is comparable across every session type — max5 averages across interval
+       recoveries and reads 6–8 bpm low on speed and VO2max days.</p>
+       <p><b>Floor</b> is the fourth minute: warm-up, before the session becomes what it is going to
+       be. That is why the bold line may pool every type — across the classified run types the mean
+       floor spans <b>1.7 bpm</b> (easy 124.1, tempo 123.7, VO2max 123.9, speed 125.4) where peak
+       spans 38. The thin floor curves stay, faded, as the evidence behind it.</p>
+       <p>The pooled line follows the type and window filters, so it is the mean of what you are
+       looking at. Include <i>other</i> — the 2013–2023 archive, floor around 150 against today's
+       125 — and it lifts accordingly.</p>
+       <p>Horizontal dashes are your lactate thresholds, drawn only when they fall inside the range
+       on screen. Hover any point for its date, type and value; hover a bold marker for that week's
+       mean and how many sessions made it.</p>`);
     $("#climbpanel").innerHTML = progChart(Sf, [
-      {key:"climb", label:"settled 35–45′ minus floor"}], "Climb", []);
+      {key:"climb", label:"climb", desc:"settled HR at 35–45′ minus floor"}], "Climb", [], null,
+      `<p>How far HR drifts up over a run: where it settles late minus where it started. Same
+       conventions as the chart above — one dot per session, coloured by type, and a curve per type
+       of the weekly mean, broken across gaps longer than three weeks.</p>
+       <p>It gets its own chart because it is a <i>difference</i>, not a level, so it does not share
+       an axis with the bpm it is derived from. Rising climb at an unchanged floor is the drift
+       getting worse; both falling together is the fitness reading you want.</p>`);
     const rows=$("#slist").querySelectorAll(".sessrow");
     const pick=i=>{ rows.forEach(r=>r.classList.toggle("sel",+r.dataset.i===i)); showDetail(Sf[i]); };   // mark row + detail + highlight curve
     rows.forEach(r=>r.onclick=()=>pick(+r.dataset.i));
