@@ -683,11 +683,26 @@ def ledger_digest(led, budget=26000):
     # Fit by discarding named material in a fixed order, cheapest loss first, and SAYING what went.
     # A digest that silently ends mid-sentence reads as a complete ledger; one that reports
     # "24 disputed_older entries dropped" is a cycle that knows what it is missing.
+    # The rungs used to be a flat list in which `n_old` was swept 44->30->20->10->0 ONLY at
+    # clip_acc=160, and every rung after that hard-wired n_old=0. So once the fit search was forced
+    # to clip accepted claims it could never put a disputed entry back — the exact inversion of the
+    # priority stated above, since accepted claims are recoverable from moprox-memory and these are
+    # not. Measured at cycle 160 (50 disputed / 90 accepted): the digest landed at 22905 chars, 3095
+    # UNDER the 26000 budget, while announcing "44 of 44 oldest entries dropped to fit the digest
+    # budget". Sixteen of them fit at the very rung it settled on. A first-fit walk down a ladder
+    # that cannot restore n_old discards material it has room for and blames the budget for it.
+    #
+    # So: degrade in named stages, and within each stage keep the MOST disputed_older that fits,
+    # one at a time rather than in jumps of ten. First fit still wins across stages — the stages are
+    # ordered by cost as before — but inside a stage the search is exact. ~n_old json.dumps of a
+    # 26 kB structure per stage, once per cycle: microseconds, and the thing being bought is the
+    # only copy of a rejected claim.
     n_old = len(dis[:-6])
-    ladder = [(1600, n_old, 140, 160, 450)]
-    ladder += [(1600, n, 140, 160, 450) for n in (30, 20, 10, 0) if n < n_old]
-    ladder += [(1600, 0, 140, 120, 450), (1200, 0, 140, 120, 450), (900, 0, 140, 90, 450),
-               (600, 0, 140, 60, 300), (400, 0, 100, 60, 200)]
+    stages = [(1600, 140, 160, 450), (1600, 140, 120, 450), (1200, 140, 120, 450),
+              (900, 140, 90, 450), (600, 140, 60, 300), (400, 100, 60, 200)]
+    ladder = [(olen, n, clip_old, clip_acc, clip_dis)
+              for olen, clip_old, clip_acc, clip_dis in stages
+              for n in range(n_old, -1, -1)]
     for olen, n, clip_old, clip_acc, clip_dis in ladder:
         omitted = []
         if n < n_old:
