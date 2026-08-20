@@ -241,9 +241,7 @@ function progChart(sess, series, head, thr, agg){
   const rows=series.map(se=>({...se, pts:sess.filter(s=>s[se.key]!=null).sort((a,b)=>a.date<b.date?-1:1)}));
   const legend=rows.map(se=>`<span class="seg"><svg width="16" height="8" style="width:16px;flex:none">`
     +`<line x1="0" y1="4" x2="16" y2="4" stroke="var(--mut)" stroke-width="2"${se.dash?' stroke-dasharray="4 3"':''}/></svg>`
-    +`${se.label}</span>`).join("")
-    +(agg?`<span class="seg"><svg width="16" height="8" style="width:16px;flex:none">`
-      +`<line x1="0" y1="4" x2="16" y2="4" stroke="var(--fg)" stroke-width="3"/></svg>${agg.label}</span>`:"");
+    +`${se.label}</span>`).join("");
   const title=`<h2>${head}</h2><div class="row" style="gap:.9rem;margin:-.3rem 0 .5rem">${legend}</div>`;
   if(!rows.some(se=>se.pts.length)) return title+'<p class="muted">No sessions with this measure match.</p>';
   const all=rows.flatMap(se=>se.pts);
@@ -280,7 +278,7 @@ function progChart(sess, series, head, thr, agg){
       ks.forEach(k=>{const w=wk[k];
         d+=((prev!=null&&k-prev<=21*86400000)?"L":"M")+px(mean(w.t)).toFixed(1)+" "+py(mean(w.v)).toFixed(1)+" "; prev=k;});
       curves+=`<path d="${d}" fill="none" stroke="${CAT[c]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"`
-        +(agg?' stroke-opacity="0.28"':'')          // the pooled line leads; per-type curves stay as context
+        +(agg&&se.key===agg.key?' stroke-opacity="0.28"':'')   // fade only the measure the pooled line leads
         +(se.dash?' stroke-dasharray="4 3"':'')+`/>`;});});
   // The pooled weekly mean of ONE measure across every session on screen (not per type). Drawn for
   // `floor` because the first five minutes are the same job whatever the session is: across the
@@ -479,8 +477,8 @@ async function loadTraining(){
     // for peak), so it also gets ONE pooled weekly line, drawn prominently with the per-type curves
     // faded behind it. Operator's call, and the numbers agree.
     $("#m10panel").innerHTML = progChart(Sf, [
-      {key:"med10", label:"peak — max of a rolling 10s median"},
-      {key:"floor", label:"floor — median HR over 3:30–4:30", dash:true}],
+      {key:"med10", label:"peak"},                 // med10 — max of a rolling 10s median
+      {key:"floor", label:"floor", dash:true}],     // median HR over 3:30-4:30
       "Peak and floor", [[data.lt1,"LT1"],[data.lt2,"LT2"]],
       {key:"floor", label:"weekly floor — all types pooled"});
     $("#climbpanel").innerHTML = progChart(Sf, [
