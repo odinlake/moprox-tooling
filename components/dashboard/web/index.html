@@ -92,7 +92,8 @@
   /* Heading and (i) float in the chart's own top margin (pT) instead of taking a row of their own:
      the plot needs that band for breathing room anyway, and the title is not worth 1.4rem of panel. */
   .chartwrap{position:relative}
-  .chartwrap h2{position:absolute;left:36px;top:1px;margin:0;pointer-events:none}
+  .chartwrap h2{position:absolute;left:0;top:1px;margin:0;pointer-events:none;
+        font-size:.68rem;color:var(--fade)}   /* faint enough to sit over the axis labels */
   .chartwrap .ibtn{position:absolute;right:2px;top:0;margin:0}
   dialog.info .close{margin-top:.4rem;background:var(--btn);border:1px solid var(--bd);color:var(--mut);
         border-radius:6px;padding:.25rem .7rem;cursor:pointer;font-size:.8rem}
@@ -260,7 +261,7 @@ function overlayChart(sess){
 // chart because they are the same quantity in bpm at two points in the run, and the gap between
 // them is the thing worth seeing. Climb has its own because it is a difference, not a level.
 // `thr` is [[value,label],...] drawn only when it lands inside the data's own range.
-function progChart(sess, series, head, thr, agg, info){
+function progChart(sess, series, head, thr, agg, info, dom){
   const rows=series.map(se=>({...se, pts:sess.filter(s=>s[se.key]!=null).sort((a,b)=>a.date<b.date?-1:1)}));
   // The legend lives behind the (i), together with the prose that explains what each measure IS.
   // A swatch reading "floor" told you nothing you could act on, and one reading "floor — median HR
@@ -293,9 +294,22 @@ function progChart(sess, series, head, thr, agg, info){
   const t0=Math.min(...ts), span=Math.max(86400000,Math.max(...ts)-t0);
   const vals=rows.flatMap(se=>se.pts.map(s=>s[se.key]));
   let lo=Math.min(...vals), hi=Math.max(...vals);
-  (thr||[]).forEach(p=>{ const v=p[0]; if(v&&v>=lo-8&&v<=hi+8){lo=Math.min(lo,v);hi=Math.max(hi,v);} });  // only pull in a nearby threshold
-  const pad=Math.max(3,(hi-lo)*0.08); lo=Math.floor((lo-pad)/5)*5; hi=Math.ceil((hi+pad)/5)*5;
-  const px=t=>pL+(W-pL-pR)*(t-t0)/span, py=v=>pT+(H-pT-pB)*(1-(v-lo)/(hi-lo));
+  // `dom` = [lo, hi, loMin, hiMax]: a FIXED band that matches the session overlay chart above, so
+  // the two are read at one glance — with bounded give, because a hard 110-190 would hide the 23
+  // all-time peaks over 190 and the 29 floors under 110. The band stretches to fit those, and stops
+  // at the outer pair. Anything still beyond is drawn ON the boundary rather than off the canvas,
+  // and says "off scale" in its tooltip with the true value: 6 sessions reach 219 bpm, and one
+  // dot silently missing is worse than one dot sitting on the ceiling.
+  if(dom){
+    const [bLo,bHi,mLo,mHi]=dom;
+    lo=Math.max(mLo, Math.min(bLo, Math.floor(lo/5)*5));
+    hi=Math.min(mHi, Math.max(bHi, Math.ceil(hi/5)*5));
+  }else{
+    (thr||[]).forEach(p=>{ const v=p[0]; if(v&&v>=lo-8&&v<=hi+8){lo=Math.min(lo,v);hi=Math.max(hi,v);} });  // only pull in a nearby threshold
+    const pad=Math.max(3,(hi-lo)*0.08); lo=Math.floor((lo-pad)/5)*5; hi=Math.ceil((hi+pad)/5)*5;
+  }
+  const cl=v=>Math.max(lo,Math.min(hi,v)), off=v=>v<lo||v>hi;
+  const px=t=>pL+(W-pL-pR)*(t-t0)/span, py=v=>pT+(H-pT-pB)*(1-(cl(v)-lo)/(hi-lo));
   let g=""; for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=py(v);
     g+=`<line x1="${pL}" y1="${y.toFixed(1)}" x2="${W-pR}" y2="${y.toFixed(1)}"/><text class="axis" x="2" y="${(y+3).toFixed(1)}">${v.toFixed(0)}</text>`;}
   let thrm=""; (thr||[]).forEach(p=>{ const v=p[0]; if(!v||v<lo||v>hi) return;
@@ -309,7 +323,8 @@ function progChart(sess, series, head, thr, agg, info){
   rows.forEach(se=>{
     dots+=se.pts.map(s=>`<circle cx="${px(new Date(s.date).getTime()).toFixed(1)}" cy="${py(s[se.key]).toFixed(1)}" r="2.6"`
       +(se.dash?` fill="none" stroke="${CAT[s.cat]}" stroke-width="1.2"`:` fill="${CAT[s.cat]}" fill-opacity="0.5"`)
-      +`><title>${s.date.slice(0,10)} · ${catl(s.cat)} · ${se.label} ${s[se.key]} bpm</title></circle>`).join("");
+      +`><title>${s.date.slice(0,10)} · ${catl(s.cat)} · ${se.label} ${s[se.key]} bpm`
+      +`${off(s[se.key])?" (off scale)":""}</title></circle>`).join("");
     [...new Set(se.pts.map(s=>s.cat))].forEach(c=>{
       // group by calendar week; plot each week's mean at the MEAN TIMESTAMP of its sessions, not the
       // Monday — a Monday can precede the first session and push the curve outside the plot area.
@@ -523,13 +538,15 @@ async function loadTraining(){
       {key:"med10", label:"peak", desc:"max of a rolling 10s median, samples ≥100 bpm"},
       {key:"floor", label:"floor", desc:"median HR over 3:30–4:30", dash:true}],
       "Peak and floor", [[data.lt1,"LT1"],[data.lt2,"LT2"]],
-      {key:"floor", label:"weekly floor, pooled", desc:"mean floor per week, every type shown"},
+      {key:"floor", label:"weekly floor, pooled", desc:"mean floor per week, every type shown"},   // dom below: same band as the overlay
       `<p>Dots are sessions; thin curves are weekly means <b>per type</b>, broken across gaps over
        three weeks. The bold line is the only one that is not a type.</p>
        <p>Peak uses a rolling median because one stray beat is not a capacity. Floor can be pooled
        because minute four is the same job in any session — 1.7 bpm between run types, against 38
        for peak. Pooling follows your filters, so <i>other</i> (the 2013–23 archive) lifts it.</p>
-       <p>Horizontal dashes: LT1 / LT2, when in range. Hover anything for its numbers.</p>`);
+       <p>Horizontal dashes: LT1 / LT2. Scale matches the session overlay above (110–190), stretching
+       to 100 / 200 only if the window needs it; anything beyond that sits on the boundary and says
+       so. Hover anything for its numbers.</p>`, [110,190,100,200]);
     $("#climbpanel").innerHTML = progChart(Sf, [
       {key:"climb", label:"climb", desc:"settled HR at 35–45′ − floor"}], "Climb", [], null,
       `<p>How far HR drifts up over a run. Same conventions as above: dot per session, weekly mean
