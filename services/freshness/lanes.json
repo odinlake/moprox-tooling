@@ -48,16 +48,12 @@
       "notnull": true
      },
      {
-      "field": "active_minutes",
-      "notnull": true
-     },
-     {
       "field": "total_sleep_s",
       "notnull": true
      }
     ]
    },
-   "note": "Ring data. `date` is written by the fetcher's own loop, so an empty 200 still yields a dated row \u2014 without `require` this lane reads ok on a table with no measurement in it. The five fields are payload-borne and independent: hr_points alone would be too strict (20 of 143 real days have none while still carrying steps/vo2_max). Coverage collapse is a separate problem, held by ultrahuman-coverage."
+   "note": "Ring data. `date` is written by the fetcher's own loop, so an empty 200 still yields a dated row \u2014 without `require` this lane reads ok on a table with no measurement in it. The four fields are payload-borne and independent: hr_points alone would be too strict (20 of 143 real days have none while still carrying steps/vo2_max). Coverage collapse is a separate problem, held by ultrahuman-coverage.\n\n`active_minutes` was a fifth certifier and was REMOVED 2026-08-21: it is non-null on days whose payload carries no hr, no temp, no hrv and no steps series and an empty Sleep object, so it certified rows containing no measurement. Measured over the 154 rows of that date's artifact: it was the sole require-satisfying field on exactly 11 rows (2026-06-03..06-11, 2026-08-18..08-19), all with hr_points=0, and on none of the rows that carry samples \u2014 across the 95 payloads with samples and active_minutes>0 the steps series is never empty (min 87 points). So dropping it removes 11 false certifications and loses no true one, and it moves this lane's newest data-carrying row from 2026-08-19 to 2026-08-17, the last day with any samples. Whether the partner API echoes, extrapolates or measures active_minutes on those days was NOT established and does not matter here \u2014 the field stays in the artifact, it just no longer counts as proof the ring reported. Same class as the night_rhr echo closed in ea378fe."
   },
   {
    "name": "technogym-cardio",
