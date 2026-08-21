@@ -40,6 +40,9 @@ from pathlib import Path
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import errlog
+
 ENV    = Path.home() / ".config/claude-dev/ultrahuman.env"
 TOKEN  = Path.home() / ".config/claude-dev/ultrahuman-partner-token.json"
 OUT    = Path.home() / "projects/private-data/ultrahuman"
@@ -181,17 +184,48 @@ def scalars(d, payload):
     return rec
 
 
+def has_measurement(payload):
+    """Does this payload contain anything the ring actually measured?
+
+    Deliberately not "is the response non-empty": a dead day still returns all 16 metric_data
+    entries, and night_rhr still carries an echoed value (see scalars()). Only the series-bearing
+    metrics count.
+    """
+    by = {m.get("type"): m.get("object") for m in
+          (payload.get("data") or {}).get("metric_data") or []}
+    for k in ("hr", "steps", "hrv", "temp"):
+        o = by.get(k)
+        if isinstance(o, dict) and (o.get("values") or o.get("value") is not None):
+            return True
+    s = by.get("Sleep")
+    return bool(isinstance(s, dict) and s)
+
+
 def is_final(f, d):
-    """Was this day fetched late enough that it cannot still be filling in?
+    """Was this day fetched late enough that it cannot still be filling in — AND did it arrive?
 
     `f.exists()` is NOT the test — that is what froze eight days of partial data. A file written at
     10:34 on the day itself holds whatever the cloud had by then, which is typically only the
     overnight stretch.
+
+    An EMPTY day is never final either, and that is not a nicety. 2026-08-18..21 were fetched the
+    following morning, after the settle hour, while the ring was not syncing to the phone at all —
+    so by mtime alone they were sealed as complete, holding nothing. The moment the ring syncs,
+    Ultrahuman backfills those dates and this fetcher would have skipped every one of them: the
+    nights would exist upstream and be permanently absent here, recoverable only by someone
+    remembering to pass --backfill. A day with no measurement in it stays open for the ten-day
+    window main() scans; the cost is a handful of extra API calls, against silently losing nights.
     """
     if not f.exists():
         return False
     settled = datetime.combine(d + timedelta(days=1), dtime(SETTLE_HOUR, 0)).timestamp()
-    return f.stat().st_mtime >= settled
+    if f.stat().st_mtime < settled:
+        return False
+    try:
+        return has_measurement(json.loads(gzip.decompress(f.read_bytes())))
+    except Exception as exc:
+        errlog.warn(f"ultrahuman: cannot read stored payload {f.name} ({exc}) — will re-fetch")
+        return False
 
 
 def main():
