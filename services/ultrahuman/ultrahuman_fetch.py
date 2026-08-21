@@ -118,8 +118,21 @@ def scalars(d, payload):
     rec["active_minutes"]  = val("active_minutes")
     rec["morning_alertness"] = val("morning_alertness")
 
-    nr = by.get("night_rhr") or {}
-    rec["night_rhr_avg"] = nr.get("avg") if isinstance(nr, dict) else None
+    # night_rhr is ECHOED, not recomputed: when the ring stops delivering, the partner API keeps
+    # serving the last real reading — same value, same ORIGINAL timestamp — for every later date.
+    # Measured 2026-08-21: 08-18..08-21 all returned avg 52 stamped 2026-08-17T00:00, on days whose
+    # hr/steps/hrv/Sleep were all empty. Taken at face value that reads as "RHR 52 every night" and,
+    # worse, it is one of the five fields the freshness lane accepts as proof a row has data — so a
+    # dead lane could never go stale. Keep the value only if its own timestamp falls in the day.
+    nr = by.get("night_rhr") if isinstance(by.get("night_rhr"), dict) else {}
+    rec["night_rhr_avg"] = nr.get("avg")
+    # The series is a trailing window stamped at each day's midnight and, on a live day, it ENDS on
+    # the requested date. So the test is simply: does it contain this date at all?
+    stamps = [v.get("timestamp") for v in (nr.get("values") or []) if isinstance(v, dict)]
+    if rec["night_rhr_avg"] is not None and stamps:
+        if not any(date.fromtimestamp(s) == d for s in stamps if s):
+            rec["night_rhr_avg"] = None
+            rec["night_rhr_stale"] = True
     st = by.get("steps") or {}
     rec["steps"] = st.get("total") if isinstance(st, dict) else None
     hv = by.get("hrv") or {}
