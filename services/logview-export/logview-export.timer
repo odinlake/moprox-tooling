@@ -1,0 +1,10 @@
+[Unit]
+Description=Export the logview issue/ack ledgers nightly
+[Timer]
+# Nightly, ahead of private-data-sync's sweep so the copy lands in that night's commit. These files
+# are small and append-only; the cadence is about never being more than a day behind, not volume.
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=600
+Persistent=true
+[Install]
+WantedBy=timers.target

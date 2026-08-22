@@ -1,0 +1,10 @@
+# Copy the logview investigation record (issues + acks) into private-data. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox logview ledger export (issues/acks -> private-data)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/opt/moprox-tooling/services/logview-export/export-ledgers.sh
