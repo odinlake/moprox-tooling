@@ -1,0 +1,13 @@
+[Unit]
+Description=moprox watchdog (are the estate's checkers still running?)
+Documentation=file:/opt/watchdog/watch.json
+After=network-online.target
+[Service]
+Type=oneshot
+# Same user and journal groups as logview/logscan: reading the remote sink needs both, and
+# `sudo -u logview` does NOT confer them — only the unit does.
+User=logview
+Group=logview
+SupplementaryGroups=systemd-journal systemd-journal-remote
+ExecStart=/usr/bin/python3 /opt/watchdog/check.py
+Nice=10

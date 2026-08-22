@@ -1,0 +1,11 @@
+[Unit]
+Description=Check that the estate's checkers are still running
+[Timer]
+# Every 30 min. The tightest tolerance in watch.json is 2 h (dashboard-update), so this is four
+# chances to notice before the bar; and the check is nine journalctl queries, so the cadence costs
+# nothing. Persistent so a rebooted box reports promptly rather than waiting for the next slot.
+OnCalendar=*:00,30
+RandomizedDelaySec=120
+Persistent=true
+[Install]
+WantedBy=timers.target

@@ -50,6 +50,11 @@ NEW_MAX_AGE_H = float(os.environ.get("INCIDENT_NEW_MAX_AGE_H", "48"))
 # the wallpaper this whole design is trying to avoid. Serious-but-known resurfaces weekly; serious-
 # and-CHANGING still comes through immediately, because escalation is checked before this.
 HIGH_REPEAT_DAYS = float(os.environ.get("INCIDENT_HIGH_REPEAT_DAYS", "7"))
+# Silence from this digest is ambiguous by construction: a quiet estate and a dead timer look
+# identical from the outside. Once a week, say something regardless — that one line is what makes
+# total silence meaningful, and it is the only thing watching the watchdog that watches everything
+# else. Do not remove it as noise; it is the opposite.
+LIVENESS_DAYS = float(os.environ.get("INCIDENT_LIVENESS_DAYS", "7"))
 
 
 def send(text):
@@ -82,6 +87,27 @@ def open_issues():
     except Exception as exc:
         errlog.err("incident-digest: could not read the issue list", exc)
         return []
+
+
+def watchdog_age():
+    """Hours since the watchdog last ran, from the fleet journal. None if it has not run at all.
+
+    Nothing else can report this: the watchdog is what notices a dead checker, so its own death is
+    invisible to every other check. This digest is the one thing that speaks unprompted, which makes
+    it the only place the answer can land."""
+    try:
+        u = ("http://logview.lan:8016/api/search?hosts=monitoring&units=watchdog.service"
+             "&since=2026-01-01&limit=1")
+        with urllib.request.urlopen(u, timeout=15) as r:
+            rows = json.loads(r.read().decode()).get("rows") or []
+        if not rows:
+            return None
+        from datetime import datetime
+        ts = datetime.fromisoformat(rows[0]["ts"]).timestamp()
+        return (time.time() - ts) / 3600.0
+    except Exception as exc:
+        errlog.warn(f"incident-digest: could not read the watchdog's last run ({exc})")
+        return None
 
 
 def key(i):
@@ -145,7 +171,10 @@ def main():
     material.sort(key=lambda t: (-int(t[0].get("score") or 0), -int(t[0].get("count") or 0)))
     top = material[:TOP_N]
 
-    if not top and not force:
+    last_posted = state.get("last_posted") or 0
+    overdue = (now - last_posted) / 86400.0 >= LIVENESS_DAYS if last_posted else False
+
+    if not top and not force and not overdue:
         # Deliberate silence. Recorded, so a long quiet streak is visible in the state file rather
         # than being indistinguishable from a broken timer.
         state.update({"last_run": now, "last_posted": state.get("last_posted"),
@@ -160,7 +189,11 @@ def main():
 
     last = state.get("last_posted")
     since = f" (last digest {int((now - last) / 86400)}d ago)" if last else ""
-    lines = [f"🔧 Estate incidents — {len(top)} worth a look{since}"]
+    if not top and overdue:
+        lines = [f"🔧 Estate quiet for {int((now - last_posted) / 86400)} days — nothing material. "
+                 f"This line exists so silence stays meaningful."]
+    else:
+        lines = [f"🔧 Estate incidents — {len(top)} worth a look{since}"]
     for i, why in top:
         detail = str(i.get("last_message") or "").strip().replace("\n", " ")
         lines.append(f"\n• [{i.get('score')}] {key(i)} ({i.get('kind', '?')}) — {why}, "
@@ -174,6 +207,12 @@ def main():
         mine = sum(1 for i in iss if (i.get("owner") or "") == "operator")
         lines.append(f"{len(iss)} open issue(s){f', {mine} waiting on you' if mine else ''}: "
                      + "; ".join((i.get("title") or i.get("id", ""))[:70] for i in iss[:3]))
+    wd = watchdog_age()
+    if wd is not None:
+        lines.append(f"\nwatchdog last ran {wd:.0f} h ago"
+                     + (" — OVERDUE, it should run every 30 min" if wd > 2 else ""))
+    elif wd is None:
+        lines.append("\nwatchdog: no run found in the last 7 days — the checker-checker is DOWN")
     lines.append("\nhttps://mo.lan/incidents/")
     text = "\n".join(lines)[:3900]
 

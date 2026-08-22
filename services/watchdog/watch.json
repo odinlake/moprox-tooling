@@ -1,0 +1,30 @@
+{
+  "_doc": [
+    "Units that MUST keep running, and how long silence from each is tolerable.",
+    "",
+    "Everything the estate built this month is a detector; nothing detected a detector dying. If",
+    "logscan.timer, freshness.timer or incident-digest.timer stopped, the estate would go completely",
+    "silent and look healthy — the queue would be empty, the digest would not post, and both are",
+    "indistinguishable from a good week. The digest even keeps a `quiet_runs` counter for exactly",
+    "this distinction and nothing read it.",
+    "",
+    "max_hours is the longest gap that is NORMAL for that unit, with slack. Set it from the timer's",
+    "own cadence, not from hope: a unit that runs hourly and is silent for three hours is broken; one",
+    "that runs nightly is not late until well past its next window. loop@analyst is the exception -",
+    "its timer is 07..23, so an overnight gap of ~8 h is correct and 12 is the real bar.",
+    "",
+    "This list is deliberately short. A watchdog that names forty units becomes a second incident",
+    "queue nobody reads; these are the ones whose silence would hide everything else."
+  ],
+  "units": [
+    {"host": "monitoring", "unit": "logscan.service",         "max_hours": 3,  "why": "the error-shaped-log scanner; its silence hides every other service's failures"},
+    {"host": "claude-dev", "unit": "freshness.service",       "max_hours": 3,  "why": "the data-lane checker; its silence hides a dead lane"},
+    {"host": "claude-dev", "unit": "incident-digest.service", "max_hours": 30, "why": "the only thing that speaks to the operator unprompted"},
+    {"host": "claude-dev", "unit": "logview-export.service",  "max_hours": 30, "why": "the investigation record's only second copy"},
+    {"host": "claude-dev", "unit": "dashboard-update.service","max_hours": 2,  "why": "runs every 2 min; it is the estate's pulse and the publisher of every feed"},
+    {"host": "claude-dev", "unit": "private-data-sync.service","max_hours": 4, "why": "uncommitted data is data one disk failure from gone"},
+    {"host": "claude-dev", "unit": "ultrahuman-fetch.service","max_hours": 30, "why": "ring data; the vendor window is finite"},
+    {"host": "claude-dev", "unit": "swedbank-fetch.service",  "max_hours": 30, "why": "the bank serves a ROLLING 90-day window - a stopped fetcher loses nights permanently"},
+    {"host": "claude-loop","unit": "loop@analyst.service",    "max_hours": 12, "why": "the standing investigator; timer is 07..23 so an overnight gap is normal"}
+  ]
+}
