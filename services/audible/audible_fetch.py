@@ -72,7 +72,10 @@ def _series(item):
         title = s.get("title") or ""
         seq = s.get("sequence") or ""
         out.append({"title": title, "sequence": seq} if title else None)
-    return [s for s in out if s]
+    # upstream order is a set's order and permutes between fetches; sorting keeps the
+    # daily diff to real changes (25 of 43 change events over 2026-08-07..08-22 were
+    # permutations of the 4 multi-series titles, and 3 whole commits were nothing else)
+    return sorted((s for s in out if s), key=lambda s: (s["title"], s["sequence"]))
 
 
 def _genres(item):
