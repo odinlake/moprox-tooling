@@ -75,8 +75,22 @@ if [ -z "$(git status --porcelain)" ]; then
   exit 0
 fi
 
+# -uall is load-bearing, not a nicety. Plain `git status --porcelain` COLLAPSES a directory whose
+# contents are all untracked into ONE entry ("?? ultrahuman/"), so the size loop below tested
+# `[ -f ultrahuman/ ]` — false — and skipped all 136 files inside it. That is precisely how a new
+# lane arrives, which is the only way a huge file has ever reached this repo: 334 of the 384 files
+# this sweeper has ever added (87%) were hidden behind a collapsed entry and never size-checked.
+# The same collapse made the commit message lie — f0618f32 says "1 file(s)" for 136, a6db02c "5"
+# for 195. One status call, used for all three, so the guard and the message can no longer disagree
+# with what is about to be committed.
+#
+# Path extraction: cut the 3-byte "XY " prefix and any rename arrow rather than awk '{print $NF}',
+# which splits a path containing a space and returns only its tail.
+STATUS=$(git status --porcelain -uall)
+paths() { printf '%s\n' "$STATUS" | sed -e 's/^...//' -e 's/.* -> //' -e 's/^"//' -e 's/"$//'; }
+
 # Refuse to stage anything absurdly large; commit the rest.
-big=$(git status --porcelain | awk '{print $NF}' | while read -r f; do
+big=$(paths | while read -r f; do
         [ -f "$f" ] && [ "$(stat -c%s "$f")" -gt $((MAX_MB * 1024 * 1024)) ] && echo "$f"
       done)
 if [ -n "$big" ]; then
@@ -84,8 +98,8 @@ if [ -n "$big" ]; then
 fi
 
 # Summarise by top-level lane so the message says something ("sync: agents, polar (4 files)").
-n=$(git status --porcelain | wc -l)
-lanes=$(git status --porcelain | awk '{print $NF}' | cut -d/ -f1 | sort -u | paste -sd, | sed 's/,/, /g')
+n=$(printf '%s\n' "$STATUS" | grep -c .)
+lanes=$(paths | cut -d/ -f1 | sort -u | paste -sd, | sed 's/,/, /g')
 
 git add -A || { err "FATAL: git add failed"; exit 1; }
 git commit -q -m "sync: $lanes ($n file(s))" \
