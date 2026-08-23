@@ -80,12 +80,12 @@
     "notnull": true
    },
    "predicate": {
-    "field": "hr_span_h",
-    "at_least": 12
+    "field": "hr_points",
+    "at_least": 40
    },
    "min_fraction": 0.6,
    "min_records": 4,
-   "note": "Every day was PRESENT with a sleep summary while the HR series behind it was truncated to ~4 h. A row count cannot see that; this can. LIMIT: hr_span_h is first-to-last, so this lane tests truncation ONLY and is blind to interior holes \u2014 on 2026-08-16 it read 9/10 PASS while 9 of those same 10 days had hr_cov_5m 0.29-0.41 and a median single hole of 786 min. The interior view is hr_cov_5m / hr_gap_max_min (backfilled over the whole archive). No lane guards them yet on purpose: every coverage floor that would have caught the mid-June onset also fires on every day since, and a check that can never pass is a reminder, not a check (see 1ca29b3)."
+   "note": "Does a night carry enough HR samples to be worth reading? The ring is worn AT NIGHT ONLY -- deliberate, confirmed by the operator 2026-08-23 (\"I rarely wear it during day except if I forget to take it off\") -- so any 24 h-shaped test measures his habits, not the data.\n\nThat is what the previous predicate did. It required hr_span_h >= 12, and hr_span_h is FIRST-TO-LAST: a night-only wearer scores ~23.9 h when he puts the ring on before midnight (one point at 23:5x, one at 07:00, a 12.8 h hole between) and ~7 h when he puts it on after. So the lane was reporting what time he went to bed. It fired on 2026-08-21 at 5/9 against a 0.6 floor while every night in the window had a complete sleep summary and a normal ~110-point HR series -- an alarm about nothing, of the kind you learn to ignore. See moprox-memory/ultrahuman-span-is-not-coverage.\n\nhr_points >= 40 tests DENSITY instead, which is what 'usable' means here, and it separates cleanly. Measured over the whole 156-row archive on 2026-08-23:\n  Apr 0.87 | May 0.87 | Jun 0.43 | Jul 0.81 | Aug 1.00   (floor 0.6)\nJune is the real coverage collapse (median 19 hr_points, 16 nights with no sleep at all) and it fails by a wide margin; every healthy month clears the floor with room; the current 10-day window is 10/10. The old predicate scored Apr 0.80 / May 0.71 / Jun 0.27 / Jul 0.74 / Aug 0.91 -- it caught June too, but it was catching bedtime everywhere else.\n\n40 rather than 60: 60 also works (Aug 0.96, Jun 0.37) but costs a night like 2026-08-17 (67 points, 8.6 min max gap -- a short but perfectly clean night) for nothing. `where` is unchanged and is inert: hr_span_h is non-null on all 19 zero-HR rows, so nothing is filtered out either way; it stays as documentation of intent. Row PRESENCE is the sibling `ultrahuman` lane's job, not this one's.\n\nSTILL NOT GUARDED, on purpose: hr_cov_5m and hr_gap_max_min, the interior view. Both are backfilled over the whole archive, and both are dominated by the deliberate daytime hole (median longest gap 12.8 h since July, ~2 h in April-May), so any floor over them measures wear habit again. If daytime wear ever becomes the norm, they are the right fields -- not this one."
   }
  ]
 }
