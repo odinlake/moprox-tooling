@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/lib"))
 import errlog
 from run import run_agent
+import strap_health              # is the chest-strap battery going? (see its docstring)
 import tg
 import convo
 from analysis import Athlete, analyse_safe
@@ -103,6 +104,18 @@ def post_session(ex, hr):
             tg.send("Got %.0f min %s session. Pinging coach…" % (dur_min, sport), agent="polar")
     except Exception as e:
         print("polar: receipt failed (continuing to coach): %s" % e)
+    # Strap health before the read: a dropout second is not physiology, and coach must not fit a
+    # curve through it or explain it as fatigue. See services/training/strap_health.py for what the
+    # trace can and cannot show (it detects the failure; it does not promise to predict it).
+    strap_line = ""
+    try:
+        _srec, _slevel, _smsg = strap_health.record(ex.get("start_time") or "", hr)
+        if _slevel != "ok":
+            strap_line = ("\n\nSTRAP HEALTH (%s): %s\nSay this to Mikael IN THE POST — one clear "
+                          "line, at the top if the level is 'replace', and do NOT read the affected "
+                          "seconds as physiology.\n" % (_slevel.upper(), _smsg))
+    except Exception as e:
+        errlog.err("polar_fetch: strap health check", e)     # never blocks the session read
     res = analyse_safe(clean, dur_min, ATH, ex.get("sport") or "")
     cls = res["classification"]; m5 = res.get("five_min_max")
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
@@ -120,8 +133,8 @@ def post_session(ex, hr):
         "written into the caption. That single chart-with-caption post IS the entire reply — no "
         "separate chart, no separate text, no preamble or follow-up. Reuse and maintain your own "
         "charting library (see your CLAUDE.md), not throwaway /tmp scripts. Apply anything relevant "
-        "from the recent conversation below.\n\nRecent conversation:\n%s"
-        % (json.dumps(summary), convo.transcript(16)))
+        "from the recent conversation below.%s\n\nRecent conversation:\n%s"
+        % (json.dumps(summary), strap_line, convo.transcript(16)))
     run_agent("coach", prompt, timeout=600)   # coach sends its own single post; nothing else is sent
     return cls.session_type
 
