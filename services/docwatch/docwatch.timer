@@ -1,0 +1,13 @@
+# Ten minutes: the operator drops a document and wants to be told what it was, not to wait an hour.
+# Cheap when idle — a run with no changes is one changes.list call and exits.
+[Unit]
+Description=docwatch — poll Drive root for newly dropped documents
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=90
+Persistent=true
+
+[Install]
+WantedBy=timers.target

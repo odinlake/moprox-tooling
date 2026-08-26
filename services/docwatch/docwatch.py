@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""docwatch — notice a document dropped in Drive ROOT, index it, file a renamed copy, say what it is.
+
+The operator's habit is to drop scans and downloads straight into Drive root and deal with them
+later; the 2026-07 reorg then sorted 3k of them in one batch (~/docindex). This is the incremental
+half of that job: the batch pass is what happens once, this is what happens from now on.
+
+WHAT IT DOES, per new file parented in root:
+  1. extracts text (reusing ~/docindex/pipeline.py — same extractors, same download cache)
+  2. one `claude -p` call returns BOTH the index fields (summary/tags/date/category/entities) and
+     the filing decision (proposed name + destination folder)
+  3. copies the file, under its proposed name, into that folder
+  4. upserts it into docindex.db so mo.lan/docs finds it
+  5. Telegrams a digest of what was filed and what it turned out to be
+
+WHAT IT DOES NOT DO — and cannot, today: rename the ORIGINAL in root. That needs the full `drive`
+scope; the service account is authorised for `drive.readonly` + `drive.file` only, and `drive.file`
+covers only files the app itself created. Measured 2026-08-26: requesting `drive` fails
+`unauthorized_client`. So root keeps the file under its original name and stays the operator's
+inbox; the renamed artefact is the copy. If the scope is ever granted, RENAME_ORIGINAL below turns
+the in-place rename on and nothing else changes. Do that AFTER the pending SA key rotation
+(moprox-memory/sa-key-rotation-pending) rather than widening an exposed key.
+
+Drive's changes feed is the trigger — a saved startPageToken, polled. Not a webhook: the estate has
+no inbound path from Google, which is the same reason private-web polls GitHub.
+"""
+import json, os, re, subprocess, sys, time
+from pathlib import Path
+
+sys.path.insert(0, os.path.expanduser("~/docindex"))
+import pipeline                                   # extract/download/con — one source of truth
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import errlog
+
+KEYF = "/home/mikael/.config/claude-dev/google-sa.json"
+SUB = "mikael@odinlake.net"
+# drive.file is what lets us CREATE the copy; readonly is what lets us read the source. Full `drive`
+# is not authorised for this client — see the module docstring.
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly",
+          "https://www.googleapis.com/auth/drive.file"]
+STATE = Path(os.environ.get("DOCWATCH_STATE", Path.home() / ".local/state/docwatch"))
+LOG = STATE / "filed.jsonl"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+RENAME_ORIGINAL = os.environ.get("DOCWATCH_RENAME_ORIGINAL", "") == "1"
+MAXTXT = 8000
+# A run that suddenly wants to file hundreds of files is a signal that something is wrong (a restore,
+# a sync loop, a bad page token), not a busy day. Stop and say so rather than reorganising the drive.
+SANE_MAX = int(os.environ.get("DOCWATCH_MAX_PER_RUN", "25"))
+
+_svc = None
+
+
+def drive():
+    global _svc
+    if _svc is None:
+        c = service_account.Credentials.from_service_account_file(KEYF, scopes=SCOPES, subject=SUB)
+        _svc = build("drive", "v3", credentials=c, cache_discovery=False)
+    return _svc
+
+
+def state_load():
+    STATE.mkdir(parents=True, exist_ok=True)
+    p = STATE / "state.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def state_save(s):
+    (STATE / "state.json").write_text(json.dumps(s, indent=1))
+
+
+def bucket_of(mime, name):
+    """Which extractor pipeline.extract() should use. Mirrors the buckets the batch pass assigned."""
+    if mime == "application/pdf":
+        return "pdf"
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("audio/"):
+        return "audio"
+    if mime.startswith("application/vnd.google-apps"):
+        return "gdoc"
+    if mime.startswith("text/") or mime in ("application/json", "application/xml"):
+        return "text"
+    if re.search(r"\.(docx?|xlsx?|xlsm|pptx?|odt|ods|odp)$", name or "", re.I):
+        return "office"
+    return "other"
+
+
+def taxonomy(root_id):
+    """Existing folders, two levels under root -> {"People/Mikael": id}. Read fresh each run: the
+    operator adds folders by hand and a stale cache would silently file into the wrong tree."""
+    out = {}
+    tops = drive().files().list(
+        q=f"'{root_id}' in parents and mimeType='{FOLDER_MIME}' and trashed=false",
+        fields="files(id,name)", pageSize=100).execute().get("files", [])
+    for t in tops:
+        out[t["name"]] = t["id"]
+        subs = drive().files().list(
+            q=f"'{t['id']}' in parents and mimeType='{FOLDER_MIME}' and trashed=false",
+            fields="files(id,name)", pageSize=200).execute().get("files", [])
+        for s in subs:
+            out[f"{t['name']}/{s['name']}"] = s["id"]
+    return out
+
+
+# The naming convention is NOT re-derived here — it is the one from ~/docindex/rename2.py, which was
+# tuned against operator corrections over 3k files. Changing it here would silently fork the archive
+# into two conventions, so it is quoted rather than paraphrased.
+RULES = """You normalise personal-archive filenames to the convention:
+  <date>_<subject>_<doctype-and-descriptors>.<ext>
+- date: the DOCUMENT'S OWN date (issue date for ID docs, written date for letters, statement period,
+  etc). Prefer the content's stated date over the filename. Granularity: YYYY-MM is enough for ID
+  documents/certificates; use YYYY-MM-DD when the exact day is integral (dated letters, receipts);
+  YYYY if that's all that is known. OMIT the field entirely if no date is known — NEVER invent one.
+- subject: the person (mikael/rie/akiko/yuko), institution (hsbc/cassini/hmrc/skatteverket...), or
+  property the record belongs to; lowercase.
+- doctype+descriptors: what the document IS, then qualifiers. PRESERVE every meaning-bearing token
+  from the original name (photo, cover-letter, translation, scale, front/back, page1, lowres, draft,
+  application, form, receipt...). Dropping such a token CHANGES THE MEANING and is the worst error:
+  a "passport photo" is not a "passport". You may rephrase/normalise wording and drop true
+  redundancies, but never drop distinguishing content. All lowercase; hyphens inside fields;
+  underscores between the three fields; keep the original extension; ASCII only."""
+
+
+def decide(name, mime, context, is_file, folders):
+    """One claude -p call: index fields AND filing decision. One call rather than three because they
+    read the same document and disagreeing about what it is would be worse than either answer."""
+    listing = "\n".join("  " + f for f in sorted(folders))
+    body = (f"[document text follows]\n{context}" if not is_file
+            else f"[the document is at {context} — Read it, it is a scan or image]")
+    prompt = f"""{RULES}
+
+You are also cataloguing this document for a personal archive index.
+
+Original filename: {name}
+MIME: {mime}
+
+Choose a destination folder from EXACTLY this list — never invent one:
+{listing}
+If nothing fits, or you are not confident what the document is, use "00 Inbox/_needs-review".
+Prefer the most specific folder that clearly fits. A document about one person goes under
+People/<Name>; something concerning the family or the children jointly goes under Family/...;
+anything tied to an address goes under Properties/<address>.
+
+{body}
+
+Reply with ONLY minified JSON, no prose or fences:
+{{"summary":"<=240 chars, factual, include key names/dates/numbers/amounts",
+ "tags":["5-12 lowercase tags"],
+ "entities":["people/orgs named"],
+ "doc_date":"YYYY-MM-DD or YYYY-MM or YYYY or empty",
+ "category":"{pipeline.CATS}",
+ "proposed":"<the convention filename>",
+ "folder":"<one path from the list above>",
+ "confidence":"high|medium|low"}}"""
+    for attempt in range(3):
+        try:
+            r = subprocess.run(["claude", "-p", "--dangerously-skip-permissions", prompt],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
+            out = r.stdout or ""
+            i, j = out.find("{"), out.rfind("}")
+            if i >= 0 and j > i:
+                return json.loads(out[i:j + 1])
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+        time.sleep(5 * (attempt + 1))
+    return None
+
+
+def upsert(f, d, copy_id, dest):
+    """Put it in docindex.db so mo.lan/docs can find it. Same columns the batch pass writes; the
+    embedding and FTS row are left to the next pipeline run rather than duplicated here."""
+    c = pipeline.con()
+    c.execute("""INSERT OR REPLACE INTO files
+                 (key,drive_id,path,name,mime,bucket,summary,tags,entities,doc_date,category,
+                  extracted_text,sampled,status,proposed,error,updated)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'enriched',?,'',?)""",
+              (f["key"], f["drive_id"], dest, d["proposed"], f["mime"], f["bucket"],
+               d.get("summary", ""), json.dumps(d.get("tags", [])), json.dumps(d.get("entities", [])),
+               d.get("doc_date", ""), d.get("category", "other"), (f.get("text") or "")[:MAXTXT], 0,
+               f"{dest}/{d['proposed']}", time.strftime("%Y-%m-%dT%H:%M:%S")))
+    c.commit()
+    c.close()
+
+
+def notify(filed, skipped):
+    if not filed and not skipped:
+        return
+    lines = [f"**{len(filed)} document(s) filed from Drive root**"]
+    for r in filed:
+        flag = "" if r["confidence"] == "high" else f" _({r['confidence']} confidence)_"
+        lines.append(f"\n**{r['proposed']}**{flag}\n`{r['old_name']}` → {r['folder']}\n{r['summary']}")
+    for r in skipped:
+        lines.append(f"\n⚠️ **{r['old_name']}** — not filed: {r['why']}")
+    lines.append("\n_The original is untouched in root — the renamed copy is what was filed._")
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
+        import tg
+        tg.send("\n".join(lines), agent="docwatch")
+    except BaseException as e:                      # tg.creds() raises SystemExit without telegram.env
+        errlog.err(f"docwatch: notify failed: {type(e).__name__}: {e}")
+
+
+def main():
+    st = state_load()
+    root_id = drive().files().get(fileId="root", fields="id").execute()["id"]
+
+    if not st.get("page_token"):
+        # First run establishes the baseline and files nothing: everything already in root predates
+        # the watcher and is the batch pass's business, not ours.
+        st["page_token"] = drive().changes().getStartPageToken().execute()["startPageToken"]
+        st["root_id"] = root_id
+        state_save(st)
+        print(f"docwatch: baseline set at page token {st['page_token']}; nothing filed on first run")
+        return 0
+
+    seen = set()
+    if LOG.exists():
+        for line in LOG.read_text().splitlines():
+            try:
+                seen.add(json.loads(line)["drive_id"])
+            except Exception:
+                pass
+
+    new, token = [], st["page_token"]
+    while token:
+        resp = drive().changes().list(
+            pageToken=token, pageSize=200, restrictToMyDrive=True,
+            fields="nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,trashed))"
+        ).execute()
+        for ch in resp.get("changes", []):
+            f = ch.get("file") or {}
+            if ch.get("removed") or f.get("trashed") or f.get("mimeType") == FOLDER_MIME:
+                continue
+            if root_id not in (f.get("parents") or []):
+                continue                            # only root — the operator's drop spot
+            if f["id"] in seen:
+                continue
+            new.append(f)
+        token = resp.get("nextPageToken")
+        if not token:
+            st["page_token"] = resp.get("newStartPageToken", st["page_token"])
+
+    new = {f["id"]: f for f in new}.values()        # a file edited twice is still one file
+    if not new:
+        state_save(st)
+        print("docwatch: nothing new in root")
+        return 0
+    if len(new) > SANE_MAX:
+        state_save(st)
+        errlog.err(f"docwatch: {len(new)} new files in root exceeds the {SANE_MAX} sane-run cap — "
+                   f"filing NOTHING. This looks like a restore or a sync loop, not a normal drop. "
+                   f"Raise DOCWATCH_MAX_PER_RUN deliberately if it really is a bulk import.")
+        return 0
+
+    folders = taxonomy(root_id)
+    filed, skipped = [], []
+    for f in new:
+        fid, name, mime = f["id"], f["name"], f["mimeType"]
+        rec = {"key": f"docwatch:{fid}", "drive_id": fid, "name": name, "mime": mime,
+               "bucket": bucket_of(mime, name)}
+        try:
+            context, is_file, _ = pipeline.extract(rec)
+        except Exception as e:
+            skipped.append({"old_name": name, "why": f"could not extract text ({type(e).__name__})"})
+            continue
+        rec["text"] = "" if is_file else context
+        d = decide(name, mime, context, is_file, folders)
+        if not d or not d.get("proposed") or d.get("folder") not in folders:
+            skipped.append({"old_name": name, "why": "no usable filing decision returned"})
+            continue
+        dest = d["folder"]
+        try:
+            cp = drive().files().copy(fileId=fid,
+                                      body={"name": d["proposed"], "parents": [folders[dest]]},
+                                      fields="id").execute()
+            if RENAME_ORIGINAL:                     # inert until the `drive` scope is granted
+                drive().files().update(fileId=fid, body={"name": d["proposed"]}).execute()
+        except HttpError as e:
+            skipped.append({"old_name": name, "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
+            continue
+        upsert(rec, d, cp["id"], dest)
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "drive_id": fid, "copy_id": cp["id"],
+               "old_name": name, "proposed": d["proposed"], "folder": dest,
+               "summary": d.get("summary", ""), "confidence": d.get("confidence", "medium")}
+        with open(LOG, "a") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        filed.append(row)
+
+    state_save(st)
+    notify(filed, skipped)
+    print(f"docwatch: filed {len(filed)}, skipped {len(skipped)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

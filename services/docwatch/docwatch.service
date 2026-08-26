@@ -1,0 +1,21 @@
+# Notice a document dropped in Drive root, index it, file a renamed copy, report what it is.
+# Source of truth: moprox-tooling/services/docwatch. Oneshot, driven by docwatch.timer.
+[Unit]
+Description=docwatch — file and index documents dropped in Drive root
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/docwatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+WorkingDirectory=/home/mikael
+# The docindex venv, because this imports ~/docindex/pipeline.py for its extractors and that is
+# where google-api-python-client, pypdf and friends live. Using the system python would mean a
+# second copy of those deps drifting out of step with the batch pass.
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/docwatch/docwatch.py
+# Each file costs a claude -p call plus a Drive copy; a big drop is minutes, not seconds.
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target
