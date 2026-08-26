@@ -13,13 +13,14 @@ WHAT IT DOES, per new file parented in root:
   4. upserts it into docindex.db so mo.lan/docs finds it
   5. Telegrams a digest of what was filed and what it turned out to be
 
-WHAT IT DOES NOT DO — and cannot, today: rename the ORIGINAL in root. That needs the full `drive`
-scope; the service account is authorised for `drive.readonly` + `drive.file` only, and `drive.file`
-covers only files the app itself created. Measured 2026-08-26: requesting `drive` fails
-`unauthorized_client`. So root keeps the file under its original name and stays the operator's
-inbox; the renamed artefact is the copy. If the scope is ever granted, RENAME_ORIGINAL below turns
-the in-place rename on and nothing else changes. Do that AFTER the pending SA key rotation
-(moprox-memory/sa-key-rotation-pending) rather than widening an exposed key.
+THE ORIGINAL IS LEFT ALONE, BY DESIGN. The operator's workflow is: read the digest, check the filed
+copy, delete the original from root himself. So the copy is the renamed artefact and root stays his
+inbox until he clears it — which is also why the digest links to both. Deleting an original after
+filing is safe: dedup is on the source drive_id in filed.jsonl, which outlives the file.
+
+(Incidentally the service account could not rename it anyway — measured 2026-08-26, the full `drive`
+scope returns `unauthorized_client` and `drive.file` covers only files the app created. Noted so
+nobody re-tests it, NOT as a gap to close: nothing here wants that scope.)
 
 Drive's changes feed is the trigger — a saved startPageToken, polled. Not a webhook: the estate has
 no inbound path from Google, which is the same reason private-web polls GitHub.
@@ -45,7 +46,6 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly",
 STATE = Path(os.environ.get("DOCWATCH_STATE", Path.home() / ".local/state/docwatch"))
 LOG = STATE / "filed.jsonl"
 FOLDER_MIME = "application/vnd.google-apps.folder"
-RENAME_ORIGINAL = os.environ.get("DOCWATCH_RENAME_ORIGINAL", "") == "1"
 MAXTXT = 8000
 # A run that suddenly wants to file hundreds of files is a signal that something is wrong (a restore,
 # a sync loop, a bad page token), not a busy day. Stop and say so rather than reorganising the drive.
@@ -194,10 +194,15 @@ def notify(filed, skipped):
     lines = [f"**{len(filed)} document(s) filed from Drive root**"]
     for r in filed:
         flag = "" if r["confidence"] == "high" else f" _({r['confidence']} confidence)_"
-        lines.append(f"\n**{r['proposed']}**{flag}\n`{r['old_name']}` → {r['folder']}\n{r['summary']}")
+        # Both links on purpose: the operator's workflow is to check the filed copy and then delete
+        # the original himself, so the message has to make both reachable in one tap each.
+        lines.append(
+            f"\n**{r['proposed']}**{flag}\n{r['folder']}\n{r['summary']}"
+            f"\n[filed copy](https://drive.google.com/file/d/{r['copy_id']}/view)"
+            f" · [original: {r['old_name']}](https://drive.google.com/file/d/{r['drive_id']}/view)")
     for r in skipped:
         lines.append(f"\n⚠️ **{r['old_name']}** — not filed: {r['why']}")
-    lines.append("\n_The original is untouched in root — the renamed copy is what was filed._")
+    lines.append("\n_Originals left in root for you to delete once you've checked the copy._")
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
         import tg
@@ -279,8 +284,6 @@ def main():
             cp = drive().files().copy(fileId=fid,
                                       body={"name": d["proposed"], "parents": [folders[dest]]},
                                       fields="id").execute()
-            if RENAME_ORIGINAL:                     # inert until the `drive` scope is granted
-                drive().files().update(fileId=fid, body={"name": d["proposed"]}).execute()
         except HttpError as e:
             skipped.append({"old_name": name, "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
             continue

@@ -42,16 +42,15 @@ outside that list can be chosen, and `00 Inbox/_needs-review` is the escape hatc
 
 ## What it deliberately does NOT do
 
-**It does not rename the original in root.** Not a design preference — the service account cannot.
-Measured 2026-08-26: the full `drive` scope returns `unauthorized_client`; the client is authorised
-for `drive.readonly` + `drive.file`, and `drive.file` only covers files the app itself created. So
-the original keeps its name and root stays the inbox; the renamed artefact is the copy, exactly as
-in the batch reorg.
+**It does not touch the original.** That is the workflow, not a shortfall: you read the digest,
+check the filed copy, and delete the original from root yourself — so the digest links to *both* the
+copy and the original, one tap each. Deleting an original after filing is safe, because dedup keys
+on the source `drive_id` recorded in `filed.jsonl`, which outlives the file.
 
-To turn the in-place rename on later: grant the `drive` scope to the delegation client in the
-Workspace admin console, then set `DOCWATCH_RENAME_ORIGINAL=1`. The code path already exists and is
-inert. **Do that after the SA key rotation** (moprox-memory/`sa-key-rotation-pending`) — widening
-the scope of a key that is known to be exposed is the wrong order.
+(For the record, so nobody re-tests it: the service account could not rename the original in any
+case — measured 2026-08-26, the full `drive` scope returns `unauthorized_client`, and `drive.file`
+covers only files the app itself created. Noted as a fact about the credential, **not** as a gap to
+close. Nothing here wants that scope.)
 
 **It does not file more than 25 files in one run.** A run that suddenly wants to reorganise hundreds
 of files is a restore, a sync loop, or a bad page token — not a busy day. Over the cap it files
