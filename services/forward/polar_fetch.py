@@ -66,16 +66,76 @@ def save_seen(s):
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     SEEN.write_text(json.dumps(sorted(s)))
 
+# AccessLink sample_type -> a name we can read two years from now. Only 0 (HR) has ever appeared
+# here, because the athlete records with a chest strap and no other sensors — but a bike with a
+# power meter or cadence sensor would start filling the rest in, and a stored file that names them
+# is one that needs no migration when it does. Unknown types are kept under their raw integer
+# rather than dropped: capture first, understand later.
+SAMPLE_NAMES = {"0": "hr", "1": "cadence", "2": "altitude", "3": "power", "4": "speed",
+                "5": "distance", "6": "temperature", "7": "moving_type", "8": "rr"}
+
+def samples_by_name(ex):
+    """Every sample series the exercise carries, keyed by name. Recording rate is kept alongside,
+    because a 5 s series and a 1 s series are not interchangeable and the difference is invisible
+    once the numbers are in a list."""
+    out = {}
+    for smp in ex.get("samples") or []:
+        st = str(smp.get("sample_type"))
+        name = SAMPLE_NAMES.get(st, "type_%s" % st)
+        vals = [None if (v == "" or v == "null") else float(v)
+                for v in (smp.get("data") or "").split(",")] if smp.get("data") else []
+        out.setdefault(name, []).append({"rate_s": int(smp.get("recording_rate") or 1),
+                                         "n": len(vals), "data": vals})
+    return out
+
 def store_raw(ex, hr):
+    """Store EVERY exercise, every sport, whole. `hr` stays a top-level key for the readers that
+    already expect it; `samples` is the lossless view. Operator instruction 2026-08-27: capture
+    everything now so the analysis can be revised backwards later."""
     INCOMING.mkdir(parents=True, exist_ok=True)
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
     (INCOMING / ("exercise_%s.json" % fid)).write_text(
-        json.dumps({"summary": ex, "hr": hr}, separators=(",", ":")))
+        json.dumps({"summary": ex, "hr": hr, "samples": samples_by_name(ex),
+                    "stored_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                   separators=(",", ":")))
 
 def upload_age_h(ex):
     up = (ex.get("upload_time") or "")[:19]            # e.g. 2026-06-24T11:40:40 (Z/UTC)
     try: return (time.time() - calendar.timegm(time.strptime(up, "%Y-%m-%dT%H:%M:%S"))) / 3600.0
     except Exception: return 0.0
+
+# What kind of session is this? Matched on the NAME, not Polar's numeric sport id: the ids for
+# cycling are unverified here (no ride has ever arrived) and guessing one would silently mis-route
+# the first real one. The names come straight from AccessLink's `sport` / `detailed_sport_info`.
+RUN_WORDS  = ("RUN", "JOG")
+RIDE_WORDS = ("CYCLING", "BIKING", "BIKE", "SPINNING", "HANDCYCLING")
+
+def sport_kind(ex):
+    """'run' | 'ride' | 'other' — 'other' is ingested too, never dropped."""
+    label = ("%s %s" % (ex.get("sport") or "", ex.get("detailed_sport_info") or "")).upper()
+    if any(w in label for w in RUN_WORDS):  return "run"
+    if any(w in label for w in RIDE_WORDS): return "ride"
+    return "other"
+
+# What coach must be told when the session is not a run. athlete.json's LT1 155 / LT2 180 / max 202
+# are RUNNING numbers; cycling HR runs roughly 5-10 bpm lower for the same relative effort, so
+# applying them to a ride under-reads every intensity. We do not have cycling thresholds yet and are
+# not inventing them — coach is told to report what is measurable and to name what it would need.
+NON_RUN_CAVEAT = """
+
+THIS IS NOT A RUN — sport is %s.
+- athlete.json (LT1 155, LT2 180, max 202) is RUNNING physiology. Cycling HR runs ~5-10 bpm LOWER at
+  the same relative effort, so those thresholds UNDER-read a ride. Do NOT apply them as zones and do
+  NOT report a running session type (easy/tempo/vo2max) for this session.
+- The computed classification above is the RUN classifier's output and is included only so you can
+  see what it said. Treat it as unreliable for this sport.
+- Report what IS measurable and sport-neutral: duration, HR range, 5-min max, drift, recovery shape,
+  and comparison with this athlete's OTHER sessions of the SAME sport if any exist.
+- Say plainly what you would need to read rides properly (a cycling threshold set, and power/cadence
+  which Polar only receives if the bike is paired as a sensor). Do not guess it into existence.
+- No cycling baseline exists yet, so early rides are a baseline being built, not a performance to
+  judge. Say so rather than filling the gap with running-shaped conclusions.
+"""
 
 def post_session(ex, hr):
     """A new workout came in. Coach OWNS the post: it builds its OWN light-mode chart and sends ONE
@@ -119,8 +179,14 @@ def post_session(ex, hr):
     res = analyse_safe(clean, dur_min, ATH, ex.get("sport") or "")
     cls = res["classification"]; m5 = res.get("five_min_max")
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
+    kind = sport_kind(ex)
     summary = {"exercise_id": ex.get("id"), "raw_file": str(INCOMING / ("exercise_%s.json" % fid)),
-               "cat": cls.session_type, "date": (ex.get("start_time") or "")[:19],
+               "sport": ex.get("sport") or "", "sport_kind": kind,
+               # For a non-run the run classifier's label is not a finding, so it is reported as
+               # what it is rather than promoted into the `cat` field readers trust.
+               "cat": cls.session_type if kind == "run" else kind,
+               "run_classifier_said": cls.session_type if kind != "run" else None,
+               "date": (ex.get("start_time") or "")[:19],
                "dur_min": round(dur_min, 1), "n_work_bouts": cls.n_work_bouts,
                "five_min_max": round(float(m5)) if m5 == m5 else None,
                "above_lt2": bool(cls.above_lt2), "clamp": bool(cls.hr_clamp_suspected)}
@@ -133,10 +199,12 @@ def post_session(ex, hr):
         "written into the caption. That single chart-with-caption post IS the entire reply — no "
         "separate chart, no separate text, no preamble or follow-up. Reuse and maintain your own "
         "charting library (see your CLAUDE.md), not throwaway /tmp scripts. Apply anything relevant "
-        "from the recent conversation below.%s\n\nRecent conversation:\n%s"
-        % (json.dumps(summary), strap_line, convo.transcript(16)))
+        "from the recent conversation below.%s%s\n\nRecent conversation:\n%s"
+        % (json.dumps(summary), strap_line,
+           "" if kind == "run" else NON_RUN_CAVEAT % (ex.get("sport") or "unknown"),
+           convo.transcript(16)))
     run_agent("coach", prompt, timeout=600)   # coach sends its own single post; nothing else is sent
-    return cls.session_type
+    return cls.session_type if kind == "run" else kind
 
 def main():
     tok = env()["POLAR_ACCESS_TOKEN"]

@@ -23,6 +23,19 @@ _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 RUN_SPORTS = {1, 17, 83}
+# Matched on NAME, not Polar's numeric sport id: no ride has ever arrived here, so the cycling ids
+# are unverified and guessing one would silently mis-route the first real session. Anything matching
+# neither is still INGESTED (cat "other") and its sport is logged, so the first unrecognised session
+# tells us what it was instead of vanishing — operator instruction 2026-08-27, capture everything
+# now and revise the analysis backwards later.
+RIDE_WORDS = ("CYCLING", "BIKING", "BIKE", "SPINNING", "HANDCYCLING")
+RUN_WORDS = ("RUN", "JOG")
+
+def sport_kind(label):
+    u = str(label or "").upper()
+    if any(w in u for w in RUN_WORDS):  return "run"
+    if any(w in u for w in RIDE_WORDS): return "ride"
+    return "other"
 ATHLETE_JSON = os.path.expanduser("~/projects/private-data/agents/coach/athlete.json")
 ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls back to defaults)
 TRACE_POINTS = 120               # classified sessions (detail chart; the rich chart is the Telegram one)
@@ -153,6 +166,35 @@ def attach_speeds(sessions):
             s["spd"], s["spd_src"] = prior[s["cat"]], "est"
 
 
+def make_generic_session(hr, sport, date, sid, sess_id, cat, source="polar"):
+    """A non-running session as a public-safe record, WITHOUT the run classifier.
+
+    Deliberately does not call analyse_safe(): its session types (easy/tempo/vo2max) are cut against
+    running LT1/LT2, and cycling HR sits ~5-10 bpm lower at the same relative effort, so a genuine
+    bike VO2max set would be labelled "tempo" and the dashboard would carry a confident wrong answer.
+    What is kept is sport-neutral and re-derivable: the trace and the plain HR statistics. When we
+    know what these sessions actually look like, they can be reclassified from the stored raw."""
+    hr = [h for h in (_hr_val(v) for v in hr) if h is not None and 30 < h < 220]
+    if len(hr) < 60: return None
+    arr = np.clip(np.asarray(hr, float), 40, 210)
+    # 5-min max = highest 5-minute rolling MEAN, same definition the run path uses, computed here
+    # directly because we are not going through the engine.
+    max5 = None
+    if len(arr) >= 300:
+        c = np.cumsum(np.insert(arr, 0, 0.0))
+        max5 = round(float(np.max((c[300:] - c[:-300]) / 300.0)))
+    floor = window_stat(hr, FLOOR_WIN, np.median)
+    settled = window_stat(hr, SETTLED_WIN, np.mean)
+    return dict(
+        id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
+        dur_min=round(len(arr) / 60.0, 1), hr_avg=round(float(np.mean(arr))),
+        hr_max=round(float(np.max(arr))), max5=max5, med10=_round_or_none(med10(hr)),
+        floor=floor, settled=settled,
+        climb=(round(settled - floor, 1) if floor is not None and settled is not None else None),
+        nint=0, above_lt2=False, clamp=False, reps=[],
+        trace=downsample(arr, TRACE_POINTS), trace_step_s=round(len(arr) / min(len(arr), TRACE_POINTS)))
+
+
 def make_session(hr, sport, date, sid, sess_id, source="polar"):
     """Classify one running session's per-second HR into the public-safe dashboard record, or None."""
     if len(hr) < 60: return None
@@ -209,9 +251,16 @@ def from_export(raw_dir):
             except Exception as _e:
                 errlog.skip("build.py: sport id", _e)
                 continue
-            if sid not in RUN_SPORTS: continue
-            s = make_session(hr_series(d), d.get("name") or "", d.get("startTime", ""), sid,
-                             (d.get("identifier") or {}).get("id", ""))
+            label = "%s %s" % (d.get("name") or "", (d.get("sport") or {}).get("name") or "")
+            kind = "run" if sid in RUN_SPORTS else sport_kind(label)
+            args = (hr_series(d), label, d.get("startTime", ""), sid,
+                    (d.get("identifier") or {}).get("id", ""))
+            if kind == "run":
+                s = make_session(*args)
+            else:
+                if kind == "other":
+                    print("build: export session sport id %s (%r) ingested as 'other'" % (sid, label.strip()))
+                s = make_generic_session(*args, cat=kind)
             if s: out.append(s)
     return out
 
@@ -223,11 +272,18 @@ def from_incoming(in_dir):
         except Exception as _e:
             errlog.skip("build.py: exercise json", _e)
             continue
-        ex = d.get("summary") or {}; sport = str(ex.get("sport") or "")
-        if "RUN" not in sport.upper() and "JOG" not in sport.upper(): continue   # runs only on the dash
+        ex = d.get("summary") or {}
+        sport = "%s %s" % (ex.get("sport") or "", ex.get("detailed_sport_info") or "")
+        kind = sport_kind(sport)
         date = ex.get("start_time") or ex.get("start-time") or ""   # /v3/exercises vs transaction shape
-        s = make_session([h for h in (d.get("hr") or []) if 30 < h < 220], sport,
-                         date, 1, ex.get("id", ""))
+        hr = [h for h in (d.get("hr") or []) if 30 < h < 220]
+        if kind == "run":
+            s = make_session(hr, sport, date, 1, ex.get("id", ""))
+        else:
+            if kind == "other":
+                # Not a silent drop: name it, so the first unfamiliar sport is a fact we can act on.
+                print("build: ingesting non-run session as 'other' (sport=%r)" % sport.strip())
+            s = make_generic_session(hr, sport, date, 1, ex.get("id", ""), kind)
         if s: out.append(s)
     return out
 
