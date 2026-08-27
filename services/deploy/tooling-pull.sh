@@ -75,14 +75,41 @@ if [ "$alien" -gt 0 ]; then
 fi
 
 before=$(git rev-parse --short HEAD)
+# Retry, bounded, before calling it a failure. Once the self-repair above (b38287b) closed the
+# root-pull class, the ENTIRE residual failure surface of this unit was transient network: measured
+# 2026-08-18T14:00Z..2026-08-27T14:00Z on claude-dev's journal, 2596 clean runs and exactly 2
+# failures, "Connection closed by 20.26.156.215 port 22" (08-21T14:05:52Z) and "Connection to
+# github.com closed by remote host" (08-25T10:25:27Z), 0 poisonings. Both self-healed on the very
+# next timer run 5 min later. Each nonetheless exited 1, which is a priority-3 line plus a
+# `unit-failed` incident that heads the analyst's work queue for days — a queue with no recovery
+# state, so the 2596 clean runs around them are invisible to it.
+#
+# Retry UNCONDITIONALLY rather than only on network-looking errors. This file already learned that
+# lesson the expensive way (f01d015, and the comment below): matching the cause by string is
+# confident and wrong the first time an unanticipated one appears. A blanket retry costs a poisoned
+# tree ~20 s of extra stalling per run and still fails loudly with the real error; it costs a blip
+# nothing at all. Report the attempt count so a retried success is not silently indistinguishable
+# from a clean one, and keep the whole budget far inside the 5-minute timer period.
+#
 # Report what git ACTUALLY said, at err level. This line used to name one guessed cause on every
 # failure ("a root-owned object blocks the mikael-run unit"). On 2026-08-13T14:35Z the real cause was
 # `git@github.com: Permission denied (publickey)` — present in the journal, but only at priority 6,
 # below the level the comment above sends triage to. The single priority-3 line said "check
 # ownership". A hard-coded diagnosis on a generic failure is worse than no diagnosis: it is confident
 # and wrong. Capture stderr so the cause and the alert are the same line.
-if ! fetch_err=$(git fetch -q origin "$BRANCH" 2>&1); then
-  die "fetch failed: $(printf '%s' "$fetch_err" | tr '\n' ' ' | cut -c1-300)"
+fetch_ok=""
+for attempt in 1 2 3; do
+  # timeout: a hung TCP would otherwise let three attempts run unbounded into the next timer firing.
+  # Fetches of this repo complete in ~1 s (08-21T14:10:58 -> :59), so 90 s is slack, not a limit.
+  if fetch_err=$(timeout 90 git fetch -q origin "$BRANCH" 2>&1); then
+    [ "$attempt" -gt 1 ] && say "fetch succeeded on attempt $attempt/3"
+    fetch_ok=1
+    break
+  fi
+  [ "$attempt" -lt 3 ] && sleep $(( attempt * 10 ))
+done
+if [ -z "$fetch_ok" ]; then
+  die "fetch failed after 3 attempts: $(printf '%s' "$fetch_err" | tr '\n' ' ' | cut -c1-300)"
 fi
 after=$(git rev-parse --short "origin/$BRANCH")
 [ "$before" = "$after" ] && exit 0
