@@ -50,6 +50,11 @@ STATE = Path(os.environ.get("DOCWATCH_STATE", Path.home() / ".local/state/docwat
 # the day this was installed, and decide() swallowed it. Same resolution the loop harness uses.
 CLAUDE = os.environ.get("CLAUDE_BIN") or str(Path.home() / ".local/bin/claude")
 LOG = STATE / "filed.jsonl"
+# A skip consumed the file's CHANGE. Drive will not report it again, so without this the document is
+# unfiled for ever and nothing says so — which is exactly what happened to the operator's 42-page
+# scan on 2026-08-27: seen once, skipped once, then "nothing new in root" for ever after.
+PENDING = STATE / "pending.jsonl"
+RETRY_MAX = int(os.environ.get("DOCWATCH_RETRY_MAX", "5"))
 FOLDER_MIME = "application/vnd.google-apps.folder"
 MAXTXT = 8000
 # A run that suddenly wants to file hundreds of files is a signal that something is wrong (a restore,
@@ -224,8 +229,30 @@ def notify(filed, skipped):
         errlog.err(f"docwatch: notify failed: {type(e).__name__}: {e}")
 
 
+def pending_load():
+    """Files seen before and not yet filed, with an attempt count. Bounded: a document that fails
+    RETRY_MAX times is dropped from the retry set rather than retried until the heat death."""
+    out = {}
+    if PENDING.exists():
+        for line in PENDING.read_text().splitlines():
+            try:
+                r = json.loads(line)
+                out[r["id"]] = r
+            except Exception as exc:
+                errlog.skip("docwatch: parsing pending.jsonl", exc)
+    return out
+
+
+def pending_save(p):
+    PENDING.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in p.values()))
+
+
 def main():
     st = state_load()
+    only = None
+    for a in sys.argv[1:]:
+        if a.startswith("--file="):
+            only = a.split("=", 1)[1]
     root_id = drive().files().get(fileId="root", fields="id").execute()["id"]
 
     if not st.get("page_token"):
@@ -264,6 +291,23 @@ def main():
         if not token:
             st["page_token"] = resp.get("newStartPageToken", st["page_token"])
 
+    # Re-offer anything seen before and never filed. Their change is long gone from the feed, so
+    # this list is the only route back for them.
+    pend = pending_load()
+    for fid, rec in list(pend.items()):
+        if fid in seen or rec.get("tries", 0) >= RETRY_MAX:
+            continue
+        try:
+            new.append(drive().files().get(
+                fileId=fid, fields="id,name,mimeType,parents,trashed").execute())
+        except HttpError as exc:
+            errlog.warn(f"docwatch: pending {fid} is no longer readable ({exc}) — dropping it")
+            pend.pop(fid, None)
+
+    if only:                                        # --file=<id>: one document, on demand
+        new = [drive().files().get(
+            fileId=only, fields="id,name,mimeType,parents,trashed").execute()]
+
     new = {f["id"]: f for f in new}.values()        # a file edited twice is still one file
     if not new:
         state_save(st)
@@ -285,12 +329,14 @@ def main():
         try:
             context, is_file, _ = pipeline.extract(rec)
         except Exception as e:
-            skipped.append({"old_name": name, "why": f"could not extract text ({type(e).__name__})"})
+            skipped.append({"drive_id": fid, "old_name": name,
+                            "why": f"could not extract text ({type(e).__name__})"})
             continue
         rec["text"] = "" if is_file else context
         d = decide(name, mime, context, is_file, folders)
         if not d or not d.get("proposed") or d.get("folder") not in folders:
-            skipped.append({"old_name": name, "why": "no usable filing decision returned"})
+            skipped.append({"drive_id": fid, "old_name": name,
+                            "why": "no usable filing decision returned"})
             continue
         dest = d["folder"]
         try:
@@ -298,7 +344,8 @@ def main():
                                       body={"name": d["proposed"], "parents": [folders[dest]]},
                                       fields="id").execute()
         except HttpError as e:
-            skipped.append({"old_name": name, "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
+            skipped.append({"drive_id": fid, "old_name": name,
+                            "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
             continue
         upsert(rec, d, cp["id"], dest)
         row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "drive_id": fid, "copy_id": cp["id"],
@@ -307,6 +354,16 @@ def main():
         with open(LOG, "a") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         filed.append(row)
+
+    for r in filed:                                 # filed at last — stop offering it
+        pend.pop(r["drive_id"], None)
+    for s in skipped:
+        fid = s.get("drive_id")
+        if fid:
+            e = pend.setdefault(fid, {"id": fid, "name": s["old_name"], "tries": 0})
+            e["tries"] += 1
+            e["last_why"] = s["why"]
+    pending_save(pend)
 
     state_save(st)
     notify(filed, skipped)
