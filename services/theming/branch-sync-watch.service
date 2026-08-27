@@ -1,0 +1,15 @@
+# Pick up the theming repo's branch-sync status and post conflicts to Discord (#exocomps).
+# The workflow deliberately does not fail on a conflict, so nothing goes red in GitHub's UI —
+# this is what turns that status artifact into a message a human sees. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox theming branch-sync watcher (conflicts -> Discord)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/mikael/.config/claude-dev/discord.env
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/theming/branch_sync_watch.py

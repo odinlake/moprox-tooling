@@ -1,0 +1,13 @@
+# Hourly. The workflow itself runs 04:17 UTC daily, but it can also be dispatched by hand, and a
+# conflict clearing should be reflected without waiting for the next night. One gh call per run.
+[Unit]
+Description=Check theming branch-sync status hourly
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
