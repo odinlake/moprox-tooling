@@ -67,8 +67,14 @@ def render(status, run, stuck, cleared):
     for b in stuck:
         files = ", ".join(b.get("conflict_files") or [])[:180]
         detail = files or (b.get("error") or "")
-        lines.append("**%s** — %s (%s ahead, %s behind)%s"
-                     % (b["branch"], b["action"], b["ahead"], b["behind"],
+        # The workflow probes, read-only, whether a rebase would apply where the merge did not.
+        # That is the difference between "resolve this by hand" and "dispatch it with
+        # strategy=rebase" — worth saying in the message rather than making someone go and look.
+        hint = ""
+        if b.get("rebase_would_apply") is True:
+            hint = " — a rebase WOULD apply cleanly (dispatch branch-sync with strategy=rebase)"
+        lines.append("**%s** — %s (%s ahead, %s behind)%s%s"
+                     % (b["branch"], b["action"], b["ahead"], b["behind"], hint,
                         "\n  ↳ " + detail if detail else ""))
     if cleared:
         lines.append("Cleared since last check: " + ", ".join(sorted(cleared)))
