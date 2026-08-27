@@ -13,6 +13,9 @@ WorkingDirectory=/home/mikael
 # The docindex venv, because this imports ~/docindex/pipeline.py for its extractors and that is
 # where google-api-python-client, pypdf and friends live. Using the system python would mean a
 # second copy of those deps drifting out of step with the batch pass.
+# systemd's default PATH has no ~/.local/bin, which is where the claude CLI lives. docwatch.py now
+# resolves it absolutely, but anything else it shells out to needs the same PATH the operator has.
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/docwatch/docwatch.py
 # Each file costs a claude -p call plus a Drive copy; a big drop is minutes, not seconds.
 TimeoutStartSec=30min

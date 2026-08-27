@@ -44,6 +44,11 @@ SUB = "mikael@odinlake.net"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly",
           "https://www.googleapis.com/auth/drive.file"]
 STATE = Path(os.environ.get("DOCWATCH_STATE", Path.home() / ".local/state/docwatch"))
+# ABSOLUTE path, not "claude". systemd gives a unit the default PATH
+# (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and the CLI lives in
+# ~/.local/bin — so subprocess.run(["claude", ...]) raised FileNotFoundError on every attempt from
+# the day this was installed, and decide() swallowed it. Same resolution the loop harness uses.
+CLAUDE = os.environ.get("CLAUDE_BIN") or str(Path.home() / ".local/bin/claude")
 LOG = STATE / "filed.jsonl"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 MAXTXT = 8000
@@ -156,19 +161,27 @@ Reply with ONLY minified JSON, no prose or fences:
  "proposed":"<the convention filename>",
  "folder":"<one path from the list above>",
  "confidence":"high|medium|low"}}"""
+    last = "no attempt made"
     for attempt in range(3):
         try:
-            r = subprocess.run(["claude", "-p", "--dangerously-skip-permissions", prompt],
+            r = subprocess.run([CLAUDE, "-p", "--dangerously-skip-permissions", prompt],
                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
             out = r.stdout or ""
             i, j = out.find("{"), out.rfind("}")
             if i >= 0 and j > i:
                 return json.loads(out[i:j + 1])
+            last = (f"exit {r.returncode}, no JSON in {len(out)} chars of stdout; "
+                    f"stderr: {(r.stderr or '')[:200]}")
         except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+            last = "timed out after 300 s"
+        except Exception as exc:                    # FileNotFoundError, bad JSON, anything
+            last = f"{type(exc).__name__}: {exc}"
+        errlog.warn(f"docwatch: decide() attempt {attempt + 1}/3 failed for {name!r} — {last}")
         time.sleep(5 * (attempt + 1))
+    # Three failures is not a quiet outcome: it means nothing can be filed, for any document. The
+    # original code returned None here silently and the only trace was "skipped 1" in the journal
+    # with the reason visible nowhere but a Telegram line.
+    errlog.err(f"docwatch: decide() gave up on {name!r} after 3 attempts — last: {last}")
     return None
 
 
@@ -297,6 +310,8 @@ def main():
 
     state_save(st)
     notify(filed, skipped)
+    for s in skipped:                               # the digest is not a log; the journal is
+        errlog.warn(f"docwatch: skipped {s['old_name']!r} — {s['why']}")
     print(f"docwatch: filed {len(filed)}, skipped {len(skipped)}")
     return 0
 
