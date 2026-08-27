@@ -168,8 +168,27 @@ def main():
             continue
         material.append((i, why))
 
-    material.sort(key=lambda t: (-int(t[0].get("score") or 0), -int(t[0].get("count") or 0)))
-    top = material[:TOP_N]
+    # Severity first, but among equals prefer whatever has gone longest without earning a message
+    # (never-reported sorts to 0, i.e. first). Without this tie-break the cap is a starvation bug as
+    # well as a truncation one: an equal-score queue re-picks the same TOP_N every single run, and
+    # the same tail is held over forever.
+    material.sort(key=lambda t: (-int(t[0].get("score") or 0),
+                                 float(reported.get(key(t[0])) or 0),
+                                 -int(t[0].get("count") or 0)))
+    top, overflow = material[:TOP_N], material[TOP_N:]
+    # What the cap drops must not also be swallowed. `seen` below is rebuilt from every row, which
+    # would retire a truncated incident's "new" status without it ever having earned a message —
+    # after which only escalation or score >= 8 can bring it back. So carry the overflow's PRIOR
+    # seen value forward (absent stays absent) and say out loud that it was held over.
+    held = {key(i) for i, _ in overflow}
+    next_seen = {}
+    for i in rows:
+        k = key(i)
+        if k in held:
+            if k in seen:
+                next_seen[k] = seen[k]
+        else:
+            next_seen[k] = int(i.get("count") or 0)
 
     last_posted = state.get("last_posted") or 0
     overdue = (now - last_posted) / 86400.0 >= LIVENESS_DAYS if last_posted else False
@@ -179,7 +198,7 @@ def main():
         # than being indistinguishable from a broken timer.
         state.update({"last_run": now, "last_posted": state.get("last_posted"),
                       "quiet_runs": int(state.get("quiet_runs", 0)) + 1, "reported": reported,
-                      "seen": {key(i): int(i.get("count") or 0) for i in rows}})
+                      "seen": next_seen})
         if not dry:
             STATE.parent.mkdir(parents=True, exist_ok=True)
             STATE.write_text(json.dumps(state))
@@ -200,6 +219,9 @@ def main():
                          f"x{i.get('count')}, last {ago(i)}")
         if detail:
             lines.append(f"  {detail[:200]}")
+    if overflow:
+        lines.append(f"\n{len(overflow)} further material incident(s) held over for the next digest: "
+                     + "; ".join(f"[{i.get('score')}] {key(i)}" for i, _ in overflow[:5]))
     if quiet:
         lines.append(f"\n{len(quiet)} other open incident(s) unchanged and not repeated here.")
     iss = open_issues()
@@ -223,10 +245,11 @@ def main():
         return 1
     reported.update({key(i): now for i, _ in top})
     state.update({"last_run": now, "last_posted": now, "quiet_runs": 0, "reported": reported,
-                  "seen": {key(i): int(i.get("count") or 0) for i in rows}})
+                  "seen": next_seen})
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(state))
-    print(f"incident-digest: posted {len(top)} incident(s), {len(quiet)} quiet")
+    print(f"incident-digest: posted {len(top)} incident(s), "
+          f"{len(overflow)} held over, {len(quiet)} quiet")
     return 0
 
 
