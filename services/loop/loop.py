@@ -513,8 +513,17 @@ def open_incidents():
         with urllib.request.urlopen(INCIDENTS_URL, timeout=10) as r:
             d = json.loads(r.read().decode())
     except Exception as exc:
+        # NOT "": that is what a clean estate returns, so a dead queue read used to be
+        # indistinguishable from nothing-is-wrong. On 2026-08-28 six of twelve cycles took this
+        # path (TimeoutError, 10s) while the fleet's monitoring stack was itself collapsing —
+        # logscan.service failing, logview.service oom-killed — and every one of those cycles was
+        # told, in effect, that the queue was clear. Say it in the prompt instead.
         err("open_incidents: could not read the incident queue — it is UNCHECKED this cycle", exc)
-        return ""
+        return ("\n\nOPEN INCIDENTS — UNAVAILABLE this cycle. The queue could not be read "
+                f"({type(exc).__name__}: {_clip(str(exc), 120)}), so this is NOT a statement that "
+                "the estate is healthy — it is the absence of one. The reader that failed is part "
+                "of the same monitoring stack the queue reports on, so a failure here is itself "
+                "weak evidence something is wrong. Treat the queue as unknown, not empty.")
     rows = d.get("incidents") or []
     if not rows:
         return ""
