@@ -86,6 +86,9 @@ def training_fp():
     # silently keeps the old schema until the next run happens to land. 2026-07-29.
     files = sorted((REPO / "services/training").rglob("*.py"))
     files += sorted(POLAR_RAW.glob("*.zip"))
+    st = Path.home() / "projects/private-data/training/strength.jsonl"   # resistance log (no HR)
+    if st.exists():
+        files.append(st)
     inc = POLAR_RAW.parent / "incoming"
     if inc.exists():
         files += sorted(f for f in inc.rglob("*") if f.is_file())
@@ -222,6 +225,17 @@ def main():
         sp.run([sys.executable, str(REPO / "services/training/build.py")],
                env={**os.environ, "POLAR_RAW": str(POLAR_RAW), "POLAR_IN": str(POLAR_RAW.parent / "incoming"),
                     "OUT": str(DATA / "training/sessions.json")}, check=True, capture_output=True)
+        # Strength is a SIBLING feed, not a member of sessions[]: resistance work has no HR trace,
+        # and a record that is 90% nulls would skew every aggregate computed over runs and rides.
+        # Built in the same branch so one logged set republishes both, and non-fatal because a
+        # missing strength feed must never cost us the training rebuild.
+        try:
+            sp.run([sys.executable, str(REPO / "services/training/strength.py"),
+                    str(DATA / "training/strength.json")], check=True, capture_output=True)
+        except Exception as _e:
+            # Same <3> convention this file already uses for the push failure below — journald turns
+            # it into a real PRIORITY, and update.py has no errlog import to reach for.
+            print(f"<3>update: strength feed failed: {type(_e).__name__}: {_e}", file=sys.stderr, flush=True)
         timings["training"] = (round((time.monotonic() - t0) * 1000), (DATA / "training/sessions.json").stat().st_size)
         state["training_fp"] = fp
 

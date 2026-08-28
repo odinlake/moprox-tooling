@@ -361,7 +361,53 @@ function progChart(sess, series, head, thr, agg, info, dom){
   }
   return `<div class="chartwrap">${title}<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thrm}${xl}${curves}${dots}${aggline}</svg></div>`;
 }
+// Resistance work has no HR trace, so it gets its own panel rather than a row in the session table:
+// load and reps are the measurement, and there is nothing to draw a sparkline from. Volume load is
+// labelled as an index on purpose — 30 kg of pulldown is not 30 kg of squat, so it is comparable
+// against itself over time and against nothing else.
+async function loadStrength(){
+  const el = document.querySelector("#strpanel"); if(!el) return;
+  let d; try { d = await JD("training/strength.json"); } catch(e){ el.style.display="none"; return; }
+  if(!d || !d.count){ el.style.display="none"; return; }
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const dose = e => e.secs!=null ? `${e.sets}×${e.secs}s`
+                  : (e.kg!=null ? `${e.sets}×${e.reps} @ ${e.kg} kg` : `${e.sets}×${e.reps}`);
+  // Per movement: current best + a bare progression line. One session in, the line is a dot; that is
+  // honest, and it fills in without any change here.
+  const spark = m => {
+    const h = m.history.filter(x => x.kg!=null || x.secs!=null); if(h.length<2) return "";
+    const v = h.map(x => x.kg!=null ? x.kg : x.secs), W=80, H=18;
+    const lo=Math.min(...v), hi=Math.max(...v), sp=(hi-lo)||1;
+    const pts = v.map((y,i)=>`${(i/(v.length-1)*W).toFixed(1)},${(H-1-(H-2)*(y-lo)/sp).toFixed(1)}`);
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="none">`
+         + `<polyline points="${pts.join(" ")}" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`;
+  };
+  const movs = Object.entries(d.movements).sort((a,b)=>a[0].localeCompare(b[0])).map(([ex,m])=>{
+    const b = m.best || {};
+    const best = b.secs!=null ? `${b.secs}s` : (b.kg!=null ? `${b.kg} kg × ${b.reps}` : `${b.reps} reps`);
+    return `<tr><td>${esc(ex)}</td><td class="num">${best}</td><td class="num">${m.n}</td><td>${spark(m)}</td></tr>`;
+  }).join("");
+  const sess = d.sessions.slice(0,8).map(s=>{
+    const items = s.entries.map(e=>`${esc(e.ex)} ${dose(e)}`).join(" · ");
+    const vol = s.volume_load ? `${s.volume_load.toLocaleString()}${s.has_unweighted?"+":""}` : "—";
+    return `<tr><td style="width:1%;white-space:nowrap">${s.date}</td><td class="num" style="width:1%">${s.sets}</td>`
+         + `<td class="num" style="width:1%">${vol}</td><td class="muted" style="font-size:.75rem">${items}</td></tr>`;
+  }).join("");
+  el.innerHTML = `<h2>Strength <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— no HR; load and reps are the measurement</span></h2>
+    <div class="row" style="gap:1rem;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px"><table class="compact">
+        <thead><tr><th>movement</th><th class="num">best</th><th class="num" title="times logged">n</th><th></th></tr></thead>
+        <tbody>${movs}</tbody></table></div>
+      <div style="flex:2;min-width:320px"><table class="compact">
+        <thead><tr><th>session</th><th class="num" title="working sets">sets</th>
+          <th class="num" title="${esc(d.volume_note||"")}">vol</th><th>movements</th></tr></thead>
+        <tbody>${sess}</tbody></table></div>
+    </div>
+    <div class="muted" style="font-size:.72rem;margin-top:.4rem">vol = sets × reps × kg, an index comparable only against itself. “+” means the session also held bodyweight or timed work, which carries no volume.</div>`;
+}
+
 async function loadTraining(){
+  loadStrength().catch(()=>{});          // own panel, own feed; must never break the running view
   const data = await JD("training/sessions.json");
   const all = data.sessions;
   const order=["easy","tempo","trail_easy","vo2max","speed","other"];
@@ -395,6 +441,7 @@ async function loadTraining(){
     <div class="panel" id="ovpanel" style="margin-top:1rem"></div>
     <div class="panel" id="m10panel" style="margin-top:1rem"></div>
     <div class="panel" id="climbpanel" style="margin-top:1rem"></div>
+    <div class="panel" id="strpanel" style="margin-top:1rem"></div>
     <div class="row" style="margin-top:1rem">
       <div class="panel" style="flex:1;min-width:330px">
         <div style="max-height:560px;overflow:auto"><table class="compact sess">
