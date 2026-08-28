@@ -57,6 +57,17 @@ PENDING = STATE / "pending.jsonl"
 RETRY_MAX = int(os.environ.get("DOCWATCH_RETRY_MAX", "5"))
 FOLDER_MIME = "application/vnd.google-apps.folder"
 MAXTXT = 8000
+# Credential material must never reach the index, the digest, or a model prompt. This is not
+# hypothetical: the July batch pass indexed github-recovery-codes.txt, accounts.txt and two others
+# with their FULL TEXT stored in docindex.db and in the FTS table — so the codes are searchable at
+# mo.lan/docs and through the docsearch MCP that every agent can call. Same pipeline, same database.
+#
+# Matching is on the FILENAME only. Reading the content to decide whether content is secret is the
+# mistake itself, and a name is what the operator controls when they drop the file.
+SECRET_NAME = re.compile(r"recovery[-_ ]?code|backup[-_ ]?code|2fa|otp|seed[-_ ]?phrase|mnemonic|"
+                         r"password|passwd|credential|secret|api[-_ ]?key|private[-_ ]?key|"
+                         r"id_(rsa|ed25519)|\.pem$|\.p12$|\.pfx$|keystore|vault", re.I)
+SECRET_FOLDER = os.environ.get("DOCWATCH_SECRET_FOLDER", "Secrets")
 # A run that suddenly wants to file hundreds of files is a signal that something is wrong (a restore,
 # a sync loop, a bad page token), not a busy day. Stop and say so rather than reorganising the drive.
 SANE_MAX = int(os.environ.get("DOCWATCH_MAX_PER_RUN", "25"))
@@ -324,6 +335,39 @@ def main():
     filed, skipped = [], []
     for f in new:
         fid, name, mime = f["id"], f["name"], f["mimeType"]
+
+        if SECRET_NAME.search(name):
+            # Filed, never read. No extract, no model call, no text in the index, nothing quoted in
+            # the digest — the whole point is that this document's CONTENT never leaves Drive.
+            if SECRET_FOLDER not in folders:
+                skipped.append({"drive_id": fid, "old_name": name,
+                                "why": f"looks like credential material and there is no "
+                                       f"{SECRET_FOLDER!r} folder to file it in — create one"})
+                continue
+            try:
+                cp = drive().files().copy(fileId=fid, body={"name": name,
+                                          "parents": [folders[SECRET_FOLDER]]},
+                                          fields="id").execute()
+            except HttpError as e:
+                skipped.append({"drive_id": fid, "old_name": name,
+                                "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
+                continue
+            rec = {"key": f"docwatch:{fid}", "drive_id": fid, "name": name, "mime": mime,
+                   "bucket": bucket_of(mime, name), "text": ""}
+            upsert(rec, {"proposed": name, "summary": "Credential material — deliberately not read "
+                         "or indexed. Filename only.", "tags": ["secret", "not-indexed"],
+                         "entities": [], "doc_date": "", "category": "reference",
+                         "confidence": "high"}, cp["id"], SECRET_FOLDER)
+            row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "drive_id": fid, "copy_id": cp["id"],
+                   "old_name": name, "proposed": name, "folder": SECRET_FOLDER,
+                   "summary": "credential material — filed unread", "confidence": "high"}
+            with open(LOG, "a") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            filed.append(row)
+            errlog.warn(f"docwatch: {name!r} filed to {SECRET_FOLDER} UNREAD (name matched the "
+                        f"credential pattern). Drive is not a secret store — consider Vaultwarden.")
+            continue
+
         rec = {"key": f"docwatch:{fid}", "drive_id": fid, "name": name, "mime": mime,
                "bucket": bucket_of(mime, name)}
         try:
