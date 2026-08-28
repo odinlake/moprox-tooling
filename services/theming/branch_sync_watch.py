@@ -68,11 +68,19 @@ def render(status, run, stuck, cleared):
         files = ", ".join(b.get("conflict_files") or [])[:180]
         detail = files or (b.get("error") or "")
         # The workflow probes, read-only, whether a rebase would apply where the merge did not.
-        # That is the difference between "resolve this by hand" and "dispatch it with
-        # strategy=rebase" — worth saying in the message rather than making someone go and look.
+        # That probe is DIAGNOSIS, not a recommendation, and this message used to read it as one:
+        # it told the operator to dispatch branch-sync with strategy=rebase. The repo is merge-only
+        # on purpose (theming's branch-sync.yml says why: a merge records the resolution once, a
+        # rebase replays the branch's commits every sync and re-fights the same conflict, on
+        # branches other people have). Rebase exists only as a manual dispatch and is not ours to
+        # suggest.
+        #
+        # What the probe is still worth saying: if a rebase would apply, the conflict is about the
+        # ORDER the commits arrive in rather than two people changing the same lines — so resolving
+        # the merge is mechanical rather than a judgement call.
         hint = ""
         if b.get("rebase_would_apply") is True:
-            hint = " — a rebase WOULD apply cleanly (dispatch branch-sync with strategy=rebase)"
+            hint = " — ordering, not content: the merge should resolve mechanically"
         lines.append("**%s** — %s (%s ahead, %s behind)%s%s"
                      % (b["branch"], b["action"], b["ahead"], b["behind"], hint,
                         "\n  ↳ " + detail if detail else ""))
