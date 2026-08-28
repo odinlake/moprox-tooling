@@ -366,8 +366,11 @@ function progChart(sess, series, head, thr, agg, info, dom){
 // labelled as an index on purpose — 30 kg of pulldown is not 30 kg of squat, so it is comparable
 // against itself over time and against nothing else.
 async function loadStrength(){
+  let d; try { d = await JD("training/strength.json"); } catch(e){ d = null; }
+  // Queried AFTER the await on purpose: loadTraining() replaces #training's whole innerHTML, which
+  // destroys and recreates this div. A reference taken before the fetch resolves is detached by the
+  // time we write to it, and the visible panel stays empty — which is exactly what shipped first.
   const el = document.querySelector("#strpanel"); if(!el) return;
-  let d; try { d = await JD("training/strength.json"); } catch(e){ el.style.display="none"; return; }
   if(!d || !d.count){ el.style.display="none"; return; }
   const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const dose = e => e.secs!=null ? `${e.sets}×${e.secs}s`
@@ -407,7 +410,6 @@ async function loadStrength(){
 }
 
 async function loadTraining(){
-  loadStrength().catch(()=>{});          // own panel, own feed; must never break the running view
   const data = await JD("training/sessions.json");
   const all = data.sessions;
   const order=["easy","tempo","trail_easy","vo2max","speed","other"];
@@ -457,6 +459,7 @@ async function loadTraining(){
         <tbody id="slist"></tbody></table></div></div>
       <div class="panel" id="detail" style="flex:1.3;min-width:320px"><h2>Selected session details</h2><p class="muted">Pick a session to see its HR trace and interval structure.</p></div>
     </div>`;
+  loadStrength().catch(()=>{});   // after the DOM it writes into exists; never breaks the run view
   let S=[], wcounts={}, activeCats=null, curCut=0, activeBuckets=null, nBuckets=0;   // + time-bucket selection (null=all)
   const weekStart = d => { const t=new Date(d); const off=(t.getDay()+6)%7; t.setDate(t.getDate()-off); t.setHours(0,0,0,0); return t; };
   const ord=n=>{const s=n%10==1&&n%100!=11?"st":n%10==2&&n%100!=12?"nd":n%10==3&&n%100!=13?"rd":"th";
