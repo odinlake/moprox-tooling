@@ -156,6 +156,65 @@ def fetch_account(cfg, tok, uid, date_from):
             return rows, actual
 
 
+def ladder_ok(rows):
+    """Does the store still reconcile against the bank's own running balance?
+
+    Every row carries balance_after_transaction, so a complete store is a closed chain: each balance
+    is the previous one plus the signed amount. That makes a MISSING interior row detectable without
+    asking the bank anything — and the interior is exactly where this lane loses data. The 422 clamp
+    in fetch_account advances to whatever floor the bank still serves, never comparing it to what we
+    already hold; if it ever steps past our newest booking date, the rows in between are gone for
+    good and the store closes over the hole silently.
+
+    Measured on the real store (analyst cycle 286, 2026-08-29): interior gaps of 1..4 consecutive
+    rows were caught 51/51. Loss at either END of the store is NOT detectable this way (0/4) — a
+    truncation leaves a chain that still closes. This is a gap check, not a completeness proof.
+
+    Within a booking date the file order is not the ledger order, so search the intra-day orderings.
+    Returns (ok, first_bad_date)."""
+    from decimal import Decimal
+    from itertools import permutations
+
+    def sgn(r):
+        a = Decimal(r["transaction_amount"]["amount"])
+        return a if r["credit_debit_indicator"] == "CRDT" else -a
+
+    def bal(r):
+        return Decimal(r["balance_after_transaction"]["amount"])
+
+    rows = [r for r in rows if r.get("balance_after_transaction") and r.get("booking_date")]
+    if len(rows) < 2:
+        return True, None
+    days = {}
+    for r in rows:
+        days.setdefault(r["booking_date"], []).append(r)
+    prev = None
+    for d in sorted(days):
+        grp = days[d]
+        # n! over a day's transactions; beyond a handful, fall back to stored order rather than hang.
+        cands = [tuple(grp)] if len(grp) > 8 else permutations(grp)
+        hit = None
+        for p in cands:
+            if prev is None:
+                if all(bal(p[i]) + sgn(p[i + 1]) == bal(p[i + 1]) for i in range(len(p) - 1)):
+                    hit = p
+                    break
+                continue
+            b, good = prev, True
+            for r in p:
+                b += sgn(r)
+                if b != bal(r):
+                    good = False
+                    break
+            if good:
+                hit = p
+                break
+        if hit is None:
+            return False, d
+        prev = bal(hit[-1])
+    return True, None
+
+
 def amount(t):
     """Signed SEK. DBIT is money out; the API reports magnitudes with a separate indicator."""
     a = float((t.get("transaction_amount") or {}).get("amount") or 0)
@@ -302,6 +361,23 @@ def main():
         errlog.err(f"swedbank: ALL {len(accounts)} accounts failed — artifact left untouched at its "
                    f"previous stamp rather than restamped from stored copies")
         return 1
+    # The store audits itself against the bank's own balances. This is the only signal in the lane
+    # that distinguishes "this account had no transactions" from "we lost the ones it had": the 422
+    # warn fires on dormancy too and so carries no information (see swedbank-422-warn-is-dormancy-
+    # not-loss). Read-only, and never allowed to take the fetch down with it.
+    for sl, rows in sorted(store.items()):
+        if sl in failed:
+            continue                             # stale copy; a break here would be last run's news
+        try:
+            ok, bad = ladder_ok(list(rows.values()))
+        except Exception as exc:                 # noqa: BLE001 — an audit must not break the fetch
+            errlog.warn(f"swedbank: balance-ladder audit of {sl} could not run", exc)
+            continue
+        if not ok:
+            errlog.err(f"swedbank: {sl} does not reconcile against the bank's own running balance "
+                       f"at booking_date {bad} — transactions are MISSING from the store before "
+                       f"that date, and the bank's 90-day window means they may be unrecoverable")
+
     out = derive(accounts, store)
     # Partial failure still writes: the accounts that DID fetch are real and their rows would
     # otherwise be dropped on the floor. But the artifact says which ones are stale, so a consumer
