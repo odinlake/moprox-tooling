@@ -189,12 +189,27 @@ If you do resolve it:
      dev-* branch directly, never merge your own PR. If a push is refused, say so plainly and leave
      the branch ready — do not invent a way around it. That is the correct outcome, not a failure.
 
-Then post ONE Discord message to channel %(channel)s: what the conflict actually was, in one or two
-sentences, what you did about it, and the link. Lead with the concrete finding — file and line and
-what each side had — then the outcome. If you did NOT resolve it, say precisely what a human has to
-decide and why it was not yours to make. Do not paste the whole diff.
+POSTING. ONE Discord message to channel %(channel)s, and a HARD CEILING OF 400 CHARACTERS. Not a
+target — a limit. Three lines at most:
 
-Return a one-line status only."""
+    **`<branch>` synced** — <what the conflict was, one clause> · PR #<n>
+    <one line only if a human must decide something, saying exactly what>
+
+That channel has several human readers who do not run this estate and did not ask for a status
+report. Your last run posted 11,000 characters across nine messages about three one-line outcomes,
+and the single fact worth reading — that one branch was now redundant — was buried in the middle of
+the eighth. Judge every sentence by whether a reader who only cares about the REPOSITORY would miss
+it if it were gone.
+
+NEVER post about this machine. Not the local clone, not paths under ~, not hooks, not permissions,
+not what you tried first, not what refused you, not your own reasoning or workflow. The operator
+does not administer these boxes and it is not his problem; exposing several people to it is worse
+than useless. If something here blocked you, that goes in your RETURN STATUS, which reaches the
+estate journal where it belongs — and then say on Discord only "blocked, not landed", with no
+explanation of why.
+
+Return a one-line status: what you did, and any local blocker in full. That line is for the estate,
+not the channel, so put the machine detail THERE."""
 
 
 def dispatch(stuck, run, state):
