@@ -12,6 +12,14 @@ WHAT IT POSTS, AND WHAT IT DOES NOT
   that lesson with the valet's repeated-bullet failure. A conflict clearing is worth saying once too,
   so the channel reflects the current state rather than a stream of alarms.
 
+DISPATCHING M4. A conflict this script can only DESCRIBE is one nobody acts on: the report has been
+posting the same branches for months. So a NEWLY-appearing conflict now wakes the theming agent,
+once, with the diagnosis already in hand. The agent's remit is deliberately narrow (see PROMPT
+below): structural resolutions only — ordering, formatting, a change already upstream under a
+different SHA — never a decision about what the prose SAYS. That line exists because this repo is a
+curated knowledgebase whose AGENTS.md is built around human review; rearranging fields is
+housekeeping, choosing whose wording survives is editorial.
+
 Auth: `gh` on claude-dev is odinlake-ai with team write on theme-ontology/theming, which is enough
 to list runs and download artifacts. Discord goes through services/forward/discord_api.py — the same
 bot and channel the theming agent uses, so a human can reply to it there.
@@ -29,6 +37,18 @@ REPO = os.environ.get("THEMING_REPO", "theme-ontology/theming")
 WORKFLOW = "branch-sync.yml"
 STATE = Path.home() / ".local/share/moprox/branch-sync-seen.json"
 STUCK = ("conflict", "push-rejected", "needs-pr", "error")
+# Only real merge conflicts are worth an agent. A push rejection is a permissions or plumbing fact
+# and there is nothing for it to resolve.
+DISPATCH_ACTIONS = ("conflict",)
+# Bound the spend. Three untouched conflicts in one night is already unusual; more than that is a
+# repo-wide event (a reformat landing on master) where one agent per branch is the wrong response
+# and a human should look once.
+MAX_DISPATCH = int(os.environ.get("BRANCH_SYNC_MAX_DISPATCH", "3"))
+DISPATCH = os.environ.get("BRANCH_SYNC_DISPATCH", "1") != "0"
+# Protected branches take a PR; everything else the agent may push to directly (operator's call,
+# 2026-09-01). Kept as a prefix list rather than an API probe so this file has no extra failure mode
+# — if it is wrong it is wrong towards MORE review, and the push would be refused anyway.
+PROTECTED_PREFIXES = ("master", "main", "dev-")
 
 
 def gh(*args, check=True):
@@ -116,6 +136,112 @@ def render(status, run, stuck, cleared):
     return "\n".join(lines)
 
 
+def protected(branch):
+    return any(branch == pre.rstrip("-") or branch.startswith(pre) for pre in PROTECTED_PREFIXES)
+
+
+def sig(b):
+    """What makes a conflict THIS conflict. Re-dispatch when it changes, not when it recurs.
+
+    Keyed on the conflicting paths rather than the commit shas: the same unresolved conflict drifts
+    a sha every time master moves, and keying on that would wake the agent nightly for a branch it
+    already declined to touch."""
+    return "%s:%s" % (b["branch"], ",".join(sorted(b.get("conflict_files") or [])))
+
+
+PROMPT = """A branch-sync conflict in theme-ontology/theming needs you. The nightly job could not
+merge master into `%(branch)s`, and the mechanical resolver in .github/scripts/branch_sync.py
+already declined it — so this is NOT ordering or whitespace, it is a real textual conflict.
+
+  branch:   %(branch)s (%(ahead)s ahead, %(behind)s behind master)
+  files:    %(files)s
+  first:    %(first)s
+  run:      %(url)s
+
+YOUR REMIT IS STRUCTURAL, AND THE LINE IS NOT NEGOTIABLE. Resolve it ONLY if the conflict is about
+form rather than meaning. That includes: field or block ORDERING; formatting and whitespace; a
+duplicate of a change that is ALREADY on master under a different sha (the usual cause here — a
+branch's work reached master through a squashed or rebased PR, so git can no longer see the two as
+the same change); and one side being the other plus more.
+
+If resolving would change what the prose SAYS — an annotation motivation, a theme description, a
+title or date — STOP. Do not choose between two people's wording, do not merge them into a third
+version, do not "improve" either. Report it instead. This repo is a curated knowledgebase and its
+AGENTS.md is built around human review; that is the whole reason you have a narrow remit here.
+
+If you do resolve it:
+  1. Work in ~/projects/theming. Fetch first. `git switch -c t origin/%(branch)s` then
+     `git merge origin/master`, fix the conflicted hunks, and check the result with
+     `git diff origin/master -- <file>` — you should be able to say exactly what survived and why.
+  2. VALIDATE before anything leaves the machine:
+       PYTHONPATH=~/projects/python-totolo python3 -c \
+         "import totolo; o=totolo.files('./notes'); assert len(o.story)>0 and len(o.theme)>0"
+     If that fails, or you cannot run it, do NOT push — open a PR and say it is unvalidated.
+  3. LANDING IT: `%(branch)s` is %(sensitivity)s.
+     %(landing)s
+  4. Never force-push, never touch master or a dev-* branch directly, never merge your own PR.
+
+Then post ONE Discord message to channel %(channel)s: what the conflict actually was, in one or two
+sentences, what you did about it, and the link. Lead with the concrete finding — file and line and
+what each side had — then the outcome. If you did NOT resolve it, say precisely what a human has to
+decide and why it was not yours to make. Do not paste the whole diff.
+
+Return a one-line status only."""
+
+
+def dispatch(stuck, run, state):
+    """Wake M4 for conflicts that are new to it. Returns the list of branches dispatched."""
+    if not DISPATCH:
+        return []
+    sys.path.insert(0, str(HERE.parents[1] / "agents"))
+    try:
+        from run import run_agent
+    except ImportError as e:
+        errlog.err("branch_sync_watch: cannot import the agent runner — no conflict will be "
+                   "escalated to M4, they will only be reported", e)
+        return []
+    seen = set(state.get("dispatched", []))
+    todo = [b for b in stuck if b.get("action") in DISPATCH_ACTIONS and sig(b) not in seen]
+    if not todo:
+        return []
+    if len(todo) > MAX_DISPATCH:
+        # Say what is being dropped. A silent cap reads as "these were handled".
+        errlog.warn("branch_sync_watch: %d new conflicts, dispatching %d — NOT escalating: %s"
+                    % (len(todo), MAX_DISPATCH,
+                       ", ".join(b["branch"] for b in todo[MAX_DISPATCH:])))
+        todo = todo[:MAX_DISPATCH]
+    done = []
+    for b in todo:
+        first = b.get("conflict_first") or {}
+        where = ("%s:%s — %s | branch had %s | master had %s"
+                 % (first.get("file"), first.get("line"), first.get("why"),
+                    "; ".join(first.get("ours") or []) or "(nothing)",
+                    "; ".join(first.get("theirs") or []) or "(nothing)")
+                 ) if first.get("file") else "(the workflow reported no hunk detail)"
+        sens = ("PROTECTED" if protected(b["branch"]) else "not protected")
+        landing = ("Open a PR: branch `ai-feature-sync-%s` off origin/%s, commit the merge there, "
+                   "push it and `gh pr create` into `%s`. Only a human may land it."
+                   % (b["branch"], b["branch"], b["branch"])) if protected(b["branch"]) else (
+                   "Push the merge straight to `%s`. A merge only appends, so every clone still "
+                   "fast-forwards." % b["branch"])
+        try:
+            reply = run_agent("theming", PROMPT % {
+                "branch": b["branch"], "ahead": b["ahead"], "behind": b["behind"],
+                "files": ", ".join(b.get("conflict_files") or []) or "(none listed)",
+                "first": where, "url": run["url"], "sensitivity": sens, "landing": landing,
+                "channel": discord_api.channel()}, timeout=900)
+            print("dispatched %s -> %s" % (b["branch"], (reply or "")[:120]))
+            done.append(b["branch"])
+            seen.add(sig(b))
+        except Exception as e:
+            # Do NOT record it as dispatched: a failed wake should be retried next run, not
+            # silently retired the way a successful one is.
+            errlog.err("branch_sync_watch: dispatching M4 for %s failed — that conflict was "
+                       "reported but nobody was asked to act on it" % b["branch"], e)
+    state["dispatched"] = sorted(seen)
+    return done
+
+
 def main():
     try:
         status, run = latest_status()
@@ -129,17 +255,16 @@ def main():
     stuck = [b for b in status["branches"] if b.get("action") in STUCK]
     names = {b["branch"] for b in stuck}
     try:
-        seen = set(json.loads(STATE.read_text()).get("stuck", [])) if STATE.exists() else set()
+        state = json.loads(STATE.read_text()) if STATE.exists() else {}
     except Exception as e:
         errlog.skip("branch_sync_watch: reading state", e)
-        seen = set()
-
+        state = {}
+    seen = set(state.get("stuck", []))
     cleared = seen - names
+
     if names == seen:
         print("no change: %d stuck (%s)" % (len(names), ", ".join(sorted(names)) or "none"))
-        return 0
-
-    if names or cleared:
+    elif names or cleared:
         text = render(status, run, stuck, cleared)
         title = ("Branch sync — %d branch(es) need a human" % len(names)) if names \
                 else "Branch sync — all branches clear"
@@ -150,9 +275,17 @@ def main():
             errlog.err("branch_sync_watch: posting to discord", e)
             return 1        # do NOT record as seen; retry next run rather than swallow the alert
 
+    # Deliberately OUTSIDE the "did the set change" test above. That test asks whether the REPORT is
+    # news; this asks whether the agent has ever been given this conflict, and the two are different
+    # questions. The branches in this report had been stuck, unchanged and unattended, for months —
+    # under the old flow that sameness was exactly what kept anything from happening.
+    for br in dispatch(stuck, run, state):
+        print("M4 dispatched for", br)
+
+    state.update({"stuck": sorted(names), "run": run["databaseId"],
+                  "generated": status["generated"]})
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps({"stuck": sorted(names), "run": run["databaseId"],
-                                 "generated": status["generated"]}, indent=1))
+    STATE.write_text(json.dumps(state, indent=1))
     return 0
 
 

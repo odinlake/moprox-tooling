@@ -13,3 +13,8 @@ Environment=HOME=/home/mikael
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/home/mikael/.config/claude-dev/discord.env
 ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/theming/branch_sync_watch.py
+# This used to be a fetch-and-post that finished in seconds, so the systemd default of 90s was
+# invisible. It now wakes the theming agent for a new conflict — up to 3 runs at a 900s timeout
+# each — and at the default this unit would be KILLED mid-resolution, leaving a half-done merge in
+# the agent's checkout and a "conflict dispatched" line with nothing behind it.
+TimeoutStartSec=3600
