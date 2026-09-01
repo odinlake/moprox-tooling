@@ -28,7 +28,7 @@ import discord_api                 # noqa: E402  — the estate's one Discord tr
 REPO = os.environ.get("THEMING_REPO", "theme-ontology/theming")
 WORKFLOW = "branch-sync.yml"
 STATE = Path.home() / ".local/share/moprox/branch-sync-seen.json"
-STUCK = ("conflict", "push-rejected", "error")
+STUCK = ("conflict", "push-rejected", "needs-pr", "error")
 
 
 def gh(*args, check=True):
@@ -63,31 +63,56 @@ def latest_status():
 
 
 def render(status, run, stuck, cleared):
+    """The message a human reads at a glance.
+
+    LEAD WITH ONE CONCRETE FACT, then the counts. The old version pasted every conflicting path and
+    the first 300 characters of git's push error, which for a push rejection is four lines of
+    generic `hint:` text that says the same thing for every branch and names nothing. That is a dump,
+    not a report: it took a session of digging to learn that two of the branches had no conflict at
+    all. So each line now says WHERE the first conflict is -- file and line -- and what the two
+    sides actually put there, which is the thing a person needs before deciding anything.
+    """
     lines = []
     for b in stuck:
-        files = ", ".join(b.get("conflict_files") or [])[:180]
-        detail = files or (b.get("error") or "")
-        # The workflow probes, read-only, whether a rebase would apply where the merge did not.
-        # That probe is DIAGNOSIS, not a recommendation, and this message used to read it as one:
-        # it told the operator to dispatch branch-sync with strategy=rebase. The repo is merge-only
-        # on purpose (theming's branch-sync.yml says why: a merge records the resolution once, a
-        # rebase replays the branch's commits every sync and re-fights the same conflict, on
-        # branches other people have). Rebase exists only as a manual dispatch and is not ours to
-        # suggest.
-        #
-        # What the probe is still worth saying: if a rebase would apply, the conflict is about the
-        # ORDER the commits arrive in rather than two people changing the same lines — so resolving
-        # the merge is mechanical rather than a judgement call.
-        hint = ""
-        if b.get("rebase_would_apply") is True:
-            hint = " — ordering, not content: the merge should resolve mechanically"
-        lines.append("**%s** — %s (%s ahead, %s behind)%s%s"
-                     % (b["branch"], b["action"], b["ahead"], b["behind"], hint,
-                        "\n  ↳ " + detail if detail else ""))
+        first = b.get("conflict_first") or {}
+        files = b.get("conflict_files") or []
+        head = "**%s** — %s (%s ahead, %s behind)" % (b["branch"], b["action"], b["ahead"], b["behind"])
+        if b.get("action") == "needs-pr":
+            # Not a fault: master and dev-* are protected on purpose, so the sync can compute the
+            # merge but a human has to land it. Saying so stops it reading like a broken job.
+            lines.append(head + "\n  ↳ protected branch — the merge is ready but only a "
+                                "human-reviewed PR can land it")
+            continue
+        if first.get("file"):
+            where = "%s:%s" % (first["file"], first.get("line") or "?")
+            lines.append(head + "\n  ↳ first conflict at `%s` — %s" % (where, first.get("why", "")))
+            for side, label in (("ours", "branch"), ("theirs", "master")):
+                if first.get(side):
+                    lines.append("      %-7s %s" % (label + ":", "; ".join(first[side])[:150]))
+            if len(files) > 1:
+                lines.append("      and %d more file(s): %s" % (len(files) - 1,
+                                                                ", ".join(files[1:4])))
+        elif files:
+            lines.append(head + "\n  ↳ %d file(s): %s" % (len(files), ", ".join(files[:3])))
+        else:
+            # A push error's useful part is its FIRST line; the rest is git's generic hint block.
+            detail = (b.get("error") or "").strip().splitlines()
+            useful = next((ln for ln in detail if "hint:" not in ln and ln.strip()
+                           and not ln.startswith("To ")), detail[0] if detail else "")
+            lines.append(head + ("\n  ↳ " + useful[:180] if useful else ""))
     if cleared:
         lines.append("Cleared since last check: " + ", ".join(sorted(cleared)))
+    auto = [b for b in status["branches"] if b.get("auto_resolved")]
+    if auto:
+        lines.append("Settled mechanically (equivalent content, not a disagreement): "
+                     + "; ".join("%s %d hunk(s)" % (b["branch"], len(b["auto_resolved"]))
+                                 for b in auto[:5]))
     counts = ", ".join("%s %s" % (v, k) for k, v in sorted(status["summary"].items()))
     lines.append("_%s · base %s · %s_" % (counts, status.get("base_sha", "?"), run["url"]))
+    # This posts through the same bot account M4 replies from, so it looks like M4 spoke — and it
+    # is not M4, it is a cron job with no ability to reason about what it just pasted. Say so, and
+    # point at the thing that CAN: @M4 reads this channel and can open the repo.
+    lines.append("_automated report — @M4 for a diagnosis of any line_")
     return "\n".join(lines)
 
 
