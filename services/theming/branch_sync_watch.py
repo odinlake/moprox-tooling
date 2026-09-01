@@ -170,16 +170,24 @@ version, do not "improve" either. Report it instead. This repo is a curated know
 AGENTS.md is built around human review; that is the whole reason you have a narrow remit here.
 
 If you do resolve it:
-  1. Work in ~/projects/theming. Fetch first. `git switch -c t origin/%(branch)s` then
-     `git merge origin/master`, fix the conflicted hunks, and check the result with
-     `git diff origin/master -- <file>` — you should be able to say exactly what survived and why.
+  1. Work in ~/projects/theming. Fetch first, then
+     `git switch -c ai-feature-sync-%(branch)s origin/%(branch)s` — that exact name, from the
+     start, because it is the name it has to be pushed under and renaming later wastes a step.
+     Never put the word "master" in a branch name. Then `git merge origin/master`, fix the
+     conflicted hunks, and check with `git diff origin/master -- <file>` — you should be able to
+     say exactly what survived and why.
   2. VALIDATE before anything leaves the machine:
        PYTHONPATH=~/projects/python-totolo python3 -c \
          "import totolo; o=totolo.files('./notes'); assert len(o.story)>0 and len(o.theme)>0"
      If that fails, or you cannot run it, do NOT push — open a PR and say it is unvalidated.
-  3. LANDING IT: `%(branch)s` is %(sensitivity)s.
-     %(landing)s
-  4. Never force-push, never touch master or a dev-* branch directly, never merge your own PR.
+  3. LANDING IT — always a PR, whatever the branch. Push `ai-feature-sync-%(branch)s` and
+     `gh pr create --base %(branch)s`. %(sensitivity)s
+     The clone's pre-push hook refuses any branch not named `ai-feature-*`, protected or not,
+     because AGENTS.md rules 2 and 3 say AI work lives on an ai-feature branch and lands through a
+     PR. That applies to an unprotected branch like `expanse` exactly as much as to master.
+  4. Never bypass the pre-push hook (it says so itself), never force-push, never touch master or a
+     dev-* branch directly, never merge your own PR. If a push is refused, say so plainly and leave
+     the branch ready — do not invent a way around it. That is the correct outcome, not a failure.
 
 Then post ONE Discord message to channel %(channel)s: what the conflict actually was, in one or two
 sentences, what you did about it, and the link. Lead with the concrete finding — file and line and
@@ -218,17 +226,19 @@ def dispatch(stuck, run, state):
                     "; ".join(first.get("ours") or []) or "(nothing)",
                     "; ".join(first.get("theirs") or []) or "(nothing)")
                  ) if first.get("file") else "(the workflow reported no hunk detail)"
-        sens = ("PROTECTED" if protected(b["branch"]) else "not protected")
-        landing = ("Open a PR: branch `ai-feature-sync-%s` off origin/%s, commit the merge there, "
-                   "push it and `gh pr create` into `%s`. Only a human may land it."
-                   % (b["branch"], b["branch"], b["branch"])) if protected(b["branch"]) else (
-                   "Push the merge straight to `%s`. A merge only appends, so every clone still "
-                   "fast-forwards." % b["branch"])
+        # The operator's first instinct was "push straight to unprotected branches", and the repo
+        # overruled it: the clone's pre-push hook implements AGENTS.md rules 2-3 and refuses any
+        # branch not named ai-feature-*. M4 hit that on its first live run, correctly refused to
+        # pass --no-verify, and said so. So the landing is a PR every time; protection only changes
+        # who may merge it.
+        sens = ("It is a PROTECTED branch, so only a human may merge that PR."
+                if protected(b["branch"]) else
+                "It is unprotected, but the hook applies all the same — see below.")
         try:
             reply = run_agent("theming", PROMPT % {
                 "branch": b["branch"], "ahead": b["ahead"], "behind": b["behind"],
                 "files": ", ".join(b.get("conflict_files") or []) or "(none listed)",
-                "first": where, "url": run["url"], "sensitivity": sens, "landing": landing,
+                "first": where, "url": run["url"], "sensitivity": sens,
                 "channel": discord_api.channel()}, timeout=900)
             print("dispatched %s -> %s" % (b["branch"], (reply or "")[:120]))
             done.append(b["branch"])

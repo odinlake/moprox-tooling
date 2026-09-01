@@ -46,8 +46,17 @@ THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/them
 # direct master/main pushes, the dangerous `gh` verbs (merge a PR, delete/archive a repo), and the
 # usual catastrophic/outward commands. Plain `git push` of a feature branch and `gh pr create` ARE
 # allowed; server-side branch protection on master/main is the real backstop for "no self-merge".
+# `git push *master*` used to be in here. It matches the BRANCH NAME, not the target ref, so it
+# refused `git push origin ai-feature-expanse-master-sync` -- a correctly-named ai-feature branch
+# whose only sin was the word "sync-to-master" in it (2026-09-01, first live conflict dispatch). It
+# would equally refuse a perfectly ordinary `ai-feature-add-mastery-theme`. Narrowed to the refspec
+# forms that actually push TO master/main. The real guard is the pre-push hook in the agent's clone,
+# which parses the remote ref rather than grepping the command line, and refuses master, dev-*, and
+# anything not named ai-feature-*; this list is the belt to its braces.
 THEMING_DENY = ",".join("Bash(%s)" % p for p in (
-    "git push --force:*", "git push -f:*", "git push *master*", "git push origin master:*",
+    "git push --force:*", "git push -f:*",
+    "git push *:master", "git push *:main", "git push * master", "git push * main",
+    "git push origin master:*",
     "git reset --hard:*", "git clean:*", "sudo:*", "rm:*", "reboot:*", "shutdown:*",
     "dd:*", "mkfs:*", "gh pr merge:*", "gh repo delete:*", "gh repo archive:*"))
 AGENT_FLAGS = {
