@@ -49,6 +49,12 @@ DISPATCH = os.environ.get("BRANCH_SYNC_DISPATCH", "1") != "0"
 # 2026-09-01). Kept as a prefix list rather than an API probe so this file has no extra failure mode
 # — if it is wrong it is wrong towards MORE review, and the push would be refused anyway.
 PROTECTED_PREFIXES = ("master", "main", "dev-")
+# Requested on every sync PR, and assigned. GitHub refuses to make the AUTHOR a reviewer, and the
+# author here is odinlake-ai — a different account from odinlake — so both of these are eligible.
+# The PRs that started this had NO reviewers, which is why the operator kept having to request a
+# review from himself before he could approve one.
+PR_REVIEWERS = [r for r in os.environ.get("BRANCH_SYNC_REVIEWERS",
+                                          "odinlake,paul-sheridan").split(",") if r]
 
 
 def gh(*args, check=True):
@@ -134,6 +140,70 @@ def render(status, run, stuck, cleared):
     # point at the thing that CAN: @M4 reads this channel and can open the repo.
     lines.append("_automated report — @M4 for a diagnosis of any line_")
     return "\n".join(lines)
+
+
+def gh_raw(args):
+    """(returncode, stdout, stderr) from `gh`. Status codes matter here — 409 is a real answer."""
+    r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=180)
+    return r.returncode, r.stdout.strip(), (r.stderr or "").strip()
+
+
+def sync_pr(branch):
+    """Keep a PROTECTED branch's sync PR open and current. Returns a one-line status, or None.
+
+    Done entirely through the GitHub API — no clone, no local git, no agent. Merging master into a
+    branch is mechanical: there is nothing here for a model to decide unless it conflicts, and
+    /repos/../merges performs the merge server-side and answers 409 when it cannot. So the ordinary
+    case costs one HTTP call and cannot go wrong in an interesting way; only a genuine conflict
+    wakes M4.
+
+    Idempotent by construction: it merges into the same ai-feature-sync-<branch> head every time, so
+    a branch that drifts further just gets more commits on the PR that is already open, which is
+    what "keep me updated while it is open" means. A second PR would be noise, not an update.
+    """
+    head = "ai-feature-sync-%s" % branch
+    rc, sha, _ = gh_raw(["api", "repos/%s/git/ref/heads/%s" % (REPO, head), "--jq", ".object.sha"])
+    if rc != 0:
+        rc, base_sha, err = gh_raw(["api", "repos/%s/git/ref/heads/%s" % (REPO, branch),
+                                    "--jq", ".object.sha"])
+        if rc != 0:
+            errlog.err("branch_sync_watch: cannot read %s to start its sync branch: %s"
+                       % (branch, err[:200]))
+            return None
+        rc, _, err = gh_raw(["api", "repos/%s/git/refs" % REPO, "--method", "POST",
+                             "-f", "ref=refs/heads/%s" % head, "-f", "sha=%s" % base_sha])
+        if rc != 0:
+            errlog.err("branch_sync_watch: cannot create %s: %s" % (head, err[:200]))
+            return None
+
+    rc, out, err = gh_raw(["api", "repos/%s/merges" % REPO, "--method", "POST",
+                           "-f", "base=%s" % head, "-f", "head=master",
+                           "-f", "commit_message=Merge master into %s (branch sync)" % branch])
+    if rc != 0 and ("409" in err or "conflict" in err.lower()):
+        return "CONFLICT"                       # the caller escalates this one to M4
+    if rc != 0:
+        errlog.err("branch_sync_watch: merging master into %s failed: %s" % (head, err[:200]))
+        return None
+    moved = bool(out and out != "null")         # 204 (empty) means already up to date
+
+    rc, existing, _ = gh_raw(["pr", "list", "--repo", REPO, "--head", head, "--state", "open",
+                              "--json", "number", "--jq", ".[0].number"])
+    if existing:
+        return ("PR #%s updated — %s drifted further" % (existing, branch)) if moved else None
+    if not moved:
+        return None                             # nothing to propose and nothing open: silence
+    rc, url, err = gh_raw(["pr", "create", "--repo", REPO, "--base", branch, "--head", head,
+                           "--title", "Sync %s with master" % branch,
+                           "--body", "Keeps `%s` current with master. Opened automatically because "
+                                     "`%s` is a protected branch, so the nightly branch-sync job "
+                                     "can compute this merge but cannot push it.\n\nMerge commits "
+                                     "only — no content originates here." % (branch, branch),
+                           "--assignee", ",".join(PR_REVIEWERS),
+                           "--reviewer", ",".join(PR_REVIEWERS)])
+    if rc != 0:
+        errlog.err("branch_sync_watch: opening the sync PR for %s failed: %s" % (branch, err[:200]))
+        return None
+    return "PR opened for %s: %s" % (branch, url.splitlines()[-1] if url else "(no url)")
 
 
 def protected(branch):
@@ -242,8 +312,11 @@ def dispatch(stuck, run, state):
         # on a branch, which the branch-sync Action already does unattended everywhere else. So an
         # unprotected branch takes the merge directly. Only master and dev-* — the two GitHub
         # actually protects — need a PR, and there it is a human who must land it.
-        sens = ("`%s` is PROTECTED. Open a PR: push `ai-feature-sync-%s` and "
-                "`gh pr create --base %s`. Only a human may merge it."
+        sens = ("`%s` is PROTECTED. Open a PR: push `ai-feature-sync-%s`, then `gh pr create "
+                "--base %s --reviewer " + ",".join(PR_REVIEWERS) + " --assignee "
+                + ",".join(PR_REVIEWERS) + "`. NEVER open a PR with no reviewer requested — the "
+                "operator then has to request a review from himself before he can approve it. "
+                "Only a human may merge it."
                 % ((b["branch"],) * 3) if protected(b["branch"]) else
                 "`%s` is not protected, so land the merge on it DIRECTLY — "
                 "`git push origin ai-feature-sync-%s:%s`. No PR: a pull request asking someone to "
@@ -305,7 +378,30 @@ def main():
     # news; this asks whether the agent has ever been given this conflict, and the two are different
     # questions. The branches in this report had been stuck, unchanged and unattended, for months —
     # under the old flow that sameness was exactly what kept anything from happening.
-    for br in dispatch(stuck, run, state):
+    # Protected branches: keep a sync PR open and current. Triggered on BEHIND, not on the action
+    # label — "push-rejected" and "needs-pr" are the same fact wearing two names depending on
+    # whether theming#706 has landed, and a branch that has drifted needs the PR either way.
+    notes, conflicted = [], []
+    for b in status["branches"]:
+        if not protected(b["branch"]) or b["branch"] in ("master", "main"):
+            continue
+        if int(b.get("behind") or 0) <= 0:
+            continue
+        r = sync_pr(b["branch"])
+        if r == "CONFLICT":
+            # Only now is there a decision to make, so only now is an agent worth waking.
+            conflicted.append(dict(b, action="conflict",
+                                   conflict_files=b.get("conflict_files") or []))
+        elif r:
+            notes.append(r)
+    if notes:
+        try:
+            discord_api.post("\n".join("🔀 " + n for n in notes))
+            print("posted:", "; ".join(notes))
+        except Exception as e:
+            errlog.err("branch_sync_watch: posting the sync-PR note failed", e)
+
+    for br in dispatch(stuck + conflicted, run, state):
         print("M4 dispatched for", br)
 
     state.update({"stuck": sorted(names), "run": run["databaseId"],
