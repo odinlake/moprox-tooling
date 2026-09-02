@@ -135,7 +135,8 @@ def render(status, run, stuck, cleared):
                      + "; ".join("%s %d hunk(s)" % (b["branch"], len(b["auto_resolved"]))
                                  for b in auto[:5]))
     counts = ", ".join("%s %s" % (v, k) for k, v in sorted(status["summary"].items()))
-    lines.append("_%s · base %s · %s_" % (counts, status.get("base_sha", "?"), run["url"]))
+    lines.append("_%s · base %s · %s_"
+                 % (counts, status.get("base_sha", "?"), discord_api.link("run", run["url"])))
     # This posts through the same bot account M4 replies from, so it looks like M4 spoke — and it
     # is not M4, it is a cron job with no ability to reason about what it just pasted. Say so, and
     # point at the thing that CAN: @M4 reads this channel and can open the repo.
@@ -190,7 +191,11 @@ def sync_pr(branch):
     rc, existing, _ = gh_raw(["pr", "list", "--repo", REPO, "--head", head, "--state", "open",
                               "--json", "number", "--jq", ".[0].number"])
     if existing:
-        return ("PR #%s updated — %s drifted further" % (existing, branch)) if moved else None
+        if not moved:
+            return None
+        return "%s drifted further — %s updated" % (
+            branch, discord_api.link("PR #%s" % existing,
+                                     "https://github.com/%s/pull/%s" % (REPO, existing)))
     if not moved:
         return None                             # nothing to propose and nothing open: silence
     rc, url, err = gh_raw(["pr", "create", "--repo", REPO, "--base", branch, "--head", head,
@@ -204,7 +209,9 @@ def sync_pr(branch):
     if rc != 0:
         errlog.err("branch_sync_watch: opening the sync PR for %s failed: %s" % (branch, err[:200]))
         return None
-    return "PR opened for %s: %s" % (branch, url.splitlines()[-1] if url else "(no url)")
+    u = (url.splitlines()[-1] if url else "").strip()
+    num = u.rsplit("/", 1)[-1] if u else "?"
+    return "%s behind master — %s" % (branch, discord_api.link("PR #" + num, u) if u else "PR opened")
 
 
 def merge_approved_sync_prs():
@@ -307,8 +314,12 @@ If you do resolve it:
 POSTING. ONE Discord message to channel %(channel)s, and a HARD CEILING OF 400 CHARACTERS. Not a
 target — a limit. Three lines at most:
 
-    **`<branch>` synced** — <what the conflict was, one clause> · PR #<n>
+    **`<branch>` synced** — <what the conflict was, one clause> · [PR #<n>](<<pr url>>)
     <one line only if a human must decide something, saying exactly what>
+
+Link from the NUMBER, never paste the URL: `[PR #715](<https://.../pull/715>)`. The angle brackets
+inside the target are what stop Discord expanding it into a preview card, and the reader gets a
+short clickable reference instead of forty characters of github.com path.
 
 That channel has several human readers who do not run this estate and did not ask for a status
 report. Your last run posted 11,000 characters across nine messages about three one-line outcomes,

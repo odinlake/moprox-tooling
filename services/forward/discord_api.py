@@ -84,6 +84,16 @@ def _wrap(m):
     return "<%s>%s" % (u, m.group(1)[len(u):])
 
 
+def link(text, url):
+    """A masked link that renders no preview: [text](<url>).
+
+    Discord shows only `text`, and the angle brackets INSIDE the target are what suppress the embed
+    — a plain [text](url) can still expand into a preview card. Use this instead of pasting a bare
+    URL: "PR #715" reads better than forty characters of github.com path, and carries the same click.
+    """
+    return "[%s](<%s>)" % (text, url)
+
+
 def suppress_previews(text):
     """Wrap bare URLs in <> so Discord does not expand them into preview cards.
 
