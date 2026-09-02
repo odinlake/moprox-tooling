@@ -16,7 +16,7 @@ Both post + post_file are logged to the shared convo store (like tg), so Discord
 timeline. Because the file is uploaded from THIS process, there is no cross-process /tmp visibility
 problem (the failure mode of the old bridge-side ATTACH-marker relay).
 """
-import json, mimetypes, os, urllib.error, urllib.request
+import json, re, mimetypes, os, urllib.error, urllib.request
 from pathlib import Path
 
 import convo   # shared conversation log
@@ -63,6 +63,44 @@ def _post(url, data, headers):
         urllib.request.Request(url, data=data, headers=headers, method="POST"), timeout=30))
 
 
+# A bare URL makes Discord render a preview card, which for a PR link is several lines of
+# repository chrome under a one-line message. `<angle brackets>` suppress it. Every agent context in
+# the estate already says to do this and it still gets forgotten, so the transport does it — the
+# same reason tg.py owns the #handle rather than trusting each caller to remember.
+# No trailing lookahead here on purpose: one used to be, to avoid double-wrapping, and it made the
+# match BACKTRACK — "(see https://example.com/z)" wrapped as "<https://example.com/>z" because the
+# shorter match was the one whose next character satisfied the lookahead. The leading lookbehind
+# already covers everything it was there for.
+_BARE_URL = re.compile(r"""
+    (?<![<(\[`])                 # not already wrapped, and not a markdown link's ( or [
+    (https?://[^\s<>()\[\]`]+)   # the url, stopping at whitespace or a bracket of any kind
+""", re.VERBOSE)
+_TRAILING = ".,;:!?'\""
+
+
+def _wrap(m):
+    """Wrap one url, leaving sentence punctuation that merely follows it outside the brackets."""
+    u = m.group(1).rstrip(_TRAILING)
+    return "<%s>%s" % (u, m.group(1)[len(u):])
+
+
+def suppress_previews(text):
+    """Wrap bare URLs in <> so Discord does not expand them into preview cards.
+
+    Leaves alone anything already wrapped, any markdown link's target, and anything inside a code
+    span or fence — where Discord renders no preview anyway and angle brackets would show up as
+    literal characters in the code.
+    """
+    out, i = [], 0
+    # Split on code fences and spans first; only rewrite what falls outside them.
+    for m in re.finditer(r"```.*?```|`[^`\n]*`", text or "", re.DOTALL):
+        out.append(_BARE_URL.sub(_wrap, text[i:m.start()]))
+        out.append(m.group(0))
+        i = m.end()
+    out.append(_BARE_URL.sub(_wrap, (text or "")[i:]))
+    return "".join(out)
+
+
 def post(text, channel_id=None, reply_to=None):
     """Post a message to the channel (auto-chunked to <2000). reply_to threads it under that message.
     Returns the last created message dict (has 'id'). Mentions are disabled (safe in a shared server)."""
@@ -71,6 +109,7 @@ def post(text, channel_id=None, reply_to=None):
         raise SystemExit("discord_api: missing DISCORD_BOT_TOKEN / DISCORD_CHANNEL_ID")
     url = "%s/channels/%s/messages" % (API, chan)
     hdr = {"Authorization": "Bot %s" % tok, "Content-Type": "application/json", "User-Agent": UA}
+    text = suppress_previews(text)
     last, first = None, True
     for chunk in _chunks(text):
         payload = {"content": chunk, "allowed_mentions": {"parse": []}}
