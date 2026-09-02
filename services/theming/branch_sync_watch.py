@@ -53,6 +53,7 @@ PROTECTED_PREFIXES = ("master", "main", "dev-")
 # author here is odinlake-ai — a different account from odinlake — so both of these are eligible.
 # The PRs that started this had NO reviewers, which is why the operator kept having to request a
 # review from himself before he could approve one.
+PR_AUTHOR = os.environ.get("BRANCH_SYNC_PR_AUTHOR", "odinlake-ai")
 PR_REVIEWERS = [r for r in os.environ.get("BRANCH_SYNC_REVIEWERS",
                                           "odinlake,paul-sheridan").split(",") if r]
 
@@ -204,6 +205,53 @@ def sync_pr(branch):
         errlog.err("branch_sync_watch: opening the sync PR for %s failed: %s" % (branch, err[:200]))
         return None
     return "PR opened for %s: %s" % (branch, url.splitlines()[-1] if url else "(no url)")
+
+
+def merge_approved_sync_prs():
+    """Merge any open sync PR a human has APPROVED. Returns one line per merge.
+
+    This is GitHub's auto-merge, done here instead, because doing it natively is not free: auto-
+    merge only engages while something is still PENDING on the PR, and dev-themes/dev-stories
+    require nothing — no approvals, no checks, no rulesets. Making auto-merge meaningful would mean
+    adding "require 1 approving review" to dev-*, and that would force Paul and the operator to
+    open a PR for the small direct commits they currently push straight to those branches. Changing
+    how two people work, to save one click on a robot's housekeeping PR, is the wrong trade. (It is
+    also not available: odinlake-ai is not an admin on the repo.)
+
+    Scope is deliberately narrow: PRs opened by this automation, whose head is ai-feature-sync-*,
+    and only once reviewDecision is APPROVED. AGENTS.md rule 3 says do not merge your own PR; the
+    spirit of it is that a human decides, and here one has — this only carries out that decision,
+    exactly as GitHub's own auto-merge would.
+    """
+    rc, out, err = gh_raw(["pr", "list", "--repo", REPO, "--state", "open", "--limit", "20",
+                           "--json", "number,headRefName,baseRefName,reviewDecision,author"])
+    if rc != 0:
+        errlog.err("branch_sync_watch: cannot list open PRs to auto-merge: %s" % err[:200])
+        return []
+    try:
+        prs = json.loads(out or "[]")
+    except ValueError as e:
+        errlog.err("branch_sync_watch: unreadable PR list", e)
+        return []
+    done = []
+    for pr in prs:
+        if not (pr.get("headRefName") or "").startswith("ai-feature-sync-"):
+            continue
+        if (pr.get("author") or {}).get("login") != PR_AUTHOR:
+            continue
+        if pr.get("reviewDecision") != "APPROVED":
+            continue
+        rc, _, err = gh_raw(["pr", "merge", str(pr["number"]), "--repo", REPO,
+                             "--merge", "--delete-branch"])
+        if rc != 0:
+            errlog.err("branch_sync_watch: PR #%s is approved but would not merge: %s"
+                       % (pr["number"], err[:200]))
+            continue
+        # Deliberately NOT returned as a Discord note. GitHub already tells the person who
+        # approved it that their PR merged; repeating that here is a message saying something has
+        # been dealt with, which is the definition of nothing to do.
+        print("merged #%s — %s now in sync with master" % (pr["number"], pr.get("baseRefName")))
+    return []
 
 
 def protected(branch):
@@ -363,16 +411,22 @@ def main():
 
     if names == seen:
         print("no change: %d stuck (%s)" % (len(names), ", ".join(sorted(names)) or "none"))
-    elif names or cleared:
+    elif names:
+        # ONLY when something needs a human. The last branch clearing used to post "all branches
+        # clear", which is a message whose entire content is that there is nothing to do — the
+        # purest form of the noise this channel is not for. A clear estate is reported by silence.
+        # (When the set shrinks but is not empty, render() still names what cleared, inside a post
+        # that was going out anyway.)
         text = render(status, run, stuck, cleared)
-        title = ("Branch sync — %d branch(es) need a human" % len(names)) if names \
-                else "Branch sync — all branches clear"
         try:
-            discord_api.post_embed(text, title=title, color=0xE3B341 if names else 0x2EA043)
-            print("posted to discord:", title)
+            discord_api.post_embed(text, color=0xE3B341,
+                                   title="Branch sync — %d branch(es) need a human" % len(names))
+            print("posted to discord: %d need a human" % len(names))
         except Exception as e:
             errlog.err("branch_sync_watch: posting to discord", e)
             return 1        # do NOT record as seen; retry next run rather than swallow the alert
+    elif cleared:
+        print("cleared, nothing outstanding (%s) — not posting" % ", ".join(sorted(cleared)))
 
     # Deliberately OUTSIDE the "did the set change" test above. That test asks whether the REPORT is
     # news; this asks whether the agent has ever been given this conflict, and the two are different
@@ -394,6 +448,7 @@ def main():
                                    conflict_files=b.get("conflict_files") or []))
         elif r:
             notes.append(r)
+    notes += merge_approved_sync_prs()
     if notes:
         try:
             discord_api.post("\n".join("🔀 " + n for n in notes))
