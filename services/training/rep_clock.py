@@ -32,7 +32,8 @@ two sessions carrying an athlete-declared plan the fit returns that plan verbati
 rhythm is the athlete executing a plan by hand, and rep count, rep length and recovery length are
 therefore ALL athlete decisions, as are the target speed and any speed reduction inside a rep.
 Consistent with that, the residuals are late-skewed rather than symmetric: 130 of 178 are exactly
-0, and of the 35 integer-second nonzero residuals 27 are late and 8 early (sign test p ~ 0.002).
+0, and of the 35 integer-second nonzero residuals inside the +-2 s band (i.e. excluding 1062's
++77 s, which is the broken rhythm and not scatter) 27 are late and 8 early, sign test p ~ 0.002.
 Reaction lag against a displayed clock is a candidate for the skew, not a demonstrated cause.
 
 PARTIAL REPS ARE A THIRD STATE. `completed_reps` is an integer and cannot say "started it and
