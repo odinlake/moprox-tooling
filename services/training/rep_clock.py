@@ -3,7 +3,7 @@
 The estate has been taking rep counts from the athlete: `private-data/agents/coach/
 session-structures.json` carries `planned_reps` / `completed_reps` for 5 of the 33 interval sessions
 in `technogym/cardio`, and `technogym-export-lane.md` tells readers to go there for rep schemes. It
-does not have to. The console runs the reps on a clock, so the trace already knows.
+does not have to: the belt trace carries the reps directly.
 
 COUNT BY DIP-MERGE, NOT BY CLOCK. A rep is a contiguous run at or above WORK_KPH, joined to the
 next one when the gap between them is short (< DIP_GAP_S) and never drops below DIP_FLOOR_KPH —
@@ -11,21 +11,29 @@ a threshold re-crossing inside one rep, not a new rep. That is the whole counter
 the earlier 301+180k lattice filter on 28 of 33 sessions and is right on all 5 where they differ
 (see `rep-clock-dip-merge-beats-lattice`); the lattice had no session it alone got right.
 
-THE CLOCK IS PER SESSION, AND IT IS EXACT. Fit `t = anchor + period*k` to one session's own onsets
+THE RHYTHM IS PER SESSION, AND IT IS EXACT. Fit `t = anchor + period*k` to one session's own onsets
 and the fit is near-perfect: over the 28 sessions with >= 3 merged onsets (178 onsets,
-2025-12-30..2026-08-28), 27 sit inside +-2.0 s and exactly one onset in the whole corpus departs
-from its own session's clock — idCr 1062, 2026-06-05, rep 5 at +77.0 s. So the clock is not a
-counter, it is a DETECTOR: a residual above CLOCK_TOL_S is an athlete-side event.
+2025-12-30..2026-08-28), 177 sit inside +-2.0 s and exactly one onset in the whole corpus departs
+from its own session's rhythm — idCr 1062, 2026-06-05, rep 5 at +77.0 s. So the fit is not a
+counter, it is a DETECTOR: a residual above CLOCK_TOL_S marks the one onset that broke the rhythm
+the rest of that session kept.
 
 The period is a session constant but NOT a corpus constant, and not always a multiple of 180:
 observed {180.0 x8, 300.0, 328.75, 359.5, 360.0 x13, 360.33 x3}. A fixed 301+180k lattice puts the
 whole of idCr 1016 (period 328.75) 88 s out and the whole of 1024 (period 300.0) 65 s out. PERIOD /
 ANCHOR below are the corpus MODES, kept only as a fallback for sessions too short to fit.
 
-WHAT THIS DOES NOT MEAN. Because the shape is preset, rep count / rep length / recovery length are
-NOT evidence of decisions made during the session — same trap as `technogym-duration-is-cooldown`,
-where the session duration turned out to be cool-down. What is athlete-side is the target speed
-selected, how many reps were run, speed reductions INSIDE a rep, and an off-clock onset.
+IT IS NOT A CONSOLE CLOCK — THAT READING IS WITHDRAWN. All 130 activities in `technogym/cardio`
+carry a machine string ending "Quick Start" (111 "Run 9000 Excite Live: Quick Start", 19 bare):
+no programmed workout ever ran, so nothing on the machine side was keeping this time. On the only
+two sessions carrying an athlete-declared plan the fit returns that plan verbatim — 2026-06-29
+(idCr 1076) declared "1+2 min; wu 5 min" -> period 180.00, anchor 301.0, 10 onsets; 2026-07-20
+(idCr 1089) declared 10x(1'/2') aborted one short -> period 180.00, anchor 301.0, 9 onsets. The
+rhythm is the athlete executing a plan by hand, and rep count, rep length and recovery length are
+therefore ALL athlete decisions, as are the target speed and any speed reduction inside a rep.
+Consistent with that, the residuals are late-skewed rather than symmetric: 130 of 178 are exactly
+0, and of the 35 integer-second nonzero residuals 27 are late and 8 early (sign test p ~ 0.002).
+Reaction lag against a displayed clock is a candidate for the skew, not a demonstrated cause.
 
 PARTIAL REPS ARE A THIRD STATE. `completed_reps` is an integer and cannot say "started it and
 dropped the pace". 2026-08-28 (idCr 1111) is the first instance the estate holds: 5 reps at
@@ -40,7 +48,7 @@ DIP_GAP_S = 30       # gap shorter than this may be a dip inside one rep, not a 
 DIP_FLOOR_KPH = 11.5 # ...but only if the belt never fell below this during the gap
 ANCHOR = 301         # corpus mode of the fitted anchor; fallback only, do not count with it
 PERIOD = 180         # corpus mode of the fitted period; fallback only, do not count with it
-CLOCK_TOL_S = 2      # measured ceiling of per-session console jitter; above it is athlete-side
+CLOCK_TOL_S = 2      # measured ceiling of per-session onset scatter; above it, the rhythm broke
 SLOT_HOLD = 0.6      # kph below onset speed that counts as "not holding target"
 
 
@@ -143,9 +151,9 @@ def reps(activity, rep_s=None):
     length in this session — do not use the onset spacing, which is 180 s for both the 1' and the 4'
     scheme and would score every rep partial.
 
-    Each rep carries `residual_s` against this session's fitted clock and `off_clock` when that
-    exceeds CLOCK_TOL_S. Off-clock is a FINDING, not a rejection — it marks the rep the console did
-    not start, i.e. one the athlete did.
+    Each rep carries `residual_s` against this session's fitted rhythm and `off_clock` when that
+    exceeds CLOCK_TOL_S. Off-clock is a FINDING, not a rejection — it marks a rep started well off
+    the cadence the rest of the session held, e.g. an unplanned pause before it.
     """
     segs = _segments(activity)
     bouts = merged_bouts(activity)
