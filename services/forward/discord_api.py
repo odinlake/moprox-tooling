@@ -94,6 +94,22 @@ def link(text, url):
     return "[%s](<%s>)" % (text, url)
 
 
+def items(lines, marker="\U0001f500"):
+    """Render one item as a plain line, several as a markdown list.
+
+    Discord lays out the FIRST line of a message differently from the ones after it, so a run of
+    plain lines with their own prefixes comes out visibly ragged — the first sits flush and the rest
+    hang. A real `- ` list is indented uniformly by the client, whatever position it starts at. One
+    item needs no list at all; a single bullet is just a bullet.
+    """
+    lines = [l for l in lines if l]
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return "%s %s" % (marker, lines[0]) if marker else lines[0]
+    return "\n".join("- %s" % l for l in lines)
+
+
 def suppress_previews(text):
     """Wrap bare URLs in <> so Discord does not expand them into preview cards.
 

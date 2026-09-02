@@ -317,6 +317,10 @@ target — a limit. Three lines at most:
     **`<branch>` synced** — <what the conflict was, one clause> · [PR #<n>](<<pr url>>)
     <one line only if a human must decide something, saying exactly what>
 
+MORE THAN ONE ITEM IS A MARKDOWN LIST (`- item` per line). Discord lays out the FIRST line of a
+message differently from those after it, so a run of plain prefixed lines comes out ragged. One item
+needs no list.
+
 Link from the NUMBER, never paste the URL: `[PR #715](<https://.../pull/715>)`. The angle brackets
 inside the target are what stop Discord expanding it into a preview card, and the reader gets a
 short clickable reference instead of forty characters of github.com path.
@@ -462,7 +466,7 @@ def main():
     notes += merge_approved_sync_prs()
     if notes:
         try:
-            discord_api.post("\n".join("🔀 " + n for n in notes))
+            discord_api.post(discord_api.items(notes))
             print("posted:", "; ".join(notes))
         except Exception as e:
             errlog.err("branch_sync_watch: posting the sync-PR note failed", e)
