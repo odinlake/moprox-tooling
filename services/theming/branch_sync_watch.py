@@ -14,11 +14,18 @@ WHAT IT POSTS, AND WHAT IT DOES NOT
 
 DISPATCHING M4. A conflict this script can only DESCRIBE is one nobody acts on: the report has been
 posting the same branches for months. So a NEWLY-appearing conflict now wakes the theming agent,
-once, with the diagnosis already in hand. The agent's remit is deliberately narrow (see PROMPT
-below): structural resolutions only — ordering, formatting, a change already upstream under a
-different SHA — never a decision about what the prose SAYS. That line exists because this repo is a
-curated knowledgebase whose AGENTS.md is built around human review; rearranging fields is
-housekeeping, choosing whose wording survives is editorial.
+once, with the diagnosis already in hand. On a PERSON'S branch the agent's remit is deliberately
+narrow (see PROMPT below): structural resolutions only — ordering, formatting, a change already
+upstream under a different SHA — never a decision about what the prose SAYS. That line exists
+because this repo is a curated knowledgebase whose AGENTS.md is built around human review;
+rearranging fields is housekeeping, choosing whose wording survives is editorial.
+
+On an `ai-feature-*` branch it is wider, because the branch is M4's own (operator, 2026-09-04, see
+REBUILD_PROMPT): nobody's prose is at stake, so a conflict it cannot resolve structurally is settled
+by throwing the branch away and building the feature again on today's master — silently, without a
+Discord message, because a machine tidying up after itself is not news. And a conflict on an
+`ai-feature-*` branch with NO open PR wakes nobody at all: that branch is a leftover, and
+services/theming/branch_housekeeping.py retires it on the daily sweep.
 
 Auth: `gh` on claude-dev is odinlake-ai with team write on theme-ontology/theming, which is enough
 to list runs and download artifacts. Discord goes through services/forward/discord_api.py — the same
@@ -284,6 +291,31 @@ def protected(branch):
     return any(branch == pre.rstrip("-") or branch.startswith(pre) for pre in PROTECTED_PREFIXES)
 
 
+AI_PREFIX = "ai-feature-"
+SYNC_PREFIX = "ai-feature-sync-"
+
+
+def open_pr(branch):
+    """The open PR raised from this branch, or None. Cheap; one call, and the answer decides a lot.
+
+    A conflict on an `ai-feature-*` branch means something different depending on this: with an open
+    PR the branch is live work M4 owns and must rebuild (below); without one it is a leftover that
+    services/theming/branch_housekeeping.py retires, and waking an agent to fix a merge nobody will
+    ever land is exactly the spend that kept `ai-feature-sync-oscars` conflicting for three days
+    after its PR was merged.
+    """
+    rc, out, err = gh_raw(["pr", "list", "--repo", REPO, "--head", branch, "--state", "open",
+                           "--limit", "5", "--json", "number,url,title"])
+    if rc != 0:
+        errlog.warn("branch_sync_watch: cannot check %s for an open PR: %s" % (branch, err[:200]))
+        return None
+    try:
+        prs = json.loads(out or "[]")
+    except ValueError:
+        return None
+    return prs[0] if prs else None
+
+
 def sig(b):
     """What makes a conflict THIS conflict. Re-dispatch when it changes, not when it recurs.
 
@@ -360,6 +392,88 @@ explanation of why.
 Return a one-line status: what you did, and any local blocker in full. That line is for the estate,
 not the channel, so put the machine detail THERE."""
 
+# The same conflict on a branch M4 itself raised is a different job, so it gets a different brief.
+# The prompt above is written around a curated knowledgebase whose prose belongs to people: its
+# whole shape is "resolve form, never meaning, escalate the rest". None of that applies to an
+# `ai-feature-*` branch — no human wrote a line on it, so there is nobody to escalate to and nothing
+# to arbitrate. The operator's rule (2026-09-04) is that M4 owns those branches outright: resolve it
+# if you can, and otherwise throw the branch away and build the feature again on today's master,
+# without troubling the channel about it.
+REBUILD_PROMPT = """A branch-sync conflict in theme-ontology/theming needs you, and this branch is
+one of YOURS. The nightly job could not merge master into `%(branch)s`, and the mechanical resolver
+in .github/scripts/branch_sync.py already declined it — so this is not ordering or whitespace.
+
+  branch:   %(branch)s (%(ahead)s ahead, %(behind)s behind master)
+  files:    %(files)s
+  first:    %(first)s
+  run:      %(url)s
+  PR:       %(pr)s
+
+`ai-feature-*` branches are machine-owned. You raised this one; no human authored a line on it, so
+there is no one's wording to arbitrate and nobody to escalate to. THE RULE: resolve it if you can,
+and if you cannot, WIPE THE BRANCH AND REBUILD THE FEATURE AGAINST TODAY'S MASTER. Do not report the
+conflict, and do not ask a human about it.
+
+1. TRY THE STRUCTURAL RESOLUTION FIRST — it is cheaper and it keeps the branch's history. Work in
+   ~/projects/theming; fetch, then `git switch -c resolve-%(branch)s origin/%(branch)s` and
+   `git merge origin/master`. Resolve it if the conflict is about FORM: field or block ORDERING,
+   formatting and whitespace, a duplicate of a change ALREADY on master under a different sha (the
+   usual cause here — the branch's work reached master through a squashed or rebased PR, so git can
+   no longer see the two as the same change), or one side being the other plus more. Check with
+   `git diff origin/master -- <file>`: you should be able to say exactly what survived and why.
+
+2. IF IT IS NOT STRUCTURAL, REBUILD. Do not pick between two versions of the text — start again.
+     a. Work out what this branch was FOR: its PR title and body, and
+        `git diff origin/master...origin/%(branch)s` for the content it actually adds.
+     b. `git switch -c rebuilt-%(branch)s origin/master`, and redo that work against what master
+        says NOW. Rebuild the INTENT, not the diff. The merge failed precisely because master moved
+        underneath the change; replaying the old text is the thing that did not work.
+     c. If master has since done the same thing itself, the rebuild is EMPTY. That is a correct
+        outcome and not a failure: close the PR saying master already covers it, and stop.
+%(sync_note)s
+3. VALIDATE before anything leaves the machine:
+     PYTHONPATH=~/projects/python-totolo python3 -c \
+       "import totolo; o=totolo.files('./notes'); assert len(o.story)>0 and len(o.theme)>0"
+   If that fails, or you cannot run it, do NOT push. Leave the branch alone and say so in your
+   return status.
+
+4. REPLACE THE REF, once and only once you have something validated to put there. Delete the old
+   branch — `gh api --method DELETE repos/%(repo)s/git/refs/heads/%(branch)s` — then push the
+   rebuilt work under the SAME name (`git push origin HEAD:%(branch)s`) so the open PR follows it.
+   Leave ONE PR comment saying the branch was rebuilt on master and naming anything that could not
+   be carried over. Never delete the ref before the replacement exists locally and passes step 3.
+
+5. Never bypass the pre-push hook (it says so itself), never force-push, never merge your own PR.
+   If a push is refused, say so and leave the branch as it stands — that is a correct outcome, not
+   a failure. Do not invent a way around it.
+
+POSTING: NOTHING. Rebuilding your own branch is housekeeping the operator has said explicitly not to
+raise in the channel, and the daily sweep (branch_housekeeping.py) is what speaks for these
+branches. A message saying a machine tidied up after itself is the purest form of the noise that
+channel is not for.%(sync_post)s
+
+NEVER post about this machine — not the local clone, not paths under ~, not hooks, not permissions,
+not what you tried first, not what refused you, not your own reasoning or workflow.
+
+Return a one-line status: which of resolved / rebuilt / rebuild-was-empty / blocked, and any local
+blocker in full. That line reaches the estate journal, which is where machine detail belongs."""
+
+# Only for `ai-feature-sync-<target>`. Such a branch carries no feature at all — its entire content
+# is "master, merged into <target>" — so "rebuild the feature" has no meaning until it is restated
+# as "derive it again from <target>". And its conflict is really a conflict between master and
+# <target>, a branch a person writes on, which is the one case in this path that still belongs to a
+# human.
+SYNC_NOTE = """     d. THIS IS A SYNC BRANCH: it holds no feature of its own, only "master, merged into
+        `%(target)s`". So its rebuild is mechanical — start from `origin/%(target)s` instead of
+        master and merge `origin/master` into it afresh. If THAT still conflicts, then the
+        disagreement is between master and `%(target)s`, a branch somebody else writes on, and
+        arbitrating their prose is not yours to do: stop, change nothing, and report it.
+"""
+SYNC_POST = """ The ONE exception is step 2d — if the rebuild showed the real disagreement is
+between master and `%(target)s`, post that, as ONE Discord message to channel %(channel)s, under
+400 characters: which branch, and what the two sides put at the first conflict. Link from a number
+(`[PR #715](<url>)`), never paste a URL."""
+
 
 def dispatch(stuck, run, state):
     """Wake M4 for conflicts that are new to it. Returns the list of branches dispatched."""
@@ -374,6 +488,17 @@ def dispatch(stuck, run, state):
         return []
     seen = set(state.get("dispatched", []))
     todo = [b for b in stuck if b.get("action") in DISPATCH_ACTIONS and sig(b) not in seen]
+    # An `ai-feature-*` branch with no open PR is not work, it is a leftover, and the daily sweep
+    # deletes it. Waking an agent to resolve a merge into a branch that is about to stop existing
+    # is the spend this guard exists to refuse — it is what happened to `ai-feature-sync-oscars`,
+    # dispatched for a conflict three days after its PR had been merged and its job was done.
+    live = []
+    for b in todo:
+        if b["branch"].startswith(AI_PREFIX) and not open_pr(b["branch"]):
+            print("skipping %s — no open PR; the daily sweep owns it" % b["branch"])
+            continue
+        live.append(b)
+    todo = live
     if not todo:
         return []
     if len(todo) > MAX_DISPATCH:
@@ -407,12 +532,25 @@ def dispatch(stuck, run, state):
                 "review master's own commits arriving on a branch is pure noise. A merge only "
                 "appends, so every clone still fast-forwards."
                 % ((b["branch"],) * 3))
+        fields = {"branch": b["branch"], "ahead": b["ahead"], "behind": b["behind"],
+                  "files": ", ".join(b.get("conflict_files") or []) or "(none listed)",
+                  "first": where, "url": run["url"], "sensitivity": sens, "repo": REPO,
+                  "channel": discord_api.channel()}
+        # Which job this is depends on WHO OWNS THE BRANCH. A conflict on a person's branch is a
+        # disagreement to describe; a conflict on a branch M4 raised is its own mess to clear up.
+        if b["branch"].startswith(AI_PREFIX):
+            pr = open_pr(b["branch"])
+            target = b["branch"][len(SYNC_PREFIX):] if b["branch"].startswith(SYNC_PREFIX) else ""
+            fields["pr"] = (discord_api.link("#%s" % pr["number"], pr["url"]) + " — " + pr["title"]
+                            if pr else "(none)")
+            fields["sync_note"] = (SYNC_NOTE % {"target": target}) if target else ""
+            fields["sync_post"] = (SYNC_POST % {"target": target,
+                                                "channel": fields["channel"]}) if target else ""
+            prompt = REBUILD_PROMPT
+        else:
+            prompt = PROMPT
         try:
-            reply = run_agent("theming", PROMPT % {
-                "branch": b["branch"], "ahead": b["ahead"], "behind": b["behind"],
-                "files": ", ".join(b.get("conflict_files") or []) or "(none listed)",
-                "first": where, "url": run["url"], "sensitivity": sens,
-                "channel": discord_api.channel()}, timeout=900)
+            reply = run_agent("theming", prompt % fields, timeout=900)
             print("dispatched %s -> %s" % (b["branch"], (reply or "")[:120]))
             done.append(b["branch"])
             seen.add(sig(b))

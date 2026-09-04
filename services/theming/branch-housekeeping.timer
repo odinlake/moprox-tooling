@@ -1,0 +1,14 @@
+# Once a day, the operator's cadence. Deliberately AFTER the 04:17 UTC branch-sync workflow and the
+# hourly watcher that reads it: a branch merged and deleted in the same night should already be gone
+# by the time this looks, so it has nothing to announce.
+[Unit]
+Description=Daily theming ai-feature branch housekeeping
+
+[Timer]
+OnCalendar=*-*-* 06:20:00 UTC
+AccuracySec=5min
+# Catch up after a reboot or a box that was off — the whole point is that this happens every day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

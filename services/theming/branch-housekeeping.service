@@ -1,0 +1,18 @@
+# Retire ai-feature-* branches in theme-ontology/theming whose PR has been merged, closed or never
+# opened. The rule is the operator's (2026-09-04): no ai-feature branch without an open PR.
+# Install to /etc/systemd/system/. See branch_housekeeping.py for the policy and its reasoning.
+[Unit]
+Description=moprox theming ai-feature branch housekeeping (retire branches with no open PR)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/mikael/.config/claude-dev/discord.env
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/theming/branch_housekeeping.py
+# Two `gh` calls plus one per ai-feature branch; seconds in practice. Bounded so a hung API call
+# cannot sit here until the next day's firing.
+TimeoutStartSec=600
