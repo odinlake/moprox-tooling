@@ -24,8 +24,10 @@ On an `ai-feature-*` branch it is wider, because the branch is M4's own (operato
 REBUILD_PROMPT): nobody's prose is at stake, so a conflict it cannot resolve structurally is settled
 by throwing the branch away and building the feature again on today's master — silently, without a
 Discord message, because a machine tidying up after itself is not news. And a conflict on an
-`ai-feature-*` branch with NO open PR wakes nobody at all: that branch is a leftover, and
-services/theming/branch_housekeeping.py retires it on the daily sweep.
+`ai-feature-*` branch with no open PR wakes nobody at all: nobody has asked for that branch yet, so
+either it is live work whose author will meet the conflict themselves the next time they touch it,
+or the conversation is over and services/theming/branch_housekeeping.py retires it once it has been
+quiet long enough. Neither is worth an unprompted agent run.
 
 Auth: `gh` on claude-dev is odinlake-ai with team write on theme-ontology/theming, which is enough
 to list runs and download artifacts. Discord goes through services/forward/discord_api.py — the same
@@ -488,10 +490,11 @@ def dispatch(stuck, run, state):
         return []
     seen = set(state.get("dispatched", []))
     todo = [b for b in stuck if b.get("action") in DISPATCH_ACTIONS and sig(b) not in seen]
-    # An `ai-feature-*` branch with no open PR is not work, it is a leftover, and the daily sweep
-    # deletes it. Waking an agent to resolve a merge into a branch that is about to stop existing
-    # is the spend this guard exists to refuse — it is what happened to `ai-feature-sync-oscars`,
-    # dispatched for a conflict three days after its PR had been merged and its job was done.
+    # No open PR means nobody has asked for this branch yet — it is either still being worked on, in
+    # which case its author meets the conflict themselves next time they touch it, or it is a
+    # leftover the daily sweep will retire. Waking an agent unprompted serves neither. That is the
+    # spend this guard refuses: `ai-feature-sync-oscars` was dispatched for a conflict three days
+    # after its PR had been merged and its job was done.
     live = []
     for b in todo:
         if b["branch"].startswith(AI_PREFIX) and not open_pr(b["branch"]):

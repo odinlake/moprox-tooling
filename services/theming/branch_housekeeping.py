@@ -1,30 +1,42 @@
 #!/usr/bin/env python3
 """Retire `ai-feature-*` branches in theme-ontology/theming once their pull request is gone.
 
-THE RULE (operator, 2026-09-04): **no `ai-feature-*` branch should exist without an OPEN PR.**
-Those branches are machine-owned — M4 raises them, a human decides on them — so once the decision
-has been made the branch has no reason to be there, and leaving it costs real work: the nightly
-branch-sync merges master into every live branch, so five dead branches were being kept current
-for months, and one of them (`ai-feature-sync-oscars`, PR merged 2026-09-01) was still generating
+Those branches are machine-owned: M4 raises them, a human decides on them. Once the decision has
+been made the branch has no reason to be there, and leaving it costs real work — the nightly
+branch-sync merges master into every live branch, so five dead branches were being kept current for
+months, and one of them (`ai-feature-sync-oscars`, PR merged 2026-09-01) was still generating
 conflicts and waking M4 for a merge nobody would ever land.
 
-WHAT HAPPENS TO A BRANCH, by what became of its PR:
+THIS IS A GARBAGE COLLECTOR, NOT A RULE. "No ai-feature branch without an open PR" was the first
+draft of this file and the operator corrected it (2026-09-04): a branch may perfectly well exist
+before a PR, or all through an ongoing conversation, and the desired state is implied by the process
+anyway. Nothing here should be read as a norm for M4 to comply with — an agent told that a branch
+must have a PR will open one early to be obedient, which is worse than the mess it prevents. What is
+actually worth detecting is a conversation that was ABANDONED, and a dead conversation has a proxy
+that needs no rule: the branch stopped moving.
 
-  open PR              keep it. This is the only state in which the branch is doing anything.
+WHAT HAPPENS TO A BRANCH:
+
+  open PR              keep it, whatever else is true.
   PR MERGED            the feature was taken; the content is on the base branch. Delete at once.
-  PR CLOSED unmerged   a human looked and said no. Say so ONCE, leave the branch a week (GRACE_DAYS)
-                       in case they want to look again, then delete it and say it was abandoned.
-  no PR, ever          same clock as a rejection, but only after a SECOND consecutive sighting.
-                       The watcher creates `ai-feature-sync-*` and opens its PR in separate API
-                       calls, so a branch can legitimately have no PR for a few seconds; requiring
-                       two daily sightings makes that race impossible to lose instead of guessing
-                       at an age cutoff.
+  PR CLOSED unmerged   a human looked and said no. Say so ONCE, leave the branch GRACE_DAYS in case
+                       they want to look again, then delete it and say it was abandoned.
+  no PR, still moving  LEAVE IT ALONE, silently. This is what work in progress looks like.
+  no PR, gone quiet    no commit for STALE_DAYS. Retire it in the daily post, no warning phase: if
+                       the conversation died before anyone opened a PR, the feature was probably not
+                       wanted, so this is low-stakes tidying rather than a decision.
 
-WHY A GRACE PERIOD ONLY FOR THE UNMERGED ONES. A merged PR's content is safe on master (or on
-whatever it targeted) — the branch is a duplicate ref and deleting it loses nothing. Unmerged work
-only exists on the branch, so its deletion is the one that is worth waiting on and worth announcing
-twice: once when the clock starts, once when it runs out, with the tip sha so `git fetch
-origin <sha>` still recovers it for as long as GitHub keeps the object.
+The quiet-branch clock is measured from the TIP COMMIT, not from when this sweep first noticed the
+branch. That distinction is the whole correction: a sighting counter measures our own process and
+would have swept a branch someone was still working on, where a commit date resets itself every time
+the work continues and needs no state at all.
+
+WHY A GRACE PERIOD ONLY FOR THE REJECTED ONES. A merged PR's content is safe on master (or on
+whatever it targeted) — the branch is a duplicate ref and deleting it loses nothing, so there is
+nothing to wait for. A closed-unmerged PR is the one case where a person made an explicit decision
+against work that exists nowhere else, so it is the one worth pausing over and announcing twice:
+once when the clock starts, once when it runs out. Both kinds of unmerged deletion carry the tip sha,
+so `git fetch origin <sha>` recovers the branch for as long as GitHub keeps the object.
 
 WHAT IT POSTS. One Discord message per run, and only when something CHANGED. A daily "nothing to
 retire" is the noise this channel is not for; the estate already learned that from the valet's
@@ -46,7 +58,15 @@ import discord_api                 # noqa: E402  — the estate's one Discord tr
 import branch_sync_watch as bsw    # noqa: E402  — REPO / gh_raw / protected(): one definition, not two
 
 PREFIX = "ai-feature-"
+# How long a branch survives a human's explicit "no" (a closed, unmerged PR), so they can change
+# their mind or fish something out of it.
 GRACE_DAYS = int(os.environ.get("THEMING_BRANCH_GRACE_DAYS", "7"))
+# How long a branch with no PR may sit unchanged before it counts as an abandoned conversation.
+# Deliberately longer than GRACE_DAYS and deliberately not a week: a week is the courtesy owed to a
+# decision somebody made, and this is a staleness threshold on a conversation nobody ended. M4's
+# conversations run in hours, so a fortnight of silence is unambiguous without needing to be right
+# about the boundary.
+STALE_DAYS = int(os.environ.get("THEMING_BRANCH_STALE_DAYS", "14"))
 STATE = Path.home() / ".local/share/moprox/theming-branch-housekeeping.json"
 # Report what WOULD happen and delete nothing. For a first run against a repo, or after changing
 # the rules — a branch deleted by a bug is recoverable only while GitHub still has the object.
@@ -134,6 +154,26 @@ def pr_link(pr):
     return discord_api.link("PR #%s" % pr["number"], pr["url"])
 
 
+def last_commit(sha):
+    """The date of a branch's tip commit, or None if it cannot be read.
+
+    This is the abandonment signal, and it is deliberately a property of the BRANCH rather than of
+    this sweep's bookkeeping: it resets itself the moment anyone commits again, so a conversation
+    that is still going can never age out however long it runs.
+    """
+    rc, out, err = bsw.gh_raw(["api", "repos/%s/commits/%s" % (bsw.REPO, sha),
+                               "--jq", ".commit.committer.date"])
+    if rc != 0 or not out:
+        errlog.warn("branch_housekeeping: cannot date commit %s: %s" % (sha[:10], err[:200]))
+        return None
+    try:
+        return datetime.date.fromisoformat(out.strip()[:10])
+    except ValueError as e:
+        errlog.warn("branch_housekeeping: unreadable commit date %r for %s (%s)"
+                    % (out[:40], sha[:10], e))
+        return None
+
+
 def due(entry):
     """The date a pending branch's grace period runs out."""
     return datetime.date.fromisoformat(entry["since"]) + datetime.timedelta(days=GRACE_DAYS)
@@ -177,31 +217,37 @@ def main():
                 seen_now.add(branch)
             continue
 
-        # rejected / no-pr: both live on the same clock.
+        if state_ == "no-pr":
+            # NOT a fault, and it gets no clock of its own and no warning. A branch with no PR is
+            # either work in progress — which is none of this sweep's business — or a conversation
+            # that stopped, and the tip commit is what tells them apart. Say nothing until it is
+            # unambiguous, and then just retire it: nobody ended this one on purpose, so there is no
+            # decision to defer to and no announcement anybody is waiting on.
+            pending.pop(branch, None)
+            when = last_commit(sha)
+            if when is None:
+                seen_now.add(branch)                # unreadable date: leave it entirely alone
+                continue
+            quiet = (today() - when).days
+            if quiet < STALE_DAYS:
+                continue
+            if delete(branch):
+                notes.append("`%s` deleted — no PR, quiet since %s; recover with "
+                             "`git fetch origin %s`" % (branch, when.isoformat(), sha[:10]))
+            else:
+                seen_now.add(branch)
+            continue
+
+        # rejected: a human said no, so this one waits out GRACE_DAYS and is announced at both ends.
         seen_now.add(branch)
         if not was:
-            entry = {"since": today().isoformat(), "why": state_, "sightings": 1,
-                     "announced": False}
-            if pr:
-                entry["pr"] = pr["number"]
-            pending[branch] = entry
-            was = entry
-        else:
-            was["sightings"] = int(was.get("sightings") or 1) + 1
-            # A branch that has never had a PR is only believed on the second consecutive sighting,
-            # so the seconds between "create the sync branch" and "open its PR" cannot sweep it.
-            if was.get("why") != state_:
-                was["why"] = state_
-
-        ready = was.get("why") != "no-pr" or int(was.get("sightings") or 1) >= 2
-        if not ready:
-            continue
+            was = pending[branch] = {"since": today().isoformat(), "announced": False,
+                                     "pr": pr["number"]}
 
         if not was.get("announced"):
             was["announced"] = True
-            why = ("%s closed unmerged" % pr_link(pr)) if pr else "no PR was ever opened"
-            notes.append("`%s` — %s; deleting %s unless it gets one"
-                         % (branch, why, due(was).isoformat()))
+            notes.append("`%s` — %s closed unmerged; deleting %s unless it is reopened"
+                         % (branch, pr_link(pr), due(was).isoformat()))
             continue
 
         if today() >= due(was):
