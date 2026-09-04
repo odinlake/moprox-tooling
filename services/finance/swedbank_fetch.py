@@ -161,10 +161,22 @@ def _chain(rows):
 
     Every row carries balance_after_transaction, so a complete store is a closed chain: each balance
     is the previous one plus the signed amount. Within a booking date the file order is NOT the
-    ledger order (the file sorts by (booking_date, entry_reference)), so the intra-day orderings are
-    searched. Returns (rows_in_ledger_order, None), or (None, first_bad_booking_date)."""
+    ledger order (the file sorts by (booking_date, entry_reference)), so the intra-day order is
+    reconstructed.
+
+    Reconstruction is a graph walk, not a search over orderings. Read each row as a directed edge
+    from the balance it must have started at (balance_after minus its signed amount) to the balance
+    it ended at: a valid ledger order is then exactly an Eulerian trail from the balance carried
+    into the day, and Hierholzer's algorithm finds one in linear time. This used to enumerate
+    permutations, which is why it carried a cap of 8 rows per booking date and, above it, fell back
+    to the stored order — reporting a COMPLETE store as one with rows missing (see
+    swedbank-ladder-fails-closed-above-8). There is no cap now.
+
+    The trail is verified against the balances before it is returned rather than trusted from the
+    degree conditions: the edge walk consumes every reachable edge whether or not those hold, so
+    "used all the rows" alone would not mean "the balances line up".
+    Returns (rows_in_ledger_order, None), or (None, first_bad_booking_date)."""
     from decimal import Decimal
-    from itertools import permutations
 
     def sgn(r):
         a = Decimal(r["transaction_amount"]["amount"])
@@ -172,6 +184,31 @@ def _chain(rows):
 
     def bal(r):
         return Decimal(r["balance_after_transaction"]["amount"])
+
+    def walk(start, grp):
+        """The day's rows in ledger order, given the balance carried in, or None if they don't."""
+        adj = {}
+        for r in grp:
+            adj.setdefault(bal(r) - sgn(r), []).append(r)
+        stack, out = [(start, None)], []
+        while stack:                    # Hierholzer: descend, then unwind, splicing subtours
+            v, e = stack[-1]
+            if adj.get(v):
+                r = adj[v].pop()
+                stack.append((bal(r), r))
+            else:
+                stack.pop()
+                if e is not None:
+                    out.append(e)
+        out.reverse()
+        if len(out) != len(grp):
+            return None
+        b = start
+        for r in out:
+            b += sgn(r)
+            if b != bal(r):
+                return None
+        return out
 
     rows = [r for r in rows if r.get("balance_after_transaction") and r.get("booking_date")]
     if len(rows) < 2:
@@ -182,24 +219,16 @@ def _chain(rows):
     prev, ordered = None, []
     for d in sorted(days):
         grp = days[d]
-        # n! over a day's transactions; beyond a handful, fall back to stored order rather than hang.
-        cands = [tuple(grp)] if len(grp) > 8 else permutations(grp)
-        hit = None
-        for p in cands:
-            if prev is None:
-                if all(bal(p[i]) + sgn(p[i + 1]) == bal(p[i + 1]) for i in range(len(p) - 1)):
-                    hit = p
+        if prev is None:
+            # The store's oldest day carries no balance in from anywhere, so each row in turn is
+            # tried as the opening one; that fixes the balance the rest of the day walks from.
+            hit = None
+            for r in grp:
+                hit = walk(bal(r) - sgn(r), grp)
+                if hit is not None:
                     break
-                continue
-            b, good = prev, True
-            for r in p:
-                b += sgn(r)
-                if b != bal(r):
-                    good = False
-                    break
-            if good:
-                hit = p
-                break
+        else:
+            hit = walk(prev, grp)
         if hit is None:
             return None, d
         ordered.extend(hit)
