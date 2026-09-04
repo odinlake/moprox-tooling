@@ -25,9 +25,11 @@ mkdir -p "$(dirname "$wt")"
 git -C "$src" fetch -q origin
 # --force: the worktree may be gone from disk while git still lists it, which is what a killed
 # cycle leaves behind. Prune first so `add` does not refuse a path it thinks is still registered.
+# No -q: `git worktree prune` has no quiet flag (only -n/-v/--expire), and under `set -e` an
+# unknown switch kills this script on its first line of real work.
 git -C "$src" worktree remove --force "$wt" 2>/dev/null || true
 rm -rf "$wt"
-git -C "$src" worktree prune -q
+git -C "$src" worktree prune
 git -C "$src" worktree add -q --detach "$wt" origin/main
 
 echo "$wt"

@@ -722,7 +722,7 @@ def change_gate(prop, cyc, agent):
 
     wt = STATE / f"gate-c{cyc}"
     shutil.rmtree(wt, ignore_errors=True)
-    _git(["worktree", "prune", "-q"], d)
+    _git(["worktree", "prune"], d)
     r = _git(["worktree", "add", "-q", "--detach", str(wt), "origin/main"], d)
     if r.returncode != 0:
         return "rejected", f"could not make a worktree at origin/main: {_clip(r.stderr, 160)}", {}
@@ -780,7 +780,7 @@ def change_gate(prop, cyc, agent):
         return "accepted", detail, {"files": files, "sha": sha}
     finally:
         _git(["worktree", "remove", "--force", str(wt)], d)
-        _git(["worktree", "prune", "-q"], d)
+        _git(["worktree", "prune"], d)
         shutil.rmtree(wt, ignore_errors=True)
 
 
