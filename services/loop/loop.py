@@ -19,7 +19,7 @@ lines on stdout, which systemd puts in the journal and the fleet lane ships to l
 `tool_result` is deliberately DROPPED — it is the only block that reaches megabytes, and the UI
 collapses it too. Full fidelity stays in ~/.claude/projects/<slug>/*.jsonl on the box for 90 days.
 """
-import json, os, queue, signal, subprocess, sys, threading, time
+import fcntl, json, os, queue, shutil, signal, subprocess, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,12 +28,20 @@ from errlog import err, warn, Skips        # repo hard rule: no silent errors
 import notify                              # the loop's one outward voice (firehose group)
 
 HOME     = Path.home()
-STATE    = HOME / ".local/share/moprox/loop"
-LEDGER   = STATE / "ledger.json"
-PROPOSALS= STATE / "proposals"          # the agent drops {claim, verify, expect} files here
-VERIFIERS= STATE / "verifiers"          # every verifier ever run, verbatim, one file per cycle
-OBJECTIONS= STATE / "objections"        # every audit objection ever raised, verbatim, one per lens
-STOP     = STATE / "STOP"               # touch to halt every loop agent; checked first
+ROOT     = HOME / ".local/share/moprox/loop"    # shared by every loop agent: the lock and STOP
+LOCK     = ROOT / "loop.lock"           # cross-agent mutex; see hold_lock()
+STOP     = ROOT / "STOP"                # touch to halt every loop agent; checked first
+# Per-agent state. These five are REBOUND by bind_state() before anything reads them, because a
+# second instance (loop@burndown) now exists and one ledger for two agents is one agent's ledger
+# with another's work in it. They stay module globals rather than becoming a parameter threaded
+# through fifteen functions; bind_state() is called once, first thing in main().
+STATE    = ROOT
+LEDGER   = ROOT / "ledger.json"
+PROPOSALS= ROOT / "proposals"           # the agent drops {claim, verify, expect} files here
+VERIFIERS= ROOT / "verifiers"           # every verifier ever run, verbatim, one file per cycle
+OBJECTIONS= ROOT / "objections"         # every audit objection ever raised, verbatim, one per lens
+PATCHES  = ROOT / "patches"             # every change proposal's diff, verbatim, one per cycle
+WORK     = ROOT / "work"                # the cycle's scratch worktree, handed to the agent
 USAGE    = HOME / ".local/share/moprox/agent-usage.jsonl"   # shared with run.py
 AGENTS   = HOME / "projects/private-data/agents"
 MEMORY   = HOME / "projects/moprox-memory"
@@ -42,7 +50,11 @@ CLAUDE   = os.environ.get("CLAUDE_BIN") or str(HOME / ".local/bin/claude")
 IDLE_MAX_S   = int(os.environ.get("LOOP_IDLE_MAX_S", 600))    # silence before we call it stuck
 HARD_MAX_S   = int(os.environ.get("LOOP_HARD_MAX_S", 5400))   # backstop; systemd caps this too
 BUDGET_H     = float(os.environ.get("LOOP_BUDGET_WINDOW_H", 5))   # Max plan resets on ~5 h windows
-BUDGET_CAP   = float(os.environ.get("LOOP_BUDGET_CAP_USD", 8.0))  # loop's own share of that window
+BUDGET_CAP   = float(os.environ.get("LOOP_BUDGET_CAP_USD", 8.0))  # THIS agent's share of that window
+# The loop's total draw across every agent, which is what crowds coach/valet/the dev sessions. 0 =
+# off, which is the historical behaviour and stays the default: with one agent the per-agent cap
+# already bounded the total, and switching it on silently would change when the analyst skips.
+TOTAL_CAP    = float(os.environ.get("LOOP_TOTAL_CAP_USD", 0))
 # NB: spent_recently() sums EVERY loop-* ledger row, refuters included since 9eddaf9c98. The
 # deployed cap lives in loop@.service (16) — this default is for a hand-run loop, not production.
 MAX_STRIKES  = int(os.environ.get("LOOP_MAX_STRIKES", 3))     # consecutive bad cycles before halting
@@ -113,6 +125,83 @@ def _wrap(s, width=96):
     return out
 
 
+# --- per-agent state, and the mutex between agents --------------------------
+def bind_state(agent):
+    """Point the state globals at this agent's own directory, migrating the legacy layout once.
+
+    Until 2026-09-04 every path here was shared, because `loop@analyst` was the only instance ever
+    installed. The unit file has said "Templated: loop@analyst, loop@burndown" since the box was
+    built, and the second instance is what makes the sharing a defect rather than a shortcut. Two
+    agents on one ledger.json is not a merge, it is a last-writer-wins overwrite of `cycle`,
+    `strikes` and `inflight`, and one agent's `tried` list read as the other's finished work.
+
+    The migration MOVES the analyst's existing state rather than copying it: a copy leaves a second
+    ledger that keeps accruing nothing and looks live. It runs under the lock (main() takes the lock
+    first), so it cannot race a cycle already in flight.
+    """
+    global STATE, LEDGER, PROPOSALS, VERIFIERS, OBJECTIONS, PATCHES, WORK
+    STATE = ROOT / agent
+    legacy = ROOT / "ledger.json"
+    if agent == "analyst" and legacy.exists() and not (STATE / "ledger.json").exists():
+        STATE.mkdir(parents=True, exist_ok=True)
+        for name in ("ledger.json", "proposals", "verifiers", "objections"):
+            src = ROOT / name
+            if src.exists():
+                shutil.move(str(src), str(STATE / name))
+        say(f"migrated legacy shared state into {STATE} (one ledger per agent from here on)", 5, agent)
+    LEDGER    = STATE / "ledger.json"
+    PROPOSALS = STATE / "proposals"
+    VERIFIERS = STATE / "verifiers"
+    OBJECTIONS= STATE / "objections"
+    PATCHES   = STATE / "patches"
+    WORK      = STATE / "work"
+
+
+def hold_lock(agent):
+    """Take the cross-agent mutex, or return None if another agent's cycle is running.
+
+    Reinstated 2026-09-04. It was added in 6925660 and deleted in a4ec02a (2026-08-09) by a commit
+    whose message describes only an addition; `loop.lock` sat on disk, 0 bytes, orphaned, for a
+    month. It was inert while one instance existed. It is not inert now.
+
+    NON-BLOCKING, and a failed acquire is a clean exit, not a wait: nothing waits on these agents,
+    so a skipped cycle costs an hour of latency on work nobody is blocked on, while a queued one
+    would sit holding a systemd job slot and could still be waiting when its own next timer fires.
+    The lock is held for the WHOLE cycle including verification and landing, because the expensive
+    conflict is not two agents writing one file, it is two agents pushing to the same repo from
+    two worktrees at once.
+    """
+    ROOT.mkdir(parents=True, exist_ok=True)
+    fh = open(LOCK, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    fh.write(f"{agent} pid={os.getpid()} since={datetime.now().isoformat(timespec='seconds')}\n")
+    fh.flush()
+    return fh
+
+
+def agent_conf(agent):
+    """Per-agent harness settings, declared beside the persona in the agent's own directory.
+
+    Absent file = the analyst's historical behaviour exactly, so adding a second agent changes
+    nothing for the first. Keys: `inject` (which pull surfaces are pushed into the prompt) and
+    `budget_cap_usd` (this agent's share of the window). Same principle as capabilities.json:
+    stated where a human can read it, checked from outside the agent.
+    """
+    p = AGENTS / agent / "loop.json"
+    try:
+        return json.loads(p.read_text())
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        err(f"agent_conf: {p} is unreadable, so running on defaults, which may not be what you meant",
+            exc)
+        return {}
+
+
 # --- ledger -----------------------------------------------------------------
 def load_ledger():
     if LEDGER.exists():
@@ -136,9 +225,18 @@ def save_ledger(l):
 
 
 # --- budget -----------------------------------------------------------------
-def spent_recently(hours):
+def spent_recently(hours, agent=None):
+    """Spend in the window: this agent's own if named, every loop agent's if not.
+
+    Both are needed once there are two agents. A single shared measure against a single cap means
+    whichever agent wakes first spends the window and the other starves, and it starves silently,
+    since a budget skip is a clean exit. A per-agent measure alone loses the thing the shared one
+    was actually for: the Max window is shared with coach, valet and the dev sessions, so the loop's
+    TOTAL draw is the number that crowds them. main() gates on both and says which one bit.
+    """
     if not USAGE.exists():
         return 0.0
+    want = f"loop-{agent}" if agent else None
     cut, tot = time.time() - hours * 3600, 0.0
     lines = USAGE.read_text().splitlines()
     skips = Skips("parsing agent-usage.jsonl")
@@ -147,7 +245,9 @@ def spent_recently(hours):
             r = json.loads(ln)
         except Exception as exc:
             skips.add(exc); continue
-        if str(r.get("agent", "")).startswith("loop") and (r.get("ts") or 0) >= cut:
+        a = str(r.get("agent", ""))
+        hit = (a == want) if want else a.startswith("loop")
+        if hit and (r.get("ts") or 0) >= cut:
             tot += float(r.get("cost_usd") or 0)
     skips.report(total=len(lines))
     return tot
@@ -217,6 +317,9 @@ def run_cycle_agent(agent, prompt):
         # Nothing may wait on a human: no pagers, no prompts, no interactive apt/ssh.
         "PAGER": "cat", "GIT_PAGER": "cat", "GIT_TERMINAL_PROMPT": "0",
         "DEBIAN_FRONTEND": "noninteractive", "CI": "1",
+        # work.sh reads these, so the agent never has to know its own name or state path to make
+        # itself a worktree. Also what makes an agent's shell able to tell which loop it is in.
+        "LOOP_AGENT": agent, "LOOP_STATE": str(STATE),
     })
     cmd = [CLAUDE, "-p", prompt, "--output-format", "stream-json", "--verbose",
            "--permission-mode", "bypassPermissions", "--allowedTools", TOOLS,
@@ -353,7 +456,43 @@ LENSES = [
 ]
 
 
-def refute(prop, evidence, lens, agent):
+# The change lenses. Same seam as the claim lenses (is the CHECK hollow, or does the WORK
+# outrun it), but a diff fails in ways a claim cannot, so the second lens asks about the change itself
+# rather than about an inference. Fixing the symptom while the cause stands is the failure this
+# whole agent is most likely to produce, so it is named first.
+CHANGE_LENSES = [
+    ("check", "Does the check actually test the fix? It failed before the patch and passed after, "
+              "so it is sensitive to SOMETHING in the diff, but to what? Look for: a check that "
+              "greps for a string the patch happens to add rather than testing behaviour; a check "
+              "that would pass on any edit to that file; an `expect` that matches the patch's own "
+              "comment; a test of the happy path only, when the bug was in the error path."),
+    ("change", "Does the diff fix the item's CAUSE, and nothing else? Look for: the symptom "
+               "patched while the cause stands; an error swallowed rather than handled; a new "
+               "failure mode introduced; edits unrelated to the item riding along; a narrower fix "
+               "than the item describes, presented as the whole thing; anything that changes "
+               "behaviour the item never mentioned."),
+]
+
+
+def _subject(prop, evidence, tree):
+    """The thing being audited, as a prompt block. A claim and a change read differently."""
+    if prop.get("patch"):
+        return (f"THE ITEM: {prop.get('item')}\n\nWHY IT MATTERS: {prop.get('why')}\n\n"
+                f"THE PATCH:\n```diff\n{_src(prop.get('patch'), SRC_MAX)}\n```\n\n"
+                f"THE CHECK THE HARNESS RAN (it FAILED without the patch and PASSED with it; "
+                f"that differential is already established, do not re-argue it):\n"
+                f"```python\n{_src(prop.get('check'), SRC_MAX)}\n```\n\n"
+                f"EXPECTED SUBSTRING: {prop.get('expect')}\n\n"
+                f"RESULT: {_clip(evidence, 1500)}\n\n"
+                f"The patched tree is at {tree}. Read it, run things in it, it is a throwaway "
+                f"worktree. Nothing you do there is published.\n\n")
+    return (f"CLAIM: {prop.get('claim')}\n\nWHY IT MATTERS: {prop.get('why')}\n\n"
+            f"EXPECTED SUBSTRING: {prop.get('expect')}\n\n"
+            f"THE VERIFIER THAT PASSED:\n```python\n{_src(prop.get('verify'), SRC_MAX)}\n```\n\n"
+            f"ITS OUTPUT:\n{_clip(evidence, 1500)}\n\n")
+
+
+def refute(prop, evidence, lens, agent, tree=None):
     """Spawn one independent skeptic. Returns a defect string, or None if it found nothing.
 
     Read-oriented tools only, and it is told plainly that vague doubt is not refutation — an
@@ -361,12 +500,10 @@ def refute(prop, evidence, lens, agent):
     everything. It must name something specific and checkable.
     """
     name, focus = lens
+    what = "change" if prop.get("patch") else "finding"
     prompt = (
-        f"You are auditing another agent's finding. Your job is to REFUTE it if it is refutable.\n\n"
-        f"CLAIM: {prop.get('claim')}\n\nWHY IT MATTERS: {prop.get('why')}\n\n"
-        f"EXPECTED SUBSTRING: {prop.get('expect')}\n\n"
-        f"THE VERIFIER THAT PASSED:\n```python\n{_src(prop.get('verify'), SRC_MAX)}\n```\n\n"
-        f"ITS OUTPUT:\n{_clip(evidence, 1500)}\n\n"
+        f"You are auditing another agent's {what}. Your job is to REFUTE it if it is refutable.\n\n"
+        + _subject(prop, evidence, tree) +
         f"YOUR LENS — {name}: {focus}\n\n"
         f"You may read files and run read-only commands to check. Change nothing.\n"
         f"Only refute if you can name a SPECIFIC, CHECKABLE defect — say what is wrong and how you "
@@ -383,7 +520,8 @@ def refute(prop, evidence, lens, agent):
            "--permission-mode", "bypassPermissions",
            "--allowedTools", "Read,Grep,Glob,Bash,mcp__logview,mcp__corpus-search",
            "--add-dir", str(HOME / "projects/moprox-tooling"),
-           str(HOME / "projects/private-data"), str(HOME / "projects/moprox-memory")]
+           str(HOME / "projects/private-data"), str(HOME / "projects/moprox-memory")
+           ] + ([str(tree)] if tree else [])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=REFUTE_MAX_S,
                            stdin=subprocess.DEVNULL, cwd=str(HOME))
@@ -421,7 +559,7 @@ def refute(prop, evidence, lens, agent):
     return None
 
 
-def adversarial(prop, evidence, agent, cyc=0):
+def adversarial(prop, evidence, agent, cyc=0, tree=None):
     """Run every lens. Returns the objections raised, empty if the finding survived.
 
     Each objection is also written to disk verbatim, for the same reason verifiers are: the ledger
@@ -431,8 +569,8 @@ def adversarial(prop, evidence, agent, cyc=0):
     if not ADVERSARIAL:
         return []
     objections = []
-    for lens in LENSES:
-        d = refute(prop, evidence, lens, agent)
+    for lens in (CHANGE_LENSES if prop.get("patch") else LENSES):
+        d = refute(prop, evidence, lens, agent, tree=tree)
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
         if d:
             objections.append(d)
@@ -446,6 +584,230 @@ def adversarial(prop, evidence, agent, cyc=0):
             except OSError as exc:
                 warn(f"could not archive objection for cycle {cyc}: {exc}")
     return objections
+
+
+# --- changes ----------------------------------------------------------------
+# A claim proposal is proved by running its verifier once. A CHANGE cannot be: every check a fix
+# could be given passes trivially on the tree that already has the fix. So the harness runs the
+# check TWICE, in a worktree it made itself, at origin/main:
+#
+#   leg A, before the patch: the check must NOT pass. A check that passes here is testing
+#           something the change did not change, and would have "confirmed" an empty diff.
+#   leg B, after the patch:   the check must pass.
+#
+# The agent never says whether its own fix worked, and it cannot get a pass by writing an agreeable
+# check, because the same script has to come out both ways on two trees. This is the differential
+# the burndown is built around; nothing else in it is load-bearing.
+REPO_DIRS = {name: HOME / "projects" / name
+             for name in ("moprox-tooling", "private-data", "moprox-memory")}
+
+# Paths a change proposal may not touch, and why. Both are "a machine owns this file" rules.
+DENY_PATHS = {
+    "moprox-tooling": [("services/loop/",
+                        "the harness that is running you. A bad patch here breaks every future "
+                        "cycle including the one that would fix it, and nothing else on this box "
+                        "supervises it. Propose harness changes as a finding instead.")],
+    "moprox-memory": [("MEMORY.md", "the reconciler owns it"),
+                      ("CHANGES.md", "the reconciler owns it"),
+                      ("CONFLICTS.md", "the reconciler owns it"),
+                      ("DIGEST.md", "the steward owns it")],
+}
+
+
+def _git(args, cwd, timeout=180):
+    return subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True,
+                          timeout=timeout, stdin=subprocess.DEVNULL)
+
+
+def run_check(script, tree, expect):
+    """Run a change proposal's check against one tree. -> (passed, output).
+
+    The tree is given twice, as $TREE and as argv[1], because a check that hardcodes
+    ~/projects/... is measuring the live tree instead of the one under test, so it then passes on
+    both legs and is rejected as non-discriminating, which is the right outcome but a confusing
+    one to debug. Saying it two ways makes the intended path hard to miss.
+    """
+    try:
+        r = subprocess.run([sys.executable, "-c", script, str(tree)], capture_output=True,
+                           text=True, timeout=VERIFY_MAX_S, stdin=subprocess.DEVNULL,
+                           cwd=str(tree),
+                           # DONTWRITEBYTECODE because a check that imports the code under test
+                           # leaves __pycache__ behind in the tree it is inspecting, and the next
+                           # thing that reads that tree should not have to know that.
+                           env={**os.environ, "TREE": str(tree), "PAGER": "cat",
+                                "PYTHONDONTWRITEBYTECODE": "1"})
+    except subprocess.TimeoutExpired:
+        return False, f"check timed out after {VERIFY_MAX_S}s"
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if r.returncode != 0:
+        return False, f"exit {r.returncode}: {_clip(out, 300)}"
+    expect = str(expect or "").strip()
+    ok = (expect.lower() in out.lower()) if expect else bool(out)
+    return ok, _clip(out, 300)
+
+
+def syntax_check(tree, files):
+    """Cheap breakage guard on the files the patch actually touched.
+
+    Not a test suite, since moprox-tooling has none. This catches the class of damage that is both most
+    likely and most expensive here: a service that no longer parses, landing on a box where the
+    next thing to notice is a unit failure hours later.
+    """
+    bad = []
+    for rel in files:
+        p = tree / rel
+        if not p.exists():          # deletions are legitimate
+            continue
+        if rel.endswith(".py"):
+            r = subprocess.run([sys.executable, "-m", "py_compile", str(p)],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                bad.append(f"{rel}: {_clip(r.stderr, 160)}")
+        elif rel.endswith(".sh"):
+            r = subprocess.run(["bash", "-n", str(p)], capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                bad.append(f"{rel}: {_clip(r.stderr, 160)}")
+        elif rel.endswith(".json"):
+            try:
+                json.loads(p.read_text())
+            except Exception as exc:
+                bad.append(f"{rel}: {_clip(exc, 160)}")
+    return bad
+
+
+def denied(repo, files):
+    for rel in files:
+        for prefix, why in DENY_PATHS.get(repo, []):
+            if rel == prefix or rel.startswith(prefix):
+                return f"{rel} is off limits: {why}"
+    return None
+
+
+def change_gate(prop, cyc, agent):
+    """Differential-check a change proposal, audit it, and land it. -> (status, detail, extra).
+
+    status is 'accepted' | 'rejected' | 'disputed', matching the claim path so the ledger and the
+    firehose report stay common code. Everything happens in one throwaway worktree at origin/main,
+    which is also what gets committed and pushed: the agent's own working trees are never the thing
+    that lands, so a stray edit it left behind cannot ride along in the commit.
+    """
+    repo = str(prop.get("repo") or "").strip()
+    d = REPO_DIRS.get(repo)
+    if not d:
+        return "rejected", f"unknown repo {repo!r}, expected one of {sorted(REPO_DIRS)}", {}
+    patch = str(prop.get("patch") or "")
+    check = str(prop.get("check") or "")
+    if not patch.strip():
+        return "rejected", "change proposal carries no patch", {}
+    if not check.strip():
+        return "rejected", "change proposal carries no check. A fix you cannot check is not a fix", {}
+
+    try:
+        PATCHES.mkdir(parents=True, exist_ok=True)
+        dst, n = PATCHES / f"c{cyc}.diff", 1
+        while dst.exists() and dst.read_text() != patch:
+            n += 1
+            dst = PATCHES / f"c{cyc}-{n}.diff"
+        dst.write_text(patch)
+    except OSError as exc:
+        warn(f"could not archive patch for cycle {cyc}: {exc}")
+
+    r = _git(["fetch", "-q", "origin"], d)
+    if r.returncode != 0:
+        return "rejected", f"git fetch failed in {repo}: {_clip(r.stderr, 160)}", {}
+    head = _git(["rev-parse", "origin/main"], d).stdout.strip()
+    base = str(prop.get("base") or "").strip()
+    drift = f" (proposal declared base {base[:12]}, landing on {head[:12]})" \
+            if base and not head.startswith(base[:12]) else ""
+
+    wt = STATE / f"gate-c{cyc}"
+    shutil.rmtree(wt, ignore_errors=True)
+    _git(["worktree", "prune", "-q"], d)
+    r = _git(["worktree", "add", "-q", "--detach", str(wt), "origin/main"], d)
+    if r.returncode != 0:
+        return "rejected", f"could not make a worktree at origin/main: {_clip(r.stderr, 160)}", {}
+    try:
+        # leg A: the check must fail on the unmodified tree.
+        okA, outA = run_check(check, wt, prop.get("expect"))
+        if okA:
+            return "rejected", (f"the check ALREADY PASSES at origin/main{drift}. Either this is "
+                                f"done, or the check does not test the change [{outA}]"), {}
+
+        pf = wt / ".loop-patch.diff"
+        pf.write_text(patch if patch.endswith("\n") else patch + "\n")
+        # --index: apply to the working tree AND stage it, in one step. The staged set is then
+        # exactly what the patch touched, which is what makes the file list below trustworthy. With
+        # a plain apply + `git add -A`, anything a check dropped in the tree while running gets
+        # swept into the commit: the gate's own test landed a __pycache__/*.pyc that leg A had
+        # created a moment earlier. Also what makes the deny check meaningful, since it can only
+        # refuse paths it can see.
+        r = _git(["apply", "--index", "--whitespace=nowarn", str(pf)], wt)
+        pf.unlink(missing_ok=True)
+        if r.returncode != 0:
+            return "rejected", (f"patch does not apply to origin/main{drift}. It is stale, so redo it "
+                                f"on a fresh worktree: {_clip(r.stderr, 200)}"), {}
+
+        # From the INDEX, not the working tree. `git diff --name-only` lists modifications to
+        # TRACKED files only, so a patch that adds a file read as "changed nothing" and an added
+        # file was invisible to the deny check below. Caught by the gate's own test, not by a live
+        # cycle.
+        files = [f for f in _git(["diff", "--cached", "--name-only"], wt).stdout.splitlines()
+                 if f.strip()]
+        if not files:
+            return "rejected", "the patch applied but changed nothing", {}
+        stop = denied(repo, files)
+        if stop:
+            return "rejected", f"REFUSED: {stop}", {}
+        bad = syntax_check(wt, files)
+        if bad:
+            return "rejected", "the change does not parse: " + "; ".join(bad), {}
+
+        # leg B: the same check, same tree, now with the change in it.
+        okB, outB = run_check(check, wt, prop.get("expect"))
+        if not okB:
+            return "rejected", f"the change does not make its own check pass: {outB}", {}
+
+        detail = f"check fails at {head[:8]}, passes with the patch [{outB}]{drift}"
+        say(f"✓ differential PASS  {len(files)} file(s): {', '.join(files[:6])}", 6, agent)
+
+        objections = adversarial(prop, detail, agent, cyc, tree=wt)
+        if objections:
+            return "disputed", detail, {"objections": objections, "files": files}
+
+        sha, why = land(prop, wt, files, head, cyc, agent)
+        if not sha:
+            return "rejected", f"verified but NOT landed: {why}", {"files": files, "unlanded": True}
+        return "accepted", detail, {"files": files, "sha": sha}
+    finally:
+        _git(["worktree", "remove", "--force", str(wt)], d)
+        _git(["worktree", "prune", "-q"], d)
+        shutil.rmtree(wt, ignore_errors=True)
+
+
+def land(prop, wt, files, head, cyc, agent):
+    """Commit the verified worktree and push it. -> (sha, None) or (None, reason).
+
+    Pushes HEAD:main from the detached worktree rather than merging into the box's checkout: the
+    checkout may hold the other agent's unpushed work, and this way the only thing that reaches
+    origin is the patch that just passed the differential. The box picks it up on the next
+    refresh_repos().
+    """
+    d = REPO_DIRS[str(prop.get("repo"))]
+    subject = _clip(prop.get("subject") or prop.get("item") or "fix", 72)
+    body = (f"{_clip(prop.get('why') or '', 600)}\n\n"
+            f"Item: {_clip(prop.get('source') or 'unfiled', 200)}\n"
+            f"Checked by the loop harness: the change's own check failed at {head[:12]} and passed "
+            f"with this patch applied. Cycle {cyc}.\n")
+    for cmd in (["add", "-A", "--"] + files,      # already staged by the gate; keeps this callable alone
+                ["-c", f"user.name=moprox {agent}", "-c", "user.email=agent@odinlake.net",
+                 "commit", "-q", "-m", f"{subject}\n\n{body}"],
+                ["push", "-q", "origin", "HEAD:main"]):
+        r = _git(cmd, wt, timeout=300)
+        if r.returncode != 0:
+            err(f"land: `git {cmd[0]}` failed for cycle {cyc}, so the change is NOT on origin",
+                RuntimeError(_clip(r.stderr or r.stdout, 200)))
+            return None, f"git {cmd[0]}: {_clip(r.stderr or r.stdout, 160)}"
+    return _git(["rev-parse", "HEAD"], wt).stdout.strip()[:12], None
 
 
 def promote(prop, evidence, agent):
@@ -545,6 +907,92 @@ def open_incidents():
               "acknowledge them, so say plainly in your closing line if one looks urgent.")
 
 
+ISSUES_URL = os.environ.get("LOOP_ISSUES_URL", "http://logview.lan:8016/api/issues?status=open")
+
+
+def open_issues():
+    """The estate's curated work list, as a prompt block. Same pull-surface argument as incidents.
+
+    mo.lan/issues is the one place in the estate where a human says "this is worth doing, here is
+    who owns it and what the next step is". Two issues have ever been filed. That is not because
+    there is no work. It is because filing was a thing someone had to remember to do, and reading
+    it was too. Injecting it makes the list a standing input for the one agent whose whole job is
+    to empty it.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(ISSUES_URL, timeout=10) as r:
+            rows = (json.loads(r.read().decode()) or {}).get("issues") or []
+    except Exception as exc:
+        err("open_issues: could not read the issue board, so it is UNCHECKED this cycle", exc)
+        return ("\n\nOPEN ISSUES: UNAVAILABLE this cycle. The board could not be read "
+                f"({type(exc).__name__}: {_clip(str(exc), 120)}). This is not a statement that the "
+                "board is empty; treat it as unknown and work from your ledger instead.")
+    if not rows:
+        return ("\n\nOPEN ISSUES: none on the board. That is a real answer, not a missing one: "
+                "the board was read and it is empty. Work from your ledger, from the incident "
+                "queue, or from the findings block below.")
+    out = []
+    for i in rows:
+        out.append(f"- [{i.get('id')}] owner={i.get('owner') or '?'} · {_clip(i.get('title'), 140)}"
+                   + (f"\n    next: {_clip(i.get('next_step'), 200)}" if i.get("next_step") else "")
+                   + (f"\n    {_clip(i.get('body'), 400)}" if i.get("body") else ""))
+    return ("\n\nOPEN ISSUES (mo.lan/issues, filed by a human or an agent, and closed only "
+            "deliberately):\n" + "\n".join(out)
+            + "\nAn issue with owner=operator is NOT yours to close: it needs a decision, a "
+              "credential or a hand on a machine you cannot reach. You may still do the part of it "
+              "that is code. Say which part you did and what remains.")
+
+
+def recent_findings(led, n=30):
+    """Measured defects the analyst has published, minus the ones this agent already answered.
+
+    This is the burndown's actual backlog and the reason it exists: ~6 verified findings a day land
+    in moprox-memory, most of them naming a specific defect in a specific file, and until now
+    nothing read them back. The journal is the index, one line per fact, newest last.
+
+    Filtered against this agent's own ledger so a landed fix stops being offered as work. The count
+    of what was filtered is printed rather than dropped silently, because "nothing left to do" and
+    "everything is hidden" must not look the same.
+    """
+    jf = MEMORY / "journals" / "analyst.jsonl"
+    try:
+        lines = jf.read_text().splitlines()[-200:]
+    except OSError as exc:
+        err(f"recent_findings: cannot read {jf}, so the backlog is UNREADABLE this cycle", exc)
+        return ""
+    done = set()
+    for e in (led.get("accepted") or []) + (led.get("tried") or []):
+        s = str(e.get("source") or "")
+        if s.startswith("memory:"):
+            done.add(s.split(":", 1)[1].strip())
+    rows, hidden = [], 0
+    skips = Skips("parsing analyst.jsonl")
+    for ln in lines:
+        try:
+            e = json.loads(ln)
+        except Exception as exc:
+            skips.add(exc); continue
+        slug = e.get("slug")
+        if not slug:
+            continue
+        if slug in done:
+            hidden += 1; continue
+        rows.append(f"- {e.get('ts')} {slug}: {_clip(e.get('note'), 150)}")
+    skips.report(total=len(lines))
+    if not rows:
+        return ""
+    tail = rows[-n:]
+    head = (f"\n\nRECENT FINDINGS (moprox-memory, newest last; {hidden} already answered by you and "
+            f"hidden; showing {len(tail)} of {len(rows)}):\n")
+    return (head + "\n".join(tail)
+            + "\nEach is a full fact at moprox-memory/<slug>.md. READ THE FILE before acting on "
+              "the one-line note, which is a label, not the finding. Many are measurements with no "
+              "defect to fix, some name a defect the operator must decide about, and some are "
+              "already fixed and not yet recorded as such. Establishing which of those a finding "
+              "is, and saying so, is a legitimate increment.")
+
+
 def preflight():
     """Check declared capabilities against reality. Returns a list of human-readable failures.
 
@@ -594,6 +1042,15 @@ def preflight():
 def collect_proposals():
     PROPOSALS.mkdir(parents=True, exist_ok=True)
     out = []
+    # The pre-split shared directory. An agent running on instructions older than the 2026-09-04
+    # state split writes here, and a proposal dropped in a directory nobody reads is a whole cycle
+    # of work that vanishes without a symptom. Swept for as long as it keeps catching anything.
+    legacy = ROOT / "proposals"
+    if legacy.exists() and legacy != PROPOSALS:
+        for f in sorted(legacy.glob("*.json")):
+            warn(f"proposal at the pre-split path {f} — its instructions are stale. Collected it "
+                 f"anyway; the current path is {PROPOSALS}")
+            f.replace(PROPOSALS / f.name)
     for f in sorted(PROPOSALS.glob("*.json")):
         try:
             out.append((f, json.loads(f.read_text())))
@@ -604,7 +1061,7 @@ def collect_proposals():
     return out
 
 
-REPOS = ("projects/moprox-tooling", "projects/private-data", "projects/moprox-memory")
+REPOS = tuple(f"projects/{name}" for name in REPO_DIRS)   # same three, as HOME-relative paths
 
 
 def refresh_repos():
@@ -658,8 +1115,13 @@ def ledger_digest(led, budget=26000):
 
     def entry(e, claim, objs=0, olen=1600):
         d = {"cycle": e.get("cycle")}
-        if e.get("claim"):
-            d["claim"] = _clip(e["claim"], claim)
+        # `item` is the change agent's equivalent of a claim, one line saying what was done.
+        # Without this fallback a landed fix appears in the digest as a bare cycle number.
+        if e.get("claim") or e.get("item"):
+            d["claim"] = _clip(e.get("claim") or e.get("item"), claim)
+        for k in ("repo", "sha", "source"):
+            if e.get(k):
+                d[k] = _clip(e[k], 120)
         for k in ("why", "note", "operator_note"):
             if e.get(k):
                 d[k] = _clip(e[k], 300)
@@ -734,11 +1196,22 @@ def ledger_digest(led, budget=26000):
 
 def main():
     agent = sys.argv[1] if len(sys.argv) > 1 else "analyst"
-    STATE.mkdir(parents=True, exist_ok=True)
-    refresh_repos()
 
     if STOP.exists():
         say("STOP flag present — not running", 4, agent); return 0
+
+    # Before the ledger, before the repos: two agents in one tree pushing to one origin is the
+    # thing this lock is for, and the migration below must not race a cycle already in flight.
+    # `lock` looks unused and is not: the flock lives as long as the file object, so dropping the
+    # binding would close it and release the mutex while the cycle is still running.
+    lock = hold_lock(agent)
+    if lock is None:
+        say(f"another loop agent holds {LOCK}, so skipping this cycle", 5, agent)
+        return 0
+    bind_state(agent)
+    STATE.mkdir(parents=True, exist_ok=True)
+    conf = agent_conf(agent)
+    refresh_repos()
 
     led = load_ledger()
     if led.get("strikes", 0) >= MAX_STRIKES:
@@ -748,17 +1221,24 @@ def main():
         notify.send(msg, agent)
         return 0
 
-    spent = spent_recently(BUDGET_H)
-    if spent >= BUDGET_CAP:
-        say(f"budget: ${spent:.2f} of ${BUDGET_CAP:.2f} in the last {BUDGET_H:g}h — skipping", 5, agent)
+    cap = float(conf.get("budget_cap_usd") or BUDGET_CAP)
+    spent = spent_recently(BUDGET_H, agent)
+    if spent >= cap:
+        say(f"budget: ${spent:.2f} of ${cap:.2f} in the last {BUDGET_H:g}h, skipping", 5, agent)
         return 0
+    if TOTAL_CAP:
+        tot = spent_recently(BUDGET_H)
+        if tot >= TOTAL_CAP:
+            say(f"budget: the loop as a whole has spent ${tot:.2f} of ${TOTAL_CAP:.2f} in the last "
+                f"{BUDGET_H:g}h, skipping (this agent's own share is ${spent:.2f})", 5, agent)
+            return 0
 
     led["cycle"] = led.get("cycle", 0) + 1
     cyc = led["cycle"]
     inflight = led.get("inflight")
     save_ledger(led)
 
-    say(f"▸ cycle {cyc} · budget ${spent:.2f}/${BUDGET_CAP:.2f}"
+    say(f"▸ cycle {cyc} · budget ${spent:.2f}/${cap:.2f}"
         + (f" · resuming {inflight}" if inflight else ""), 6, agent)
 
     # The ledger IS the seed: open items, what has already been tried, what was accepted.
@@ -773,7 +1253,20 @@ def main():
         f"(schema in CLAUDE.md). Finish by stating in one line what you did."
     )
 
-    prompt += open_incidents()
+    # Pull surfaces, pushed. Which ones is declared per agent (agents/<name>/loop.json) and
+    # defaults to incidents alone, which is exactly what the analyst had before there was a second
+    # agent, and adding one must not silently change the other's prompt.
+    for surface in (conf.get("inject") or ["incidents"]):
+        if surface == "incidents":
+            prompt += open_incidents()
+        elif surface == "issues":
+            prompt += open_issues()
+        elif surface == "findings":
+            prompt += recent_findings(led)
+        else:
+            err(f"agent_conf: {agent} declares inject={surface!r}, which this harness does not "
+                f"implement, so that surface is NOT in the prompt",
+                RuntimeError("unknown inject surface"))
 
     gaps = preflight()
     if gaps:
@@ -809,6 +1302,50 @@ def main():
 
     accepted = rejected = disputed = 0
     for f, prop in collect_proposals():
+        # A change proposal carries a patch and is gated differently: the same check is run on a
+        # clean worktree and on the patched one, and only a check that comes out DIFFERENTLY on the
+        # two proves the change did anything. Kept as its own branch rather than folded into the
+        # claim path below, which is in production for the analyst and is left untouched.
+        if prop.get("patch"):
+            item = _clip(prop.get("item") or prop.get("subject") or "?", 90)
+            status, detail, extra = change_gate(prop, cyc, agent)
+            row = {"cycle": cyc, "kind": "change", "item": prop.get("item"),
+                   "source": prop.get("source"), "repo": prop.get("repo"),
+                   "files": extra.get("files"), "why": prop.get("why"),
+                   "check": _src(prop.get("check") or "", SRC_MAX)}
+            if status == "accepted":
+                accepted += 1
+                row["sha"] = extra.get("sha")
+                led.setdefault("accepted", []).append(row)
+                say(f"✓ LANDED {extra.get('sha')}  {item}  [{detail}]", 6, agent)
+                notify.send("LANDED %s %s\n%s\n\nwhy: %s\nfiles: %s\nevidence: %s"
+                            % (prop.get("repo"), extra.get("sha"), prop.get("item", "?"),
+                               _clip(prop.get("why", ""), 400),
+                               ", ".join(extra.get("files") or []), _clip(detail, 300)), agent)
+            elif status == "disputed":
+                disputed += 1
+                row["objections"] = extra.get("objections")
+                row["evidence"] = detail
+                led.setdefault("disputed", []).append(row)
+                say(f"⚑ DISPUTED (not landed)  {item}", 4, agent)
+                notify.send("DISPUTED: the change passed its differential and the audit objected, "
+                            "so it was NOT landed\n%s\n\n%s"
+                            % (prop.get("item", "?"), "\n".join(extra.get("objections") or [])),
+                            agent)
+            else:
+                rejected += 1
+                row["why"] = detail
+                led.setdefault("tried", []).append(row)
+                say(f"✗ NOT LANDED  {item}  [{detail}]", 4, agent)
+                # A change that verified and then failed to reach origin is not the same event as
+                # one that failed its own check, and only one of them needs a human.
+                if extra.get("unlanded"):
+                    notify.send("UNLANDED: the change passed every gate and the push failed. The "
+                                "work is in the cycle's patch archive, not on origin.\n%s\n\n%s"
+                                % (prop.get("item", "?"), detail), agent)
+            f.unlink(missing_ok=True)
+            continue
+
         ok, detail = verify(prop, cyc, agent)
         claim = _clip(prop.get("claim", "?"), 90)
         if ok:
