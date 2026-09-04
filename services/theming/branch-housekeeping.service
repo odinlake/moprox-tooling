@@ -1,8 +1,9 @@
-# Retire ai-feature-* branches in theme-ontology/theming whose PR has been merged, closed or never
-# opened. The rule is the operator's (2026-09-04): no ai-feature branch without an open PR.
-# Install to /etc/systemd/system/. See branch_housekeeping.py for the policy and its reasoning.
+# Retire ai-feature-* branches in theme-ontology/theming that are finished with: PR merged, PR
+# closed unmerged, or no PR and no commit for a fortnight. A garbage collector, not a rule — a
+# branch with no PR that is still moving is left alone. Install to /etc/systemd/system/.
+# See branch_housekeeping.py for the policy and its reasoning.
 [Unit]
-Description=moprox theming ai-feature branch housekeeping (retire branches with no open PR)
+Description=moprox theming ai-feature branch housekeeping (retire finished/abandoned branches)
 After=network-online.target
 Wants=network-online.target
 
