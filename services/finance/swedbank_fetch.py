@@ -156,22 +156,13 @@ def fetch_account(cfg, tok, uid, date_from):
             return rows, actual
 
 
-def ladder_ok(rows):
-    """Does the store still reconcile against the bank's own running balance?
+def _chain(rows):
+    """Put the store in the order the bank's own running balance implies, or say where it breaks.
 
     Every row carries balance_after_transaction, so a complete store is a closed chain: each balance
-    is the previous one plus the signed amount. That makes a MISSING interior row detectable without
-    asking the bank anything — and the interior is exactly where this lane loses data. The 422 clamp
-    in fetch_account advances to whatever floor the bank still serves, never comparing it to what we
-    already hold; if it ever steps past our newest booking date, the rows in between are gone for
-    good and the store closes over the hole silently.
-
-    Measured on the real store (analyst cycle 286, 2026-08-29): interior gaps of 1..4 consecutive
-    rows were caught 51/51. Loss at either END of the store is NOT detectable this way (0/4) — a
-    truncation leaves a chain that still closes. This is a gap check, not a completeness proof.
-
-    Within a booking date the file order is not the ledger order, so search the intra-day orderings.
-    Returns (ok, first_bad_date)."""
+    is the previous one plus the signed amount. Within a booking date the file order is NOT the
+    ledger order (the file sorts by (booking_date, entry_reference)), so the intra-day orderings are
+    searched. Returns (rows_in_ledger_order, None), or (None, first_bad_booking_date)."""
     from decimal import Decimal
     from itertools import permutations
 
@@ -184,11 +175,11 @@ def ladder_ok(rows):
 
     rows = [r for r in rows if r.get("balance_after_transaction") and r.get("booking_date")]
     if len(rows) < 2:
-        return True, None
+        return rows, None
     days = {}
     for r in rows:
         days.setdefault(r["booking_date"], []).append(r)
-    prev = None
+    prev, ordered = None, []
     for d in sorted(days):
         grp = days[d]
         # n! over a day's transactions; beyond a handful, fall back to stored order rather than hang.
@@ -210,9 +201,43 @@ def ladder_ok(rows):
                 hit = p
                 break
         if hit is None:
-            return False, d
+            return None, d
+        ordered.extend(hit)
         prev = bal(hit[-1])
-    return True, None
+    return ordered, None
+
+
+def ladder_ok(rows):
+    """Does the store still reconcile against the bank's own running balance?
+
+    A missing INTERIOR row is detectable without asking the bank anything — and the interior is
+    exactly where this lane loses data. The 422 clamp in fetch_account advances to whatever floor
+    the bank still serves, never comparing it to what we already hold; if it ever steps past our
+    newest booking date, the rows in between are gone for good and the store closes over the hole
+    silently.
+
+    Measured on the real store (analyst cycle 286, 2026-08-29): interior gaps of 1..4 consecutive
+    rows were caught 51/51. Loss at either END of the store is NOT detectable this way (0/4) — a
+    truncation leaves a chain that still closes. This is a gap check, not a completeness proof.
+
+    Returns (ok, first_bad_date)."""
+    ordered, bad = _chain(rows)
+    return ordered is not None, bad
+
+
+def closing(rows):
+    """The account's STOCK, not its flow: balance after the last row in ledger order.
+
+    The bank's own number, never a reconstruction. Returns (booking_date, balance) or (None, None)
+    when the store is empty or the chain does not close — in which case the last row is not knowable
+    and guessing would be worse than saying nothing. Carries ladder_ok's endpoint blindness: a store
+    truncated at its newest end still chains, so this is the newest balance the estate HOLDS, which
+    is not necessarily the account's balance today."""
+    ordered, _ = _chain(rows)
+    if not ordered:
+        return None, None
+    last = ordered[-1]
+    return last["booking_date"], float(last["balance_after_transaction"]["amount"])
 
 
 def amount(t):
@@ -259,9 +284,14 @@ def derive(accounts, store):
         s = slug(acct)
         rows = sorted(store.get(s, {}).values(), key=lambda t: (t.get("booking_date") or ""))
         spend = sum(-amount(t) for t in rows if kind(t) in ("spend", "fee"))
+        # Stock as well as flow. Every stored row carries the bank's own balance and until now none
+        # of it reached the artifact: the view could say 16 656 SEK went out in August and could not
+        # say that 1 409.91 was left. Cheap, and the one number that does not follow from the others.
+        bal_date, bal = closing(rows)
         by_account[s] = {"product": acct.get("product"), "name": acct.get("details") or acct.get("product"),
                          "iban_last4": ((acct.get("account_id") or {}).get("iban") or "")[-4:],
-                         "n": len(rows), "spend": round(spend, 2)}
+                         "n": len(rows), "spend": round(spend, 2),
+                         "balance": bal, "balance_date": bal_date}
         for t in rows:
             v, m, k = amount(t), (t.get("booking_date") or "")[:7], kind(t)
             if not m:
@@ -295,6 +325,12 @@ def derive(accounts, store):
                        "text is the only signal. Transfers are EXCLUDED from spend and counted "
                        "on their OUTGOING leg only (an internal move is two rows): 2026-06 is "
                        "240 000 SEK of transfer against a few hundred of real spending."),
+        "balance_note": ("by_account.balance is the bank's own balance_after_transaction on the "
+                         "newest row the balance chain reaches — stock, not flow, and not a "
+                         "reconstruction. It is the newest balance the ESTATE HOLDS: a store "
+                         "truncated at its newest end still chains, so it can lag the real balance. "
+                         "null means no rows, or a chain that did not close (the fetch log says so "
+                         "at err level)."),
         "period": {"from": ms[0]["month"] if ms else None, "to": ms[-1]["month"] if ms else None},
         "months": ms,
         "by_account": by_account,
