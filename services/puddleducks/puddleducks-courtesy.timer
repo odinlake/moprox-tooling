@@ -1,0 +1,15 @@
+# Twice a day, the operator's cadence (2026-09-05). Morning and evening rather than every 12 h from
+# boot: places appear when another family marks an absence, which they do during the day and in the
+# evening, and a fixed clock keeps the two checks in the hours when the answer can actually change.
+[Unit]
+Description=Twice-daily Puddle Ducks courtesy-class check
+
+[Timer]
+OnCalendar=*-*-* 08:10:00
+OnCalendar=*-*-* 19:40:00
+AccuracySec=5min
+# Catch up after a reboot: a missed check is a missed place.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

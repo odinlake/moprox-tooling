@@ -1,0 +1,17 @@
+# Watch the Aspire Centre Sunday 15:15 Level 1 & 2 class for a Courtesy Class place, and tell the
+# operator on Telegram when one opens. Read-only: it never follows a link on the portal, because
+# that portal's action controls are unconfirmed GET anchors. Install to /etc/systemd/system/.
+[Unit]
+Description=Puddle Ducks courtesy-class availability watch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/puddleducks/courtesy_watch.py
+# One browser session on webscout, two page loads. Bounded well inside the 12 h gap so a hung
+# navigation cannot still be sitting here at the next firing.
+TimeoutStartSec=600
