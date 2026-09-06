@@ -1,0 +1,19 @@
+# Watch the family's Puddle Ducks account and tell the operator on Telegram when something changes:
+# a Courtesy Class place opening in the Aspire Centre Sunday 15:15 class, and any movement in the
+# children's swim criteria (in either direction — an un-tick is the case nobody would notice).
+# Read-only: it never follows a link on the portal, because that portal's action controls are
+# unconfirmed GET anchors. Install to /etc/systemd/system/.
+[Unit]
+Description=Puddle Ducks account watch (courtesy places + swim criteria)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/puddleducks/puddleducks_watch.py
+# One browser session on webscout, three page loads. Bounded well inside the 12 h gap so a hung
+# navigation cannot still be sitting here at the next firing.
+TimeoutStartSec=600

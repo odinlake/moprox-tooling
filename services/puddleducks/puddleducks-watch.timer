@@ -2,7 +2,7 @@
 # boot: places appear when another family marks an absence, which they do during the day and in the
 # evening, and a fixed clock keeps the two checks in the hours when the answer can actually change.
 [Unit]
-Description=Twice-daily Puddle Ducks courtesy-class check
+Description=Twice-daily Puddle Ducks account check
 
 [Timer]
 OnCalendar=*-*-* 08:10:00
