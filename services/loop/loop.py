@@ -993,6 +993,44 @@ def recent_findings(led, n=30):
               "is, and saying so, is a legitimate increment.")
 
 
+CREDS_CHECK = Path(__file__).resolve().parents[1] / "sessions/creds-check.py"
+
+
+def creds_expired():
+    """True only when the OAuth refresh token is POSITIVELY known to be dead. -> (bool, human).
+
+    FAIL OPEN, borrowed wholesale from creds-check.py along with its function: an unreadable file,
+    an unexpected shape or a missing timestamp all mean "unknown", and unknown must never be the
+    reason a cycle does not run.
+
+    This exists because of the 2026-09-04 outage. The refresh token hit its four-week ceiling, every
+    spawn came back "Failed to authenticate", and the harness counted each one as a BAD CYCLE. Three
+    strikes later both agents were HALTED, which is a latch: it blocks before anything runs, so it
+    cannot clear itself even once the credentials are healthy again. The box was dead for 38 hours
+    and needed a human to edit two ledgers to come back.
+
+    A cycle that cannot START is not a cycle that ran badly. This is the same class as the STOP flag
+    and the budget gate: say so, exit 0, take no strike, and resume by itself the moment the
+    environment is fixed.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("creds_check", CREDS_CHECK)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        exp = m.refresh_expiry_ms()
+    except Exception as exc:
+        warn(f"creds_expired: could not run the credential check ({exc}) — proceeding, since an "
+             f"unknown credential state must not stop a cycle")
+        return False, ""
+    if exp is None:
+        return False, ""
+    days, when = m.describe(exp)
+    if days > 0:
+        return False, ""
+    return True, f"refresh token expired {when} ({-days:.1f} days ago)"
+
+
 def preflight():
     """Check declared capabilities against reality. Returns a list of human-readable failures.
 
@@ -1214,6 +1252,24 @@ def main():
     refresh_repos()
 
     led = load_ledger()
+
+    # Before the strike gate, deliberately: a dead credential is a precondition, not a verdict on
+    # the work, and it must not be able to put the agent into a state a human has to clear.
+    dead, why = creds_expired()
+    if dead:
+        msg = (f"credentials are dead ({why}) — skipping. No strike taken; cycles resume by "
+               f"themselves once the credentials are refreshed.")
+        say(msg, 4, agent)
+        # Once per 12 h, not once per tick. The analyst wakes hourly, so an unrated notify would
+        # have posted this 38 times during the outage it was written for, and a channel that
+        # repeats itself is a channel nobody reads.
+        last = float(led.get("creds_warned_at") or 0)
+        if time.time() - last > 12 * 3600:
+            led["creds_warned_at"] = time.time()
+            save_ledger(led)
+            notify.send(msg, agent)
+        return 0
+
     if led.get("strikes", 0) >= MAX_STRIKES:
         msg = (f"HALTED after {led['strikes']} consecutive bad cycles. Nothing will run until "
                f"'strikes' is reset in {LEDGER}.")

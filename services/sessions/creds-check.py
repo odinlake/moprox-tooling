@@ -30,7 +30,7 @@ Two modes, one script:
 `tg` is imported lazily inside --warn only: the gate runs on every session start and must not depend on
 the Telegram stack (telegramify_markdown, convo) being importable.
 """
-import argparse, json, os, sys, time
+import argparse, json, os, socket, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -71,24 +71,35 @@ def gate():
     return 1
 
 
-def warn(threshold_days):
+DEV_REMEDY = ("Run `/login` on claude-dev, then "
+              "`sudo systemctl restart moprox-dev@one moprox-dev@two moprox-dev@three`.\n"
+              "Left alone, the next boot after expiry wedges all three sessions at \"Not logged in\".")
+
+
+def warn(threshold_days, remedy=None, handle="dev"):
+    """Telegram a heads-up. NAMES THE HOST, because more than one box runs on these credentials now.
+
+    claude-loop went dark for 38 hours on 2026-09-04 when its refresh token hit its four-week
+    ceiling, and this timer did not cover it: the script was written for the dev sessions and its
+    remedy line names units that do not exist there. A warning that tells you to fix the wrong box
+    is worse than none, so the remedy is now the caller's to supply.
+    """
+    host = socket.gethostname()
     exp = refresh_expiry_ms()
     if exp is None:
-        msg = ("**Claude credentials unreadable** — `%s` is missing or not in the expected shape.\n"
-               "The moprox-dev sessions can't be checked; verify with `moprox-creds-check --status`." % CREDS)
+        msg = ("**Claude credentials unreadable on %s** — `%s` is missing or not in the expected "
+               "shape.\nVerify with `moprox-creds-check --status` on that box." % (host, CREDS))
     else:
         days, when = describe(exp)
         if days > threshold_days:
             return 0
-        head = ("**Claude credentials EXPIRED** %s" % when if days <= 0 else
-                "**Claude credentials expire in %.1f days** (%s)" % (days, when))
-        msg = (head + "\nRun `/login` on claude-dev, then "
-               "`sudo systemctl restart moprox-dev@one moprox-dev@two moprox-dev@three`.\n"
-               "Left alone, the next boot after expiry wedges all three sessions at \"Not logged in\".")
+        head = ("**Claude credentials EXPIRED on %s** %s" % (host, when) if days <= 0 else
+                "**Claude credentials on %s expire in %.1f days** (%s)" % (host, days, when))
+        msg = head + "\n" + (remedy or DEV_REMEDY)
     try:
         sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
         import tg
-        tg.send(msg, agent="dev")
+        tg.send(msg, agent=handle)
     except BaseException as e:                       # a transport blip must not red the timer. NOT
         # `except Exception`: tg.creds() raises SystemExit when telegram.env is missing, which is
         # exactly the degraded case where we still want the timer green and the reason in the journal.
@@ -98,6 +109,7 @@ def warn(threshold_days):
 
 def status():
     exp = refresh_expiry_ms()
+    print("host: %s" % socket.gethostname())
     print("creds file: %s (%s)" % (CREDS, "present" if CREDS.exists() else "MISSING"))
     if exp is None:
         print("refresh token: expiry UNKNOWN — gate fails open, sessions start normally")
@@ -114,5 +126,9 @@ if __name__ == "__main__":
     g.add_argument("--warn", action="store_true", help="Telegram a heads-up when expiry is near; always exits 0")
     g.add_argument("--status", action="store_true", help="print credential expiry for a human")
     ap.add_argument("--days", type=float, default=5.0, help="--warn threshold in days (default 5)")
+    ap.add_argument("--remedy", default=None,
+                    help="what the operator should DO, appended to the --warn message. Default is "
+                         "the claude-dev sessions remedy; any other box must pass its own.")
+    ap.add_argument("--handle", default="dev", help="#handle the warning is sent under (default dev)")
     a = ap.parse_args()
-    sys.exit(gate() if a.gate else warn(a.days) if a.warn else status())
+    sys.exit(gate() if a.gate else warn(a.days, a.remedy, a.handle) if a.warn else status())
