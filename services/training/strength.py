@@ -40,6 +40,27 @@ def entries():
     return sorted(out, key=lambda r: (r["date"], r.get("ts", "")))
 
 
+# Where a load CAME FROM, alongside the load itself. The log is a number plus prose, and the prose
+# is where "I lifted this" and "the plan said this and nobody wrote down what was actually on the
+# bar" have been living. On the only session the lane holds, three of seven rows say the latter —
+# 72.5% of the session's volume and half its movement bests — and the panel printed them in the same
+# column, in the same face, as the rows that were observed. `note` is not a field a renderer can act
+# on; this is. Same shape and same job as `spd_src` on the runs feed.
+ASSUMED_NOTE = "load assumed"
+
+
+def kg_src(r):
+    """"stated" | "assumed", or None when the row carries no load to attribute.
+
+    An explicit `kg_src` on the row wins, so a writer that learns to say it outright never has to be
+    parsed for; the note is the fallback for the rows already logged.
+    """
+    if r.get("kg") is None:
+        return None
+    return r.get("kg_src") or ("assumed" if ASSUMED_NOTE in (r.get("note") or "").lower()
+                               else "stated")
+
+
 def volume(r):
     """sets x reps x kg, or None. Weighted movements only — an index, not kilos moved: 30 kg of
     pulldown is not 30 kg of squat, so it is comparable against itself over time and nothing else.
@@ -60,10 +81,13 @@ def build():
         s = by_date.setdefault(d, {"date": d, "entries": [], "sets": 0,
                                    "volume_load": 0.0, "has_unweighted": False})
         v = volume(r)
+        src = kg_src(r)
         e = {"ex": r["ex"], "sets": r["sets"]}
         for k in ("reps", "kg", "secs", "rir", "note"):
             if r.get(k) is not None:
                 e[k] = r[k]
+        if src:
+            e["kg_src"] = src
         if v is not None:
             e["volume"] = v
             s["volume_load"] += v
@@ -76,6 +100,8 @@ def build():
         for k in ("reps", "kg", "secs", "rir"):
             if r.get(k) is not None:
                 m[k] = r[k]
+        if src:
+            m["kg_src"] = src
         if v is not None:
             m["volume"] = v
         movements[r["ex"]].append(m)
@@ -88,7 +114,9 @@ def build():
     sessions.sort(key=lambda s: s["date"], reverse=True)
 
     # Per movement: the progression line, plus the current best, which is the number the athlete
-    # actually looks for. "Best" is top load, tie-broken by reps — 30x10 beats 30x8.
+    # actually looks for. "Best" is top load, tie-broken by reps — 30x10 beats 30x8. An assumed load
+    # can and does win that comparison against a stated one on the same day, so `best` carries its
+    # own `kg_src` through from the row and the panel has to show it.
     mv = {}
     for ex, hist in movements.items():
         hist.sort(key=lambda h: h["date"])

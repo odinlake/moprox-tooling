@@ -373,8 +373,13 @@ async function loadStrength(){
   const el = document.querySelector("#strpanel"); if(!el) return;
   if(!d || !d.count){ el.style.display="none"; return; }
   const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  // A load the log says was carried over from the prescription rather than observed is a guess in
+  // the same column as a measurement, so it takes the same treatment the runs table gives an
+  // estimated speed: .est, and the reason on hover. Nothing is hidden or dropped.
+  const asm = (t,e) => e.kg_src==="assumed"
+    ? `<span class="est" title="load assumed from prescription, not stated">${t}</span>` : t;
   const dose = e => e.secs!=null ? `${e.sets}×${e.secs}s`
-                  : (e.kg!=null ? `${e.sets}×${e.reps} @ ${e.kg} kg` : `${e.sets}×${e.reps}`);
+                  : (e.kg!=null ? `${e.sets}×${e.reps} @ ${asm(`${e.kg} kg`,e)}` : `${e.sets}×${e.reps}`);
   // Per movement: current best + a bare progression line. One session in, the line is a dot; that is
   // honest, and it fills in without any change here.
   const spark = m => {
@@ -387,12 +392,19 @@ async function loadStrength(){
   };
   const movs = Object.entries(d.movements).sort((a,b)=>a[0].localeCompare(b[0])).map(([ex,m])=>{
     const b = m.best || {};
-    const best = b.secs!=null ? `${b.secs}s` : (b.kg!=null ? `${b.kg} kg × ${b.reps}` : `${b.reps} reps`);
+    const best = b.secs!=null ? `${b.secs}s`
+               : (b.kg!=null ? asm(`${b.kg} kg × ${b.reps}`,b) : `${b.reps} reps`);
     return `<tr><td>${esc(ex)}</td><td class="num">${best}</td><td class="num">${m.n}</td><td>${spark(m)}</td></tr>`;
   }).join("");
   const sess = d.sessions.slice(0,8).map(s=>{
     const items = s.entries.map(e=>`${esc(e.ex)} ${dose(e)}`).join(" · ");
-    const vol = s.volume_load ? `${s.volume_load.toLocaleString()}${s.has_unweighted?"+":""}` : "—";
+    // Volume load is a sum, so it is assumed in PART. Show how much: on this lane's first session
+    // 72% of it came from three rows whose loads were never observed.
+    const va = s.entries.reduce((t,e)=>t+(e.kg_src==="assumed"?(e.volume||0):0),0);
+    const num = s.volume_load ? `${s.volume_load.toLocaleString()}${s.has_unweighted?"+":""}` : "";
+    const vol = !s.volume_load ? "—" : (va
+      ? `<span class="est" title="${Math.round(va/s.volume_load*100)}% of this from loads assumed from prescription, not stated">${num}</span>`
+      : num);
     return `<tr><td style="width:1%;white-space:nowrap">${s.date}</td><td class="num" style="width:1%">${s.sets}</td>`
          + `<td class="num" style="width:1%">${vol}</td><td class="muted" style="font-size:.75rem">${items}</td></tr>`;
   }).join("");
@@ -406,7 +418,7 @@ async function loadStrength(){
           <th class="num" title="${esc(d.volume_note||"")}">vol</th><th>movements</th></tr></thead>
         <tbody>${sess}</tbody></table></div>
     </div>
-    <div class="muted" style="font-size:.72rem;margin-top:.4rem">vol = sets × reps × kg, an index comparable only against itself. “+” means the session also held bodyweight or timed work, which carries no volume.</div>`;
+    <div class="muted" style="font-size:.72rem;margin-top:.4rem">vol = sets × reps × kg, an index comparable only against itself. “+” means the session also held bodyweight or timed work, which carries no volume. <span class="est">Italic</span> is a load the log says was assumed from the prescription, not observed — hover it.</div>`;
 }
 
 async function loadTraining(){
