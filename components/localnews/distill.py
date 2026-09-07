@@ -46,9 +46,20 @@ def classify(p):
                            body=(p.get("body") or "")[:900])
     r = subprocess.run([CLAUDE, "-p", "--output-format", "text", "--model", "haiku"],
                        input=prompt, capture_output=True, text=True, timeout=120)
+    # Report what the CLI said, not what its silence did to json.loads. An expired OAuth session
+    # exits non-zero with the reason on stderr and nothing on stdout; the slice below then hands
+    # json.loads an empty string and every post reports "JSONDecodeError: Expecting value: line 1
+    # column 1 (char 0)" — a batch of identical parse errors for a classifier that was never asked.
+    # That is what the 19 posts of 2026-09-07T09:50Z say in the journal, and the credential the
+    # whole box was missing appears nowhere in them.
+    if r.returncode != 0:
+        raise RuntimeError(f"claude -p exit {r.returncode}: "
+                           f"{(r.stderr or r.stdout).strip()[:300] or '<no output>'}")
     txt = r.stdout.strip()
-    txt = txt[txt.find("{"):txt.rfind("}") + 1]
-    return json.loads(txt)
+    i, j = txt.find("{"), txt.rfind("}")
+    if i < 0 or j < i:
+        raise ValueError(f"claude -p exit 0 but no JSON object in its output: {txt[:300]!r}")
+    return json.loads(txt[i:j + 1])
 
 
 def main():
