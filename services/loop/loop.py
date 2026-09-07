@@ -492,8 +492,25 @@ def _subject(prop, evidence, tree):
             f"ITS OUTPUT:\n{_clip(evidence, 1500)}\n\n")
 
 
+class LensFailed(Exception):
+    """A refuter that never returned a verdict. NOT an approval.
+
+    Until cycle 378 every failure path in refute() — timeout, non-zero exit, no JSON verdict,
+    unparseable verdict — returned None, the same value as "this lens found nothing". adversarial()
+    tested only `if d:`, so there was no flow control anywhere that could tell a dead skeptic from a
+    satisfied one, and the gate published on one lens while CLAUDE.md warranted two. It failed open
+    hardest on the hardest claims, because the refuter doing the most reading is the one that hits
+    REFUTE_MAX_S: measured over 2026-08-08..09-06, 8 of 248 audited cycles logged only one of their
+    two refuter runs and 6 of those were published as accepted estate facts.
+    """
+
+
 def refute(prop, evidence, lens, agent, tree=None):
     """Spawn one independent skeptic. Returns a defect string, or None if it found nothing.
+
+    Raises LensFailed if the skeptic did not deliver a verdict at all. That is not a defect in the
+    claim and not an endorsement of it — it is an audit that did not happen, and the caller must
+    treat it as blocking.
 
     Read-oriented tools only, and it is told plainly that vague doubt is not refutation — an
     adversary that can reject on a feeling rejects everything, which is as useless as accepting
@@ -527,12 +544,12 @@ def refute(prop, evidence, lens, agent, tree=None):
                            stdin=subprocess.DEVNULL, cwd=str(HOME))
     except subprocess.TimeoutExpired:
         warn(f"refuter[{name}] timed out after {REFUTE_MAX_S}s — claim not audited on this lens")
-        return None
+        raise LensFailed(f"timed out after {REFUTE_MAX_S}s") from None
     out = (r.stdout or "").strip()
     if r.returncode != 0:
         err(f"refuter[{name}] exited {r.returncode} — claim not audited on this lens",
             RuntimeError(_clip(r.stderr or out, 200)))
-        return None
+        raise LensFailed(f"exited {r.returncode}: {_clip(r.stderr or out, 200)}")
     # Unwrap the json envelope: {result, usage, total_cost_usd, ...}. The verdict is the last JSON
     # object inside `result`, exactly as before. If the format ever changes, fall back to reading
     # stdout raw — the audit still runs, it just goes unledgered, and that says so.
@@ -547,20 +564,27 @@ def refute(prop, evidence, lens, agent, tree=None):
         warn(f"refuter[{name}] gave no json envelope — verdict read raw, tokens NOT ledgered")
     i, j = out.rfind("{"), out.rfind("}")
     if i < 0 or j <= i:
-        warn(f"refuter[{name}] returned no JSON verdict — treating as no objection")
-        return None
+        warn(f"refuter[{name}] returned no JSON verdict — claim not audited on this lens")
+        raise LensFailed("returned no JSON verdict")
     try:
         v = json.loads(out[i:j + 1])
     except Exception as exc:
-        warn(f"refuter[{name}] verdict was not valid JSON ({exc}) — treating as no objection")
-        return None
+        warn(f"refuter[{name}] verdict was not valid JSON ({exc}) — claim not audited on this lens")
+        raise LensFailed(f"verdict was not valid JSON ({exc})") from None
     if v.get("refuted") and str(v.get("defect", "")).strip():
         return f"[{name}] {_clip(str(v['defect']).strip(), OBJ_MAX)}"
     return None
 
 
 def adversarial(prop, evidence, agent, cyc=0, tree=None):
-    """Run every lens. Returns the objections raised, empty if the finding survived.
+    """Run every lens. Returns the objections raised, empty if the finding survived EVERY lens.
+
+    Empty means audited and unrefuted — never merely un-run. A lens that raises LensFailed blocks
+    with an objection of its own, so the claim comes back disputed rather than published: the whole
+    warrant on a published fact is that two independent skeptics looked at it and let it stand, and
+    a skeptic that died did not let anything stand. The cost of failing closed is one re-proposal
+    (cheap, the claim and its verifier are already written); the cost of failing open is an estate
+    fact that says it was audited twice and was not.
 
     Each objection is also written to disk verbatim, for the same reason verifiers are: the ledger
     is a bounded digest, and a disputed claim is published nowhere else, so the ledger's copy of the
@@ -570,7 +594,11 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
         return []
     objections = []
     for lens in (CHANGE_LENSES if prop.get("patch") else LENSES):
-        d = refute(prop, evidence, lens, agent, tree=tree)
+        try:
+            d = refute(prop, evidence, lens, agent, tree=tree)
+        except LensFailed as exc:
+            d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on this lens "
+                 f"({exc}). This is not a defect in the claim: re-propose it unchanged.")
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
         if d:
             objections.append(d)
