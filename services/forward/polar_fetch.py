@@ -12,6 +12,9 @@ dashboard updater ingests it.
 Dedup + no-history-spam: a seen-set (polar-seen.json) tracks processed ids. On a cold start the
 90-day back-catalogue is stored raw and marked seen, but only exercises uploaded within
 FRESH_WINDOW_H are actually posted — so today's workout posts while 90 days don't flood the DM.
+FRESH_WINDOW_H is a COLD-START filter and stops applying once we have tried to post a session:
+those are tracked in polar-retry.json and retried until RETRY_WINDOW_H, and giving up on one is
+an err, not a print.
 """
 import calendar, json, re, sys, time, urllib.error, urllib.request
 from pathlib import Path
@@ -35,8 +38,10 @@ from analysis import Athlete, analyse_safe
 POLAR_ENV = Path.home() / ".config/claude-dev/polar.env"
 INCOMING  = Path.home() / "projects/private-data/polar/incoming"
 SEEN      = Path.home() / ".local/share/moprox/polar-seen.json"
+RETRY     = Path.home() / ".local/share/moprox/polar-retry.json"
 MIN_HR_SECONDS = 600          # 10 min — the coach gate
 FRESH_WINDOW_H = 6            # only post exercises uploaded within this many hours (no history spam)
+RETRY_WINDOW_H = 48           # how long a session that FAILED to post keeps being retried
 BASE = "https://www.polaraccesslink.com"
 ATHLETE_JSON = Path.home() / "projects/private-data/agents/coach/athlete.json"
 ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls back to defaults)
@@ -71,6 +76,22 @@ def load_seen():
 def save_seen(s):
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     SEEN.write_text(json.dumps(sorted(s)))
+
+def load_retry():
+    """eid -> epoch of the FIRST failed post attempt. Membership is what separates "we have never
+    managed to post this" from "this is 90-day back-catalogue"; the two are otherwise identical to
+    the freshness gate below. Kept in its own file so polar-seen.json stays the plain id list."""
+    if not RETRY.exists(): return {}                      # first run — not an error
+    try:
+        return {str(k): float(v) for k, v in json.loads(RETRY.read_text()).items()}
+    except Exception as e:
+        errlog.err("polar: retry state %s unreadable — pending retries will be treated as "
+                   "back-catalogue and dropped" % RETRY, e)
+        return {}
+
+def save_retry(d):
+    RETRY.parent.mkdir(parents=True, exist_ok=True)
+    RETRY.write_text(json.dumps(d, sort_keys=True))
 
 # AccessLink sample_type -> a name we can read two years from now. Only 0 (HR) has ever appeared
 # here, because the athlete records with a chest strap and no other sensors — but a bike with a
@@ -217,7 +238,7 @@ def main():
     st, lst = api("/v3/exercises", tok)
     if st != 200 or lst is None:
         print("polar: /v3/exercises returned %s" % st); return
-    seen = load_seen(); posted = 0
+    seen = load_seen(); retry = load_retry(); posted = 0
     print("polar: %d exercises listed; %d seen" % (len(lst), len(seen)))
     for summ in lst:
         eid = str(summ.get("id") or "")
@@ -234,19 +255,34 @@ def main():
         if len(hr) < MIN_HR_SECONDS:
             print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins))
             seen.add(eid); continue
-        if upload_age_h(ex) > FRESH_WINDOW_H:
+        # The freshness gate is a COLD-START filter: its job is to keep the 90-day back-catalogue
+        # out of the DM, and a session we have already tried to post is not back-catalogue. It used
+        # to be re-evaluated on every retry, so a post that kept failing was marked handled at
+        # upload_time + 6 h and dropped for good — emitting only the same "stored (backfill)" line
+        # a genuine history item prints, so the log could not tell loss from routine. On 2026-09-07
+        # an 11 h credential outage came within 40 s of losing a session that way (71 failed posts,
+        # deadline 19:00:41Z, the run that finally succeeded started 19:00:01Z).
+        waited_h = (time.time() - retry[eid]) / 3600.0 if eid in retry else None
+        if waited_h is None and upload_age_h(ex) > FRESH_WINDOW_H:
             print("polar: %s stored (backfill) — not posting" % eid)
             seen.add(eid); continue
+        if waited_h is not None and waited_h > RETRY_WINDOW_H:
+            # The only place a real session is abandoned unposted. It is an err because nothing
+            # else in the estate will ever say this workout got no read.
+            errlog.err("polar: %s GIVING UP after %.1f h of failed posts — raw HR is stored but no "
+                       "session read was ever sent for this workout" % (eid, waited_h))
+            seen.add(eid); retry.pop(eid, None); continue
         try:
             cat = post_session(ex, hr); posted += 1
             print("polar: POSTED %s (%s, %s, %.0f min)" % (eid, ex.get("sport"), cat, mins))
-            seen.add(eid)
+            seen.add(eid); retry.pop(eid, None)
         except Exception as e:
-            # Left OUT of seen so the next run retries. Note the retry is still subject to
-            # FRESH_WINDOW_H above, so a failure that outlives the window stops being postable —
-            # the raw data is kept either way, and this err is now the thing that says so.
-            errlog.err("polar: posting exercise %s failed — left unposted, will retry next run" % eid, e)
-    save_seen(seen)
+            # Left OUT of seen so the next run retries, and recorded in `retry` so the freshness
+            # gate above stops applying to it. The deadline this message quotes is now the real one.
+            retry.setdefault(eid, time.time())
+            errlog.err("polar: posting exercise %s failed — left unposted, retrying for another "
+                       "%.1f h" % (eid, RETRY_WINDOW_H - (time.time() - retry[eid]) / 3600.0), e)
+    save_seen(seen); save_retry(retry)
     print("polar: done; posted %d" % posted)
 
 if __name__ == "__main__":
