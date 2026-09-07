@@ -4,8 +4,10 @@ dashboard's Agents panel. Stored to agent-statements.json (read by agent_stats.p
 """
 import json, re, sys, time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
-from run import run_agent, AGENTS
+from run import run_agent, AGENTS  # noqa: E402
 
 OUT = Path.home() / ".local/share/moprox/agent-statements.json"
 PROMPT = ("In ONE short sentence (max ~15 words), a status line in your own voice — a wry or "
@@ -13,6 +15,11 @@ PROMPT = ("In ONE short sentence (max ~15 words), a status line in your own voic
 
 def main():
     data = json.loads(OUT.read_text()) if OUT.exists() else {}
+    # One agent failing is a flake and stays a warning; ALL of them failing is one systemic fault —
+    # a dead credential, a missing CLI — and has to reach the journal at err. On 2026-09-07 an
+    # expired OAuth session lost all six here and this unit still exited 0, so the estate's queue
+    # saw the same outage as three unrelated incidents plus one silence.
+    skips = errlog.Skips("agent-statements: asking each agent for its status line")
     for a in AGENTS:
         try:
             s = run_agent(a, PROMPT, timeout=180).strip().splitlines()[0]
@@ -20,7 +27,9 @@ def main():
             data[a] = {"text": s[:160], "ts": int(time.time())}
             print(a, "->", s[:70])
         except Exception as e:
+            skips.add(e)
             print(a, "err", e)
+    skips.report(total=len(AGENTS))
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(data))
 
