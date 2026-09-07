@@ -130,6 +130,41 @@ def _pre_run(agent):
         pass          # a stale trace is a degraded read, not a failed one — never block the agent
 
 
+def _diagnose(out, err):
+    """Why the CLI failed, named — instead of the first 300 bytes of the envelope.
+
+    `claude -p --output-format json` reports a failure in the RESULT ENVELOPE, not on stderr, and
+    the envelope leads with the zeroed usage counters. Measured 2026-09-07 (CLI 2.1.223, and the
+    same shape in the 2026-09-07 credential outage on claude-dev): the whole envelope is 827 chars
+    and `subtype`, `errors`, `terminal_reason` ALL sort after `usage`, so a fixed 300-byte prefix
+    reports only the part that is identical on every failure —
+    `total_cost_usd:0, input_tokens:0, output_tokens:0` — and every caller downstream then invents
+    its own explanation for it. Pull the diagnostic fields out by name. stderr is kept whenever
+    there is any, and unparseable output still comes through raw: nothing here may report LESS than
+    the old prefix did.
+    """
+    err = (err or "").strip()
+    bits = []
+    try:
+        j = json.loads(out)
+    except (json.JSONDecodeError, TypeError):
+        j = None
+    if isinstance(j, dict):
+        for k in ("subtype", "terminal_reason", "stop_reason"):
+            if j.get(k):
+                bits.append("%s=%s" % (k, j[k]))
+        bits += [str(e) for e in (j.get("errors") or [])]
+        if (j.get("result") or "").strip():
+            bits.append(j["result"].strip()[:300])
+        if not bits:                       # an envelope that names nothing: say so, don't go quiet
+            bits.append("envelope names no cause: %s" % (out or "").strip()[:300])
+    else:
+        bits.append((out or "").strip()[:300] or "no output")
+    if err:
+        bits.append("stderr: " + err[:300])
+    return " | ".join(bits)
+
+
 def run_agent(agent, prompt, timeout=600):
     _pre_run(agent)
     cwd = AGENTS[agent]
@@ -143,8 +178,9 @@ def run_agent(agent, prompt, timeout=600):
         _log_usage(agent, {"_error": "timeout"})
         raise RuntimeError("timed out after %ds — too big a task to finish in one go" % timeout)
     if r.returncode != 0:
-        _log_usage(agent, {"_error": "exit %d" % r.returncode})
-        raise RuntimeError("agent %s failed: %s" % (agent, (r.stderr or r.stdout)[:300]))
+        why = _diagnose(r.stdout, r.stderr)
+        _log_usage(agent, {"_error": "exit %d: %s" % (r.returncode, why)})
+        raise RuntimeError("agent %s failed (exit %d): %s" % (agent, r.returncode, why))
     try:                                              # json envelope: {result, usage, total_cost_usd, ...}
         j = json.loads(r.stdout)
         _log_usage(agent, j)
