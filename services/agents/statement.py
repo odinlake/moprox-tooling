@@ -6,7 +6,9 @@ import json, re, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
+# siblings from THIS tree, not ~/projects — see the note in services/forward/polar_fetch.py
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "services/agents"))
 from run import run_agent, AGENTS  # noqa: E402
 
 OUT = Path.home() / ".local/share/moprox/agent-statements.json"

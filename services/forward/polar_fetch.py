@@ -15,10 +15,16 @@ FRESH_WINDOW_H are actually posted — so today's workout posts while 90 days do
 """
 import calendar, json, re, sys, time, urllib.error, urllib.request
 from pathlib import Path
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/lib"))
+# Siblings come from THIS tree, resolved from __file__. The units execute out of
+# /opt/moprox-tooling, which tooling-pull.timer holds at origin/main; naming an absolute
+# $HOME path here made every imported module come from ~/projects/moprox-tooling — the
+# shared DEVELOPMENT checkout — so deploying the tree did not deploy the half it imports.
+# services/deploy/tooling-pull.sh: "Deployment and development cannot share a working tree."
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "services/agents"))
+sys.path.insert(0, str(_ROOT / "services/forward"))
+sys.path.insert(0, str(_ROOT / "services/training"))
+sys.path.insert(0, str(_ROOT / "services/lib"))
 import errlog
 from run import run_agent
 import strap_health              # is the chest-strap battery going? (see its docstring)

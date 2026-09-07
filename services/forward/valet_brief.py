@@ -9,8 +9,10 @@ overnight commits to the operator's repos/orgs by anyone who isn't the operator 
 import datetime, email.utils, json, subprocess, sys, time, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
+# siblings from THIS tree, not ~/projects — see the note in services/forward/polar_fetch.py
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "services/agents"))
+sys.path.insert(0, str(_ROOT / "services/forward"))
 from run import run_agent
 import tg, location, location_pull
 import sys as _sys, pathlib as _pl

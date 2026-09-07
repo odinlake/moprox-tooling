@@ -5,7 +5,9 @@ surfaced on the dashboard's Agents panel. Run once — icons are stable; re-run 
 """
 import re, sys
 from pathlib import Path
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
+# siblings from THIS tree, not ~/projects — see the note in services/forward/polar_fetch.py
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "services/agents"))
 from run import run_agent, AGENTS
 
 PROMPT = (
