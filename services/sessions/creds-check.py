@@ -76,6 +76,35 @@ DEV_REMEDY = ("Run `/login` on claude-dev, then "
               "Left alone, the next boot after expiry wedges all three sessions at \"Not logged in\".")
 
 
+def forward_dir():
+    """Directory holding `tg`, preferring the tree THIS file is executing out of.
+
+    This script exists in two shapes on disk. In a checkout it sits at <root>/services/sessions/ and
+    its sibling is <root>/services/forward/. DEPLOYED it is a flat copy — `install -m 0755
+    services/sessions/creds-check.py /usr/local/bin/moprox-creds-check`, see README.md — with no
+    sibling tree at all, and `Path(__file__).resolve().parents[2]` is `/usr`.
+
+    So try, in order, the tree this file is in, the production checkout (tooling-pull.timer holds it
+    at origin/main; env-overridable exactly as tooling-pull.sh's own PROD is), then the development
+    checkout, and take the first that actually has tg.py.
+
+    Naming ONLY ~/projects — as this did — made the deployed guard's one outward channel come out of
+    the shared DEVELOPMENT tree, which services/deploy/tooling-pull.sh forbids in its own header:
+    "Deployment and development cannot share a working tree." Naming ONLY __file__ would leave the
+    flat copy with nothing to import and silence the warning altogether, which is worse than the
+    defect. Returns None when no candidate has tg.py, so the caller's `import tg` raises and is
+    reported rather than the guard sending from nowhere.
+    """
+    parents = Path(__file__).resolve().parents
+    cands = [parents[2] / "services/forward"] if len(parents) > 2 else []
+    cands.append(Path(os.environ.get("MOPROX_PROD", "/opt/moprox-tooling")) / "services/forward")
+    cands.append(Path.home() / "projects/moprox-tooling/services/forward")
+    for c in cands:
+        if (c / "tg.py").is_file():
+            return c
+    return None
+
+
 def warn(threshold_days, remedy=None, handle="dev"):
     """Telegram a heads-up. NAMES THE HOST, because more than one box runs on these credentials now.
 
@@ -97,7 +126,9 @@ def warn(threshold_days, remedy=None, handle="dev"):
                 "**Claude credentials on %s expire in %.1f days** (%s)" % (host, days, when))
         msg = head + "\n" + (remedy or DEV_REMEDY)
     try:
-        sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
+        fwd = forward_dir()
+        if fwd is not None:
+            sys.path.insert(0, str(fwd))
         import tg
         tg.send(msg, agent=handle)
     except BaseException as e:                       # a transport blip must not red the timer. NOT
