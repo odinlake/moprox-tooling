@@ -36,6 +36,7 @@ ok "$([ "$rc" = 0 ] && echo 1 || echo 0)" "coach launches (rc=$rc)"
 ok "$(argv | grep -qx 'moprox coach' && echo 1 || echo 0)" "coach registers as 'moprox coach'"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 1 || echo 0)" "coach gets the coach system prompt"
 ok "$(argv | grep -q 'hints.jsonl' && echo 1 || echo 0)" "...including the health-hints directive"
+ok "$(argv | grep -q 'FRESHNESS' && echo 1 || echo 0)" "...and the freshness rule (2026-09-08 stale-lane call)"
 ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "no pointer yet, so a fresh session id"
 ok "$(grep -q 'fresh session' "$tmp/out" && echo 1 || echo 0)" "and it says so"
 
