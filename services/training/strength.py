@@ -10,7 +10,7 @@ What is published instead is what resistance work actually has: load, reps, sets
 
   strength.py [out_path]      default: ~/.cache/moprox-dashboard-data/training/strength.json
 """
-import json, os, sys, time
+import json, os, re, sys, time
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
@@ -67,7 +67,24 @@ def entries():
 # 72.5% of the session's volume and half its movement bests — and the panel printed them in the same
 # column, in the same face, as the rows that were observed. `note` is not a field a renderer can act
 # on; this is. Same shape and same job as `spd_src` on the runs feed.
-ASSUMED_NOTE = "load assumed"
+# The log does not write that phrase the same way twice. 28 Aug says "load ASSUMED from
+# prescription, not stated"; 8 Sep says "LOAD STILL ASSUMED from prescription: operator did not
+# state the pin position" and "LOAD STILL ASSUMED: pin position not stated". A fixed two-word
+# substring caught the first vocabulary and missed the second, and the miss does not fall back to
+# "unknown" — it falls back to "stated", so an unparsed note ASSERTS the load was observed. That is
+# the wrong direction to fail in, and it is what shipped: on the 8 Sep session the panel published
+# seated-row 35 kg as the athlete's best with no mark on it while the row itself said the pin
+# position was never stated.
+#
+# The invariant across every assumed row is "load ... assumed" inside ONE clause. Matching the bare
+# word `assumed` would be wider and wrong in the other direction: the same session's db-chest-press
+# row reads "CONFIRMED 16 kg on dumbbells (supersedes the 28 Aug ASSUMED figure)" — the one load the
+# athlete did confirm — and would be relabelled a guess. `[\w\s]*` spans words but not punctuation,
+# which is what keeps those apart.
+#
+# This is still a parser over prose, and the durable fix is upstream: a writer that sets `kg_src`
+# outright, which kg_src() already prefers. It is the fallback that had to stop lying.
+ASSUMED_NOTE = re.compile(r"\bload\b[\w\s]*\bassumed\b")
 
 
 def kg_src(r):
@@ -78,7 +95,7 @@ def kg_src(r):
     """
     if r.get("kg") is None:
         return None
-    return r.get("kg_src") or ("assumed" if ASSUMED_NOTE in (r.get("note") or "").lower()
+    return r.get("kg_src") or ("assumed" if ASSUMED_NOTE.search((r.get("note") or "").lower())
                                else "stated")
 
 
