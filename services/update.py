@@ -235,7 +235,19 @@ def main():
         except Exception as _e:
             # Same <3> convention this file already uses for the push failure below — journald turns
             # it into a real PRIORITY, and update.py has no errlog import to reach for.
-            print(f"<3>update: strength feed failed: {type(_e).__name__}: {_e}", file=sys.stderr, flush=True)
+            #
+            # capture_output=True means the child's traceback lands in _e.stderr and NOWHERE else,
+            # so this line used to say "CalledProcessError ... exit status 1" and nothing about the
+            # cause. On 2026-09-08 that hid a KeyError for ~2 h across ten runs. Echo the child's
+            # last stderr lines, which is the only copy that exists.
+            _tail = ""
+            _cap = getattr(_e, "stderr", None)
+            if _cap:
+                if isinstance(_cap, bytes):
+                    _cap = _cap.decode("utf-8", "replace")
+                _tail = " | " + " / ".join(_cap.strip().splitlines()[-3:])
+            print(f"<3>update: strength feed failed: {type(_e).__name__}: {_e}{_tail}",
+                  file=sys.stderr, flush=True)
         timings["training"] = (round((time.monotonic() - t0) * 1000), (DATA / "training/sessions.json").stat().st_size)
         state["training_fp"] = fp
 

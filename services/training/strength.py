@@ -23,10 +23,23 @@ OUT = Path(os.environ.get("STRENGTH_OUT",
                           Path.home() / ".cache/moprox-dashboard-data/training/strength.json"))
 
 
+# Every field this module dereferences without a .get(). The gate below used to check `ex` and
+# `date` only, while build() and volume() went on to read r["sets"] outright — so a line that was
+# perfectly valid JSON but carried a different vocabulary did not lose ITSELF, it lost the whole
+# feed. On 2026-09-08 one such line (a treadmill warm-up logged as mins/kph/grade_pct, no sets)
+# killed every run of strength.py from 12:52 UTC on, and update.py's non-fatal wrapper meant the
+# dashboard just went on serving the previous strength.json — 12 well-formed rows from that day's
+# session, including the load confirmation that supersedes an assumed one, invisible with no
+# outward sign. The gate now covers exactly what the code requires, and a row that misses it is
+# skipped and counted, per this module's own "one bad line must not lose the rest".
+REQUIRED = ("ex", "date", "sets")
+
+
 def entries():
+    """(rows, skipped). Rows that do not satisfy REQUIRED are dropped, not fatal."""
     if not LOG.exists():
-        return []
-    out = []
+        return [], 0
+    out, skipped = [], 0
     for line in LOG.read_text().splitlines():
         if not line.strip():
             continue
@@ -34,10 +47,18 @@ def entries():
             r = json.loads(line)
         except ValueError as e:
             errlog.skip("strength.py: log line", e)      # one bad line must not lose the rest
+            skipped += 1
             continue
-        if r.get("ex") and r.get("date"):
-            out.append(r)
-    return sorted(out, key=lambda r: (r["date"], r.get("ts", "")))
+        missing = [k for k in REQUIRED if r.get(k) is None]
+        if missing:
+            # Named, not counted-in-silence: this is how a writer using the wrong vocabulary gets
+            # noticed instead of being rounded off.
+            errlog.skip("strength.py: row missing %s" % ",".join(missing),
+                        ValueError(json.dumps(r, ensure_ascii=False)[:200]))
+            skipped += 1
+            continue
+        out.append(r)
+    return sorted(out, key=lambda r: (r["date"], r.get("ts", ""))), skipped
 
 
 # Where a load CAME FROM, alongside the load itself. The log is a number plus prose, and the prose
@@ -72,7 +93,7 @@ def volume(r):
 
 
 def build():
-    rows = entries()
+    rows, skipped = entries()
     by_date = OrderedDict()
     movements = defaultdict(list)
 
@@ -136,6 +157,9 @@ def build():
     return {"generated": int(time.time()),
             "count": len(sessions),
             "entries": len(rows),
+            # In the feed, not only in the journal: a panel that quietly shows fewer rows than the
+            # log holds is the thing this module just failed at. 0 is the normal case.
+            "skipped": skipped,
             # Stated in the feed so the UI can label it honestly rather than implying kilograms.
             "volume_note": "volume load = sets x reps x kg; an index comparable only against itself",
             "sessions": sessions,
@@ -147,8 +171,8 @@ def main(argv):
     data = build()
     out.parent.mkdir(parents=True, exist_ok=True)
     json.dump(data, open(out, "w"), separators=(",", ":"))
-    print("strength: %d session(s), %d entries, %d movement(s) -> %s"
-          % (data["count"], data["entries"], len(data["movements"]), out))
+    print("strength: %d session(s), %d entries, %d movement(s), %d skipped -> %s"
+          % (data["count"], data["entries"], len(data["movements"]), data["skipped"], out))
     return 0
 
 
