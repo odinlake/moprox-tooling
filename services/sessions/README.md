@@ -1,12 +1,18 @@
-# moprox dev sessions — three shared-context remote-control agents
+# moprox remote sessions: long-lived Claude Code agents in the app
 
-`moprox-dev@.service` is a templated systemd unit that runs three long-lived Claude Code
-remote-control sessions — **moprox dev one / two / three** — driven from the Claude app. They share
-one memory dir (the shared context, see [`../memory/`](../memory/)) and each runs in a restart loop
-with exponential backoff, so a wedged session self-heals **without losing its thread** — restarts resume
-the conversation (see below); a fresh one is available on request.
+`moprox-dev@.service` is a templated systemd unit that runs long-lived Claude Code remote-control
+sessions driven from the Claude app. Each runs in a restart loop with exponential backoff, so a
+wedged session self-heals **without losing its thread** — restarts resume the conversation (see
+below); a fresh one is available on request.
 
-**Status: LIVE on claude-dev since 2026-06-29.** All three are enabled and connected.
+Four instances:
+
+| instance | appears as | working directory | what it is |
+|---|---|---|---|
+| `one` `two` `three` | moprox dev one/two/three | `/home/mikael` | the shared-context dev sessions ([`../memory/`](../memory/)) |
+| `coach` | moprox coach | `private-data/agents/coach` | odinlake-ai-coach, on Mikael's health and training |
+
+**Status: LIVE on claude-dev since 2026-06-29** (the dev trio), **coach since 2026-09-08.**
 
 ## Install / enable (on claude-dev, as root)
 ```bash
@@ -17,11 +23,16 @@ install -m 0755 services/sessions/dev-cycle.sh           /usr/local/bin/moprox-d
 cp services/sessions/moprox-dev@.service services/sessions/moprox-dev-cycle@* \
    services/sessions/moprox-creds-warn.* /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now moprox-dev@one moprox-dev@two moprox-dev@three
-systemctl enable --now moprox-dev-cycle@one.timer moprox-dev-cycle@two.timer moprox-dev-cycle@three.timer
+mkdir -p /etc/systemd/system/moprox-dev@coach.service.d
+install -m644 services/sessions/moprox-dev@coach.conf \
+  /etc/systemd/system/moprox-dev@coach.service.d/override.conf
+systemctl daemon-reload
+systemctl enable --now moprox-dev@one moprox-dev@two moprox-dev@three moprox-dev@coach
+systemctl enable --now moprox-dev-cycle@one.timer moprox-dev-cycle@two.timer \
+  moprox-dev-cycle@three.timer moprox-dev-cycle@coach.timer
 systemctl enable --now moprox-creds-warn.timer
 ```
-They'll appear in the Claude app as **moprox dev one/two/three**. (Both helpers are required — the
+They'll appear in the Claude app as **moprox dev one/two/three** and **moprox coach**. (Both helpers are required — the
 unit's `ExecStartPre` calls them; see "Boot & trust robustness" below.)
 
 ## Restart keeps the thread; ask explicitly for a fresh one
@@ -180,6 +191,32 @@ Each session records its PTY to `~/.local/state/moprox-dev/<id>.log` (was `/dev/
 failure text — both wedge signatures above only ever appear on-screen). `script` truncates it on every
 restart; the weekly cycle archives it first. Unbounded intra-week — check `du -sh
 ~/.local/state/moprox-dev` occasionally.
+
+## coach
+
+`moprox-dev@coach` is the same machinery with two lines changed in a drop-in
+(`moprox-dev@coach.conf`): a `Description`, and `WorkingDirectory` pointing at
+`private-data/agents/coach`. That directory is the whole trick: Claude Code auto-loads `CLAUDE.md`
+from the directory it starts in, so starting there is what makes the session **coach** rather than a
+generic assistant: persona, `@training-context.md`, `@part_c_gaps.md` and the durable
+`@coach-memory.md` all come with it. `moprox-dev-launch` supplies the session name and a system
+prompt that reframes the persona for a conversation (its Telegram lane is one-shot, one-post-per-
+session; this is a thread that persists), points it at the health lanes as well as the training
+ones, and carries the standing hints-log directive.
+
+Same privilege as the dev sessions, deliberately (operator, 2026-09-08): full bypass from
+`~/.claude/settings.json`, with `sudo` still prompting. That is *wider* than coach's one-shot
+Telegram lane, which runs `acceptEdits` behind a tool allowlist and `DEV_DENY`. The two lanes are
+the same agent with the same notebook but not the same reach.
+
+**The notebook has two writers.** `coach-memory.md` is written by this session and by every
+one-shot `claude -p` coach invocation. A long-lived session holds a copy from startup, so the system
+prompt tells it to re-read immediately before editing. There is no lock; the mitigation is
+instruction, and a lost learning would be quiet.
+
+**Transcripts share a project dir with the one-shots** (255 of them at the time of writing), which
+is exactly why the launcher resumes a *recorded* session id and `--continue` must never be used
+here, since it would grab whichever one-shot ran last.
 
 ## Retiring the old ad-hoc sessions
 This replaces the previous setup (one tmux `claude-remote`/`remote-spawn` session + the single

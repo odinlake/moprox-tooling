@@ -1,5 +1,8 @@
-# One of three shared-context Claude Code remote-control dev sessions: "moprox dev one/two/three",
-# driven from the Claude app. Templated unit — instance %i is the AGENT_ID (one|two|three).
+# A Claude Code remote-control session driven from the Claude app. Templated unit — instance %i names
+# the agent: one|two|three are the three shared-context dev sessions, coach is odinlake-ai-coach.
+# Everything agent-specific lives in moprox-dev-launch (session name, system prompt) and, for a
+# non-default working directory, a per-instance drop-in (see moprox-dev@coach.conf). The unit itself
+# is deliberately agent-agnostic so the gates and restart policy below exist in exactly one copy.
 #
 # - Full bypass comes from `defaultMode: bypassPermissions` in ~/.claude/settings.json so edits/commands
 #   auto-allow; `sudo` still prompts via the `ask` rule (see services/sessions/README.md). We deliberately
@@ -13,7 +16,9 @@
 #   `rm ~/.local/state/moprox-dev/two.session && systemctl restart moprox-dev@two`.
 #   Continuity across a reset still lives in the shared memory + git, see services/memory/.
 # - --remote-control needs a TTY, so `script` gives it a PTY (same trick as the old claude-remote.service).
-# - WorkingDirectory=/home/mikael so all three share ONE memory dir (the shared context).
+# - WorkingDirectory=/home/mikael so the three dev instances share ONE memory dir (the shared
+#   context). An agent that needs its own persona overrides this in its drop-in, which also moves
+#   its transcripts to that path's project dir — moprox-dev-launch derives that, do not hardcode it.
 # - ExecStartPre boot-race guard: network-online.target only means interfaces are up, NOT that egress/DNS
 #   work. Without the gate the client starts before egress is ready, fails to register with the relay, and
 #   wedges ALIVE — systemd sees a healthy process so Restart never fires (this is exactly what bricked the
@@ -30,7 +35,7 @@
 #
 # Install to /etc/systemd/system, then:
 #   systemctl daemon-reload
-#   systemctl enable --now moprox-dev@one moprox-dev@two moprox-dev@three
+#   systemctl enable --now moprox-dev@one moprox-dev@two moprox-dev@three moprox-dev@coach
 [Unit]
 Description=Claude Code remote dev session "moprox dev %i"
 After=network-online.target

@@ -1,5 +1,6 @@
 #!/bin/bash
-# moprox-dev-launch <one|two|three> — pick resume-vs-fresh, then run the Claude Code dev session.
+# moprox-dev-launch <one|two|three|coach> — pick resume-vs-fresh, then run a Claude Code
+# remote-control session.
 #
 # WHY THIS EXISTS
 #   A restart used to drop the session's whole thread. It doesn't have to: Claude Code can reattach to a
@@ -34,11 +35,19 @@
 #   restart instead of pinning the instance in a restart loop.
 set -u
 
-ID="${1:?usage: moprox-dev-launch <one|two|three>}"
+ID="${1:?usage: moprox-dev-launch <one|two|three|coach>}"
 
 CLAUDE="${MOPROX_DEV_CLAUDE:-/home/mikael/.local/bin/claude}"
-STATE_DIR=/home/mikael/.local/state/moprox-dev
-PROJECT_DIR=/home/mikael/.claude/projects/-home-mikael
+# Overridable for the same reason as $CLAUDE below: so the tests can exercise this script
+# without writing pointers into the live sessions' state dir.
+STATE_DIR="${MOPROX_DEV_STATE_DIR:-/home/mikael/.local/state/moprox-dev}"
+# Derived from the CWD, not hardcoded, because instances no longer share one working directory:
+# coach runs in its own agent dir so that its CLAUDE.md persona auto-loads. Claude Code names a
+# project dir after the path with `/` and `.` replaced by `-`, so /home/mikael is "-home-mikael" and
+# the coach dir is "-home-mikael-projects-private-data-agents-coach". Getting this wrong would not
+# fail loudly: the size/age checks below would find no transcript and every start would be "fresh",
+# silently dropping the thread this whole script exists to keep.
+PROJECT_DIR="/home/mikael/.claude/projects/$(printf %s "$PWD" | sed 's#[/.]#-#g')"
 STATE="$STATE_DIR/$ID.session"
 FORK_FLAG="$STATE_DIR/$ID.fork"   # dropped by dev-cycle.sh; see "THE FORK FLAG" above
 SUMMARY_STAMP="$STATE_DIR/$ID.recap"
@@ -104,7 +113,30 @@ else
   reason="no recorded session"
 fi
 
-PROMPT="You are moprox dev $ID (AGENT_ID=$ID), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/projects/moprox-memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [$ID], and append one line to journals/$ID.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals."
+# --- who this instance is -----------------------------------------------------------------------
+# The only per-agent part of this script. Everything above and below is shared, which is the point:
+# the resume/fork/fallback machinery was expensive to get right and must not exist in two copies.
+#
+# The dev trio share one working directory, one context and the memory protocol. coach is a
+# different agent: it runs in its own directory so that its persona, physiology reference and
+# durable notebook auto-load from the CLAUDE.md there, and it needs none of the fact-store protocol
+# because it maintains its own notebook instead.
+case "$ID" in
+  one|two|three)
+    RC_NAME="moprox dev $ID"
+    PROMPT="You are moprox dev $ID (AGENT_ID=$ID), one of three Claude Code dev sessions that SHARE one memory dir at /home/mikael/projects/moprox-memory. Read /home/mikael/projects/moprox-tooling/services/memory/PROTOCOL.md once at session start and follow it. In short: at task start read CHANGES.md to see what the other two learned; when you save a durable fact, set metadata scope (global or project:NAME), salience, and agents: [$ID], and append one line to journals/$ID.jsonl describing it. Never hand-edit MEMORY.md, CHANGES.md, CONFLICTS.md or .reconcile-state.json — a 10-min reconciler rebuilds those from the fact files + journals."
+    ;;
+  coach)
+    RC_NAME="moprox coach"
+    PROMPT="You are odinlake-ai-coach, running as a Claude Code session Mikael talks to from the Claude app. Your persona, physiology reference and durable notebook auto-load from the CLAUDE.md in this directory and are binding. Two things differ from your Telegram lane, where you are invoked one-shot per session post. FIRST, this is a CONVERSATION, not a session post: the one-post-with-its-caption rule governs Telegram, and here you answer at whatever length the question deserves. You can still send a chart to Telegram with lib.send_read when a chart is the answer, and say when you have. SECOND, you persist: this thread resumes across restarts, so continue it rather than reintroducing yourself. Your remit here is Mikael's health and training as a whole, wider than one session read: the training lanes (private-data/polar/incoming, private-data/technogym/cardio, the classified history at ~/.cache/moprox-dashboard-data/training/sessions.json), the health lanes under private-data (ultrahuman, apple-health, fitbit), and the physiology in athlete.json. Compute rather than assert, cite what you read, and keep the no-claptrap rule: if a number matters, calculate it from the data, and if you do not know, say so and go and find out. Write durable learnings to /home/mikael/projects/moprox-memory/agents/coach-memory.md by that REAL path, because the copy in this directory is a symlink and the harness refuses to write through one. Your one-shot Telegram invocations write that same file, so re-read it immediately before editing rather than trusting the copy loaded at startup. Standing directive: when Mikael lets a health remark slip in passing (sleep, a niggle, illness, fuelling, stress, travel), append it to /home/mikael/projects/private-data/health/hints.jsonl, because those hints are what later explain the ring and the training data."
+    ;;
+  *)
+    # Loud and non-zero: an unknown instance would otherwise register a nameless session against the
+    # account's bridge pool, which is the one resource this whole design is careful with.
+    echo "moprox-dev-launch: unknown instance '$ID' (expected one|two|three|coach)" >&2
+    exit 64
+    ;;
+esac
 
 if [ "$resume" = 1 ]; then
   kib=$(( $(stat -c%s "$PROJECT_DIR/$sid.jsonl") / 1024 ))
@@ -131,7 +163,7 @@ if [ "$resume" = 1 ]; then
     say "skipping startup recap (one was issued less than $SUMMARY_MIN_GAP s ago)"
   fi
   started=$SECONDS
-  "$CLAUDE" --remote-control "moprox dev $ID" "${MCP_ARGS[@]}" "$@" --append-system-prompt "$PROMPT"
+  "$CLAUDE" --remote-control "$RC_NAME" "${MCP_ARGS[@]}" "$@" --append-system-prompt "$PROMPT"
   rc=$?
   # Only treat a FAST exit as "this transcript can't be resumed" — a long-lived session that later dies is
   # an ordinary restart and must keep its pointer.
@@ -145,4 +177,4 @@ fi
 sid=$(uuidgen)
 say "fresh session $sid ($reason)"
 printf '%s\n' "$sid" > "$STATE"
-exec "$CLAUDE" --remote-control "moprox dev $ID" "${MCP_ARGS[@]}" --session-id "$sid" --append-system-prompt "$PROMPT"
+exec "$CLAUDE" --remote-control "$RC_NAME" "${MCP_ARGS[@]}" --session-id "$sid" --append-system-prompt "$PROMPT"
