@@ -312,14 +312,20 @@ def derive(accounts, store):
     for acct in accounts:
         s = slug(acct)
         rows = sorted(store.get(s, {}).values(), key=lambda t: (t.get("booking_date") or ""))
-        spend = sum(-amount(t) for t in rows if kind(t) in ("spend", "fee"))
+        # `spend` means the SAME thing here as in `months`: kind == "spend", fees broken out. It used
+        # to be kind in ("spend", "fee"), so the artifact carried two aggregates under one key name
+        # that disagreed by exactly the fee total (2026-09-08: by_account 50 222.00 vs months
+        # 50 072.00, delta 150.00) — and by_account had no `fee` key, so a reader could not separate
+        # them from this side at all.
+        spend = sum(-amount(t) for t in rows if kind(t) == "spend")
+        fee = sum(-amount(t) for t in rows if kind(t) == "fee")
         # Stock as well as flow. Every stored row carries the bank's own balance and until now none
         # of it reached the artifact: the view could say 16 656 SEK went out in August and could not
         # say that 1 409.91 was left. Cheap, and the one number that does not follow from the others.
         bal_date, bal = closing(rows)
         by_account[s] = {"product": acct.get("product"), "name": acct.get("details") or acct.get("product"),
                          "iban_last4": ((acct.get("account_id") or {}).get("iban") or "")[-4:],
-                         "n": len(rows), "spend": round(spend, 2),
+                         "n": len(rows), "spend": round(spend, 2), "fee": round(fee, 2),
                          "balance": bal, "balance_date": bal_date}
         for t in rows:
             v, m, k = amount(t), (t.get("booking_date") or "")[:7], kind(t)
@@ -330,7 +336,11 @@ def derive(accounts, store):
             # leg only: summing both showed 2026-06 as 480 000 SEK moved when 240 000 moved once.
             if k != "transfer" or v < 0:
                 e[k] += abs(v)
-            if k in ("spend", "fee"):
+            # Merchants, so kind == "spend" only. A fee row has no counterparty — Swedbank names the
+            # account holder, so counterparty() falls back to remittance_information and the bank's
+            # own price lines were ranked here as if they were shops ("PRIS BANKKORT MASTER",
+            # "PRIS INTERNETBETALNI", 75.00 each). Separating them is the entire point of kind().
+            if k == "spend":
                 merchants[counterparty(t)] = merchants.get(counterparty(t), 0.0) + abs(v)
             recent.append({"date": t.get("booking_date"), "account": s, "amount": round(v, 2),
                            "kind": k, "counterparty": counterparty(t),
@@ -353,7 +363,11 @@ def derive(accounts, store):
                        "Swedbank names the account holder as counterparty on transfers, so the "
                        "text is the only signal. Transfers are EXCLUDED from spend and counted "
                        "on their OUTGOING leg only (an internal move is two rows): 2026-06 is "
-                       "240 000 SEK of transfer against a few hundred of real spending."),
+                       "240 000 SEK of transfer against a few hundred of real spending. FEES are "
+                       "excluded from spend too, everywhere: months.spend, by_account.spend and "
+                       "top_counterparties are all kind=='spend' alone, and by_account carries a "
+                       "separate fee. top_counterparties is therefore merchants only — bank price "
+                       "lines are not counterparties."),
         "balance_note": ("by_account.balance is the bank's own balance_after_transaction on the "
                          "newest row the balance chain reaches — stock, not flow, and not a "
                          "reconstruction. It is the newest balance the ESTATE HOLDS: a store "
