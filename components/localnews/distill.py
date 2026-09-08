@@ -7,6 +7,9 @@ Wood > borough > farther). Prefetches full text for kept items so taps are insta
 import json, os, shutil, subprocess, sys, urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
+
 # Resolve the CLI ABSOLUTELY. Under systemd the service PATH is minimal and does not include
 # ~/.local/bin, so a bare "claude" raises FileNotFoundError. That is exactly what happened here:
 # Claude Code moved to the native installer at ~/.local/bin/claude, every classify() started
@@ -66,6 +69,7 @@ def main():
     pending = call("/api/pending")
     kept = 0
     failed = 0
+    first_failure = None
     for p in pending:
         try:
             a = classify(p)
@@ -76,6 +80,8 @@ def main():
             # pending instead: the next run retries it, and the backlog is itself the alarm.
             print(f"  ! classify failed for {p.get('id')}: {type(exc).__name__}: {exc}", flush=True)
             failed += 1
+            if first_failure is None:
+                first_failure = exc
             continue
         a["id"] = p["id"]
         call("/api/annotate", a)
@@ -87,6 +93,16 @@ def main():
                 pass
     ok = len(pending) - failed
     print(f"annotated={ok} failed={failed} brief-worthy={kept}", flush=True)
+    # Say it at a level the estate can QUERY. Both lines above are plain stdout, which journald
+    # files at info, so a run that classifies most posts and drops a few is invisible: it exits 0,
+    # raises no unit-failed incident, and matches no priority<=4 search. Only a total wipeout is
+    # loud, and only via the exit below. That blind spot is the steady state, not a corner case —
+    # every run from 2026-08-30 to 2026-09-08 failed 1-4 posts and every one of them was green.
+    # The failed posts stay pending, and nothing watches that backlog either: there is no
+    # local-news lane in services/freshness/lanes.json, by that file's own _doc.
+    if failed:
+        errlog.warn(f"distill: {failed} of {len(pending)} classification(s) failed and were left "
+                    f"pending (annotated {ok})", first_failure)
     # A total wipeout is a broken classifier, not a quiet day. Exit non-zero so the unit goes red,
     # which puts it in logview's incident queue instead of dying silently in a green log line.
     #
