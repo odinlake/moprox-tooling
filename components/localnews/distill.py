@@ -4,7 +4,7 @@
 Filters per operator prefs: DROP pets & opinion/chatter; KEEP crime/accident/incident;
 discretionary council/events. Significance 0-5 weights proximity (near Tooting/Colliers
 Wood > borough > farther). Prefetches full text for kept items so taps are instant."""
-import json, os, shutil, subprocess, sys, urllib.request
+import json, os, re, shutil, subprocess, sys, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/lib"))
@@ -65,12 +65,63 @@ def classify(p):
     return json.loads(txt[i:j + 1])
 
 
+# The WHOLE body is a media player's elapsed/duration overlay, e.g. "00:01 / 00:06". Measured
+# 2026-09-09 against the reader store, n=3251 posts: exactly four bodies match this shape, and the
+# three of them the working classifier has seen are exactly the three posts stuck in the pending
+# queue, for 11, 9 and 5 days (moprox-memory/localnews-stuck-bodies-are-duration-pairs.md).
+#
+# The shape is the discriminator, and it has to be. Shortness is NOT: 59 posts have a body of <= 20
+# characters and 56 of them annotate normally. Neither is "has no letters": the same measurement
+# found emoji-only bodies ("☀️ ☁️") that `claude -p` handles perfectly well today, returning "Post
+# contains only weather emoji with no textual content". Those must keep going to the classifier —
+# anything that swallows them here is this change breaking a case that works. An anchored timecode
+# pair is the one body we have measured no reader and no classifier can make text out of.
+#
+# The optional hours group is the same overlay one length up; the corpus holds only the mm:ss form
+# because the stuck posts are 6 to 54 seconds long.
+TIMECODE_PAIR = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})? / \d{1,2}:\d{2}(?::\d{2})?$")
+
+
+def timecode_only(p):
+    """True when the post body is nothing but a media player's timecode pair.
+
+    Handing one to `claude -p` spends a call to be told, in prose, that the post text is missing;
+    classify() rightly reports that as a failure; the post is left pending; and the next run sends
+    it again, for ever. That is not a classifier fault and no retry can fix it — the duration pair
+    is already in the store before classify() runs, so the fault is at or before the writer,
+    nextdoor_index.py on the webscout box.
+
+    NOT "the body is missing". A body that is empty or whitespace is a body the reader LOST, and
+    losing it is recoverable — such a post stays pending and comes back when extraction is fixed."""
+    return bool(TIMECODE_PAIR.match((p.get("body") or "").strip()))
+
+
 def main():
     pending = call("/api/pending")
     kept = 0
     failed = 0
+    timecoded = 0
+    timecoded_ids = []
     first_failure = None
     for p in pending:
+        if timecode_only(p):
+            # NOT the fabricated score the comment below forbids: nothing was classified, and the
+            # record says so in its own title and quotes the body it was given. other/0 can never
+            # reach the brief — that filter needs significance >= 3 AND a news category. Deciding
+            # it here is the only thing that stops the re-send, because the post finally leaves the
+            # pending queue.
+            body = (p.get("body") or "").strip()
+            call("/api/annotate", {"id": p["id"], "category": "other", "significance": 0,
+                                   "title": "Post body is a media player timecode",
+                                   "blurb": "Body is %r — a player overlay, not post text, so "
+                                            "nothing was sent to the classifier (area: %s)."
+                                            % (body[:40], p.get("area") or "?"),
+                                   "keywords": []})
+            timecoded += 1
+            timecoded_ids.append(p["id"])
+            print(f"  - {p.get('id')}: body {body[:40]!r} is a media timecode, not text; resolved "
+                  f"other/0 without the classifier", flush=True)
+            continue
         try:
             a = classify(p)
         except Exception as exc:
@@ -91,8 +142,12 @@ def main():
                 urllib.request.urlopen(BASE + "/p/" + p["id"], timeout=90).read()  # prefetch full text
             except Exception:
                 pass
-    ok = len(pending) - failed
-    print(f"annotated={ok} failed={failed} brief-worthy={kept}", flush=True)
+    # `sent` is what the classifier was actually ASKED about. Every rate below is against that and
+    # not against len(pending): a post that was never sent cannot be evidence about the classifier.
+    sent = len(pending) - timecoded
+    ok = sent - failed
+    print(f"annotated={ok} timecode-only={timecoded} failed={failed} brief-worthy={kept}",
+          flush=True)
     # Say it at a level the estate can QUERY. Both lines above are plain stdout, which journald
     # files at info, so a run that classifies most posts and drops a few is invisible: it exits 0,
     # raises no unit-failed incident, and matches no priority<=4 search. Only a total wipeout is
@@ -101,8 +156,19 @@ def main():
     # The failed posts stay pending, and nothing watches that backlog either: there is no
     # local-news lane in services/freshness/lanes.json, by that file's own _doc.
     if failed:
-        errlog.warn(f"distill: {failed} of {len(pending)} classification(s) failed and were left "
+        errlog.warn(f"distill: {failed} of {sent} classification(s) failed and were left "
                     f"pending (annotated {ok})", first_failure)
+    # EVERY timecode-only post is said at the same level a failed one is, and for the same reason:
+    # under the code above these posts WERE failures and warned here, so anything less would be this
+    # change buying a green log with a lost signal. The count is what discriminates — one video post
+    # a fortnight reads as one line a fortnight, while a body-extraction regression reads as "17 of
+    # 20", which is the sentence that sends a human to the reader. The ids are named so it can be
+    # checked, and this fires on ANY number of them, not only on a whole batch.
+    if timecoded:
+        errlog.warn(f"distill: {timecoded} of {len(pending)} pending post(s) had a media timecode "
+                    f"as their whole body and were resolved as other/0 without the classifier — "
+                    f"the reader captured a player overlay in place of post text: "
+                    f"{', '.join(timecoded_ids[:10])}")
     # A total wipeout is a broken classifier, not a quiet day. Exit non-zero so the unit goes red,
     # which puts it in logview's incident queue instead of dying silently in a green log line.
     #
@@ -113,9 +179,18 @@ def main():
     # lost by waiting: a failed post is never annotated (see above), so it stays pending and the
     # backlog is still the alarm — it just takes a real wipeout to say so.
     MIN_WIPEOUT = 3
-    if pending and ok == 0:
-        if len(pending) >= MIN_WIPEOUT:
-            sys.exit(f"every classification failed ({failed}/{len(pending)}) — classifier is broken")
+    # A whole batch of nothing but player overlays is not a street full of silent videos, it is the
+    # reader handing us something that is not post text at all. It stays exactly as loud as it is
+    # today — under the code above every one of these failed and this same branch went red on the
+    # 3/3 batch of 2026-09-09 — but it now clears itself, which the old one never could: the posts
+    # were annotated above, so they leave the queue and the next run is green unless the reader is
+    # still doing it.
+    if timecoded == len(pending) and len(pending) >= MIN_WIPEOUT:
+        sys.exit(f"every pending post ({timecoded}/{len(pending)}) had a media timecode as its "
+                 f"whole body — suspect the reader's body extraction, not the classifier")
+    if sent and ok == 0:
+        if sent >= MIN_WIPEOUT:
+            sys.exit(f"every classification failed ({failed}/{sent}) — classifier is broken")
         print(f"  ! all {failed} of this batch failed, below the {MIN_WIPEOUT}-post bar for calling "
               f"the classifier broken — left pending for the next run", flush=True)
 
