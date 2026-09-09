@@ -61,6 +61,10 @@ FIRST_IDCR  = 1000
 import requests
 
 
+class Indeterminate(RuntimeError):
+    """The API did not answer well enough to say whether an idCr exists. NOT an absence."""
+
+
 def env():
     d = {}
     for ln in ENV.read_text().splitlines():
@@ -102,7 +106,11 @@ def list_sessions(s, uid, tok, cult, start_idcr):
     equivalent we can reach (pronext is the trainer app; it never calls the training endpoints). But
     idCr is a dense per-user session counter, and asking for one that doesn't exist is cheap and
     unambiguous: the API answers 200 with an empty `data`. So probe forward until MISS_STREAK
-    consecutive blanks. We hand back the detail we just fetched so the caller doesn't re-request it.
+    consecutive CONFIRMED blanks — only fetch_detail's clean 200-with-no-session counts, and
+    anything it could not classify raises Indeterminate straight through this loop rather than
+    spending a miss. Ending the walk is a claim that the account has no more sessions, and a walk
+    that cannot see must not make it. We hand back the detail we just fetched so the caller doesn't
+    re-request it.
     """
     out, misses, idcr, probed = [], 0, int(start_idcr), 0
     while misses < MISS_STREAK and probed < MAX_PROBE:
@@ -119,15 +127,29 @@ def list_sessions(s, uid, tok, cult, start_idcr):
 
 
 def fetch_detail(s, uid, tok, cult, idcr):
-    """Session detail, or {} if that idCr doesn't exist. A non-existent id is NOT an HTTP error —
-    the API returns 200 with `data` absent/empty — which is what makes the forward walk cheap."""
+    """Session detail, or {} if that idCr DEFINITIVELY doesn't exist. A non-existent id is NOT an
+    HTTP error — the API answers 200 with `data` absent/empty — which is what makes the forward walk
+    cheap.
+
+    Anything else is not an absence and must never be returned as one. A mid-walk 401 (the token
+    expired — and per login() a bare 401 here has an EMPTY body, so it does not even parse), a 5xx,
+    an HTML error page, an `errors` envelope: collapsing those to {} spends MISS_STREAK of them and
+    ends the walk, and the run then prints "walked idCr from N: 0 session(s) found" and exits 0 —
+    the exact sentence a genuinely idle account produces. That line is read as evidence the athlete
+    did not train (see moprox-memory/freshness-training-lanes-mtime-only.md). So refuse to guess.
+    """
     r = s.get(f"{SVC}/Training/User/{uid}/GetPerformedWorkoutSessionByIdCr", timeout=30,
               params={"IdCr": idcr, "token": tok, "AppId": APP_ID, "_c": cult},
               headers={"Accept": "application/json"})
+    if r.status_code != 200:
+        raise Indeterminate(f"idCr {idcr}: HTTP {r.status_code}: {r.text[:200]!r}")
     try:
-        d = r.json().get("data") or {}
-    except ValueError:
-        return {}
+        b = r.json()
+    except ValueError as exc:
+        raise Indeterminate(f"idCr {idcr}: unparseable 200 reply: {r.text[:200]!r}") from exc
+    if b.get("errors"):
+        raise Indeterminate(f"idCr {idcr}: API errors: {b['errors']}")
+    d = b.get("data") or {}
     return d if d.get("startedOn") else {}
 
 
@@ -192,9 +214,10 @@ def compact_record(detail, cardios):
 def probe_exists(s, uid, tok, cult, idcr):
     """True / False / None — exists, definitively gone, or we could not tell.
 
-    fetch_detail() collapses "no such session" and "could not parse" into {}, which is fine for a
-    forward walk and unacceptable for anything that deletes. Here the three outcomes stay distinct,
-    and only a clean 200 whose payload carries no session counts as gone.
+    fetch_detail() makes the same distinction but reports "could not tell" by raising, which is what
+    a walk wants and not what a sweep over every stored file wants: one unreadable probe must not
+    abandon the other 113. Here the three outcomes stay distinct and are counted, and only a clean
+    200 whose payload carries no session counts as gone.
     """
     try:
         r = s.get(f"{SVC}/Training/User/{uid}/GetPerformedWorkoutSessionByIdCr", timeout=30,
@@ -280,7 +303,14 @@ def main():
     # ("999" > "1096" as text, which would have parked the walk forever).
     prior = [int(x) for x in seen if str(x).isdigit()]
     start = args.first_idcr if (cold or args.backfill or not prior) else max(prior) + 1
-    pairs = list_sessions(s, uid, tok, cult, start)
+    try:
+        pairs = list_sessions(s, uid, tok, cult, start)
+    except Indeterminate as exc:
+        # Do NOT fall through to the "0 session(s) found" line: it would report an unreadable API
+        # as an empty account. Nightly timer + PRE_RUN retry, so abandoning this run costs nothing.
+        errlog.err(f"technogym: session walk from idCr {start} abandoned — the API stopped "
+                   f"answering, so absence cannot be distinguished from failure", exc)
+        sys.exit(1)
     todo = [p for p in pairs if args.backfill or p[0] not in seen]
     print(f"[technogym] walked idCr from {start}: {len(pairs)} session(s) found; {len(todo)} to fetch"
           f"{' (backfill)' if args.backfill else ''}", flush=True)
