@@ -113,6 +113,29 @@ check("objections are archived verbatim",
       sorted(p.name for p in (tmp / "objections").glob("c0-*.txt")) != [],
       ", ".join(sorted(p.name for p in (tmp / "objections").glob("c0-*.txt"))))
 
+print("\n--- a brace in the refuter's OWN sentence is not a dead lens -------------")
+# Analyst cycle 419. The verdict was sliced out with rfind("{")..rfind("}"), which is not
+# brace-balanced: a defect sentence containing `{0,61}` or `interface{}` moved the opening brace
+# INSIDE the verdict and the slice never parsed. Fail-closed (a01ce81) then turned that into an
+# objection, so a skeptic writing a set literal disputed a claim it may have been letting stand.
+# All six lens-deaths in the analyst ledger (c402 x2, c409, c415, c416 x2) carry that signature,
+# and 0 of the 264 objections that DID survive contain a brace, against 19.2 expected from the
+# brace rate of the same agent's unparsed text.
+objs = with_run(lambda *a, **k: Done(0, verdict(True, "MAXOFF lands in {0,61} by construction")))
+check("a braced defect is still a defect", len(objs) == 2, f"{len(objs)} objection(s)")
+check("and is not reported as a dead lens",
+      bool(objs) and all("LENS DID NOT COMPLETE" not in o for o in objs),
+      objs[0][:110] if objs else "none")
+check("and the brace survives into the objection",
+      bool(objs) and all("{0,61}" in o for o in objs))
+objs = with_run(lambda *a, **k: Done(0, verdict(False, "the set {0,61} is fine as written")))
+check("a braced NON-refutation still publishes", objs == [], f"{len(objs)} objection(s)")
+objs = with_run(lambda *a, **k: Done(0, envelope(
+    'trailing prose {not json}\n{"refuted": true, "defect": "d"}\nand more prose {x}')))
+check("the verdict is found under prose braces on both sides",
+      objs == ["[check] d", "[claim] d"],   # not just len==2: a dead lens objects twice as well
+      objs[0][:110] if objs else "none")
+
 print("\n--- refute() itself distinguishes the three outcomes ---------------------")
 real = subprocess.run
 try:

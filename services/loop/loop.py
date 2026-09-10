@@ -505,6 +505,38 @@ class LensFailed(Exception):
     """
 
 
+def _verdict(out):
+    """The refuter's verdict: the last JSON object in its reply. Raises LensFailed if there is none.
+
+    This was `out[out.rfind("{"):out.rfind("}") + 1]`, which is not brace-balanced. A defect
+    sentence that itself contains a brace — a set `{0,61}`, a dict, an f-string, a regex quantifier
+    — puts the last `{` INSIDE the verdict, so the slice starts mid-string and json.loads dies with
+    `Expecting property name enclosed in double quotes: line 1 column 2`. That failure is fail-closed
+    (a01ce81): the lens is recorded as dead and files an objection of its own, so one brace in a
+    skeptic's own sentence can dispute a claim that skeptic was letting stand — and the raw reply is
+    not archived on that path, so what it actually said is gone. Every lens-death in the analyst
+    ledger (c402 x2, c409, c415, c416 x2) carries exactly that parse signature.
+
+    Scan candidate openings right to left with raw_decode instead, and take the last one that is
+    actually a verdict. Same "last JSON object" intent, minus the assumption that no brace ever
+    appears inside it.
+    """
+    last, i = None, out.rfind("{")
+    while i >= 0:
+        try:
+            v, _ = json.JSONDecoder().raw_decode(out, i)
+        except ValueError as exc:
+            last = exc
+        else:
+            if isinstance(v, dict) and "refuted" in v:
+                return v
+            last = ValueError("JSON object carried no 'refuted' key")
+        i = out.rfind("{", 0, i)
+    if last is None:
+        raise LensFailed("returned no JSON verdict")
+    raise LensFailed(f"verdict was not valid JSON ({last})")
+
+
 def refute(prop, evidence, lens, agent, tree=None):
     """Spawn one independent skeptic. Returns a defect string, or None if it found nothing.
 
@@ -562,15 +594,11 @@ def refute(prop, evidence, lens, agent, tree=None):
         out = (envelope.get("result") or "").strip()
     else:
         warn(f"refuter[{name}] gave no json envelope — verdict read raw, tokens NOT ledgered")
-    i, j = out.rfind("{"), out.rfind("}")
-    if i < 0 or j <= i:
-        warn(f"refuter[{name}] returned no JSON verdict — claim not audited on this lens")
-        raise LensFailed("returned no JSON verdict")
     try:
-        v = json.loads(out[i:j + 1])
-    except Exception as exc:
-        warn(f"refuter[{name}] verdict was not valid JSON ({exc}) — claim not audited on this lens")
-        raise LensFailed(f"verdict was not valid JSON ({exc})") from None
+        v = _verdict(out)
+    except LensFailed as exc:
+        warn(f"refuter[{name}] {exc} — claim not audited on this lens")
+        raise
     if v.get("refuted") and str(v.get("defect", "")).strip():
         return f"[{name}] {_clip(str(v['defect']).strip(), OBJ_MAX)}"
     return None
