@@ -68,7 +68,7 @@ unpushed() {
 # 2026-09-09T05:00:51Z with "cannot pull with rebase: You have unstaged changes".
 #
 # The tree is routinely dirty again by the time we reach here, because this script's flock is
-# unpaired: no producer takes it (moprox-memory/private-data-sync-lock-is-unpaired.md), so
+# unpaired: no producer takes it (moprox-memory/private-data-sync-lock-unpaired.md), so
 # polar-fetch (every 5 min) and notif-ingest (every 15 min) keep writing straight through our own
 # `git add -A && git commit`. A rebase needs a clean working tree; a push does not touch the
 # working tree at all. Reproduced deterministically with a post-commit hook standing in for the
