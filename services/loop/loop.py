@@ -597,6 +597,12 @@ def refute(prop, evidence, lens, agent, tree=None):
     try:
         v = _verdict(out)
     except LensFailed as exc:
+        # Carry the reply out with the exception so adversarial() can archive it. Every lens-death
+        # on record is a parse failure, and for every one of them the only surviving trace is the
+        # exception message — what the skeptic actually SAID is gone, so nobody can tell a model
+        # that wrote a malformed verdict from a parser that mangled a well-formed one. That is the
+        # whole reason c418/c419 had to argue the point from brace rates instead of reading it off.
+        exc.reply = out
         warn(f"refuter[{name}] {exc} — claim not audited on this lens")
         raise
     if v.get("refuted") and str(v.get("defect", "")).strip():
@@ -622,12 +628,24 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
         return []
     objections = []
     for lens in (CHANGE_LENSES if prop.get("patch") else LENSES):
+        reply = None
         try:
             d = refute(prop, evidence, lens, agent, tree=tree)
         except LensFailed as exc:
             d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on this lens "
                  f"({exc}). This is not a defect in the claim: re-propose it unchanged.")
+            reply = getattr(exc, "reply", None)
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
+        if reply:
+            # Next to the objection it caused, for the same reason the objection is kept at all: a
+            # disputed claim is published nowhere, and a lens-death's synthetic objection says only
+            # that the parse failed, never what was being parsed. Timeouts and non-zero exits have
+            # no reply and write nothing.
+            try:
+                OBJECTIONS.mkdir(parents=True, exist_ok=True)
+                (OBJECTIONS / f"c{cyc}-{lens[0]}-reply.txt").write_text(reply)
+            except OSError as exc:
+                warn(f"could not archive dead-lens reply for cycle {cyc}: {exc}")
         if d:
             objections.append(d)
             try:

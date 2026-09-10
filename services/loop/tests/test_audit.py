@@ -136,6 +136,40 @@ check("the verdict is found under prose braces on both sides",
       objs == ["[check] d", "[claim] d"],   # not just len==2: a dead lens objects twice as well
       objs[0][:110] if objs else "none")
 
+print("\n--- the two fail-open paths a01ce81 missed -------------------------------")
+# Analyst cycle 420, answering the [claim] objection to c419. a01ce81 enumerated four ways a
+# refuter dies (timeout, non-zero exit, no JSON verdict, unparseable verdict) and made all four
+# block. Two more survived it, because on both the parse SUCCEEDS and the fault is in which object
+# got parsed — so no exception fired and refute() returned None, the value that means "this lens
+# looked and found nothing". Both were closed as a side effect of b90d40d, neither was measured.
+objs = with_run(lambda *a, **k: Done(0, envelope(
+    '{"verdict": "not refuted", "why": "it survives my lens"}')))
+check("a verdict object with no 'refuted' key blocks",     # pre-b90d40d: json.loads fine,
+      len(objs) == 2 and all("LENS DID NOT COMPLETE" in o for o in objs),   # .get() -> None -> pass
+      objs[0][:110] if objs else "none")
+objs = with_run(lambda *a, **k: Done(0, envelope(
+    '{"refuted": true, "defect": "the join drops 28 of 108"}\n{"note": "I ran out of budget"}')))
+check("a refutation followed by a trailing JSON note is not lost",
+      objs == ["[check] the join drops 28 of 108", "[claim] the join drops 28 of 108"],
+      objs[0][:110] if objs else "none")           # pre-b90d40d: read the note, returned None
+
+print("\n--- a dead lens keeps the reply that killed it ---------------------------")
+# The lens-death objection says only that the parse failed. Without the reply beside it, a model
+# that wrote a malformed verdict cannot be told from a parser that mangled a well-formed one, which
+# is exactly why c418/c419 had to argue that distinction from brace rates instead of reading it.
+with_run(lambda *a, **k: Done(0, envelope("no verdict here, just prose")))
+saved = sorted(p.name for p in (tmp / "objections").glob("c0-*-reply.txt"))
+check("the raw reply is archived next to the objection",
+      saved == ["c0-check-reply.txt", "c0-claim-reply.txt"], ", ".join(saved) or "none")
+check("and it is the reply, not the exception message",
+      bool(saved) and "no verdict here, just prose"
+      in (tmp / "objections" / "c0-check-reply.txt").read_text())
+for p in (tmp / "objections").glob("c0-*-reply.txt"):
+    p.unlink()
+with_run(lambda *a, **k: Done(1, "", "Invalid API key"))
+check("a lens that died before replying writes no reply file",
+      not list((tmp / "objections").glob("c0-*-reply.txt")))
+
 print("\n--- refute() itself distinguishes the three outcomes ---------------------")
 real = subprocess.run
 try:
