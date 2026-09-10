@@ -62,16 +62,46 @@ unpushed() {
   [ -n "$HAS_REMOTE" ] || { echo 0; return; }
   git rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0
 }
+
+# Push FIRST, rebase only if the push is REJECTED. Both call sites used to pull --rebase
+# unconditionally and then push, and that ordering is what failed on claude-dev at
+# 2026-09-09T05:00:51Z with "cannot pull with rebase: You have unstaged changes".
+#
+# The tree is routinely dirty again by the time we reach here, because this script's flock is
+# unpaired: no producer takes it (moprox-memory/private-data-sync-lock-is-unpaired.md), so
+# polar-fetch (every 5 min) and notif-ingest (every 15 min) keep writing straight through our own
+# `git add -A && git commit`. A rebase needs a clean working tree; a push does not touch the
+# working tree at all. Reproduced deterministically with a post-commit hook standing in for the
+# racing producer: pull --rebase exits 1 on that tree, `git push` on the SAME tree succeeds.
+#
+# And the pull was ceremony in the observed failure — the remote had not moved. Only a genuinely
+# diverged remote makes a rebase necessary, and git tells us that by rejecting the push.
+#
+# No --autostash on the rebase, deliberately. It would clear this same dirty-tree block, but a
+# conflicting stash pop leaves conflict markers in the tree, which the NEXT sweep would commit as
+# data. Leaving the commit local and retrying is the strictly safer failure: nothing is lost, the
+# lines below say so at err, and the next run picks it up.
+sync_push() {
+  local what="$1" e r
+  if e=$(git push "$HAS_REMOTE" "$BRANCH" 2>&1); then
+    say "pushed: $what"; return 0
+  fi
+  if ! r=$(git pull --rebase "$HAS_REMOTE" "$BRANCH" 2>&1); then
+    err "WARN: push rejected and rebase failed, leaving commit local: $(printf '%s' "$r" | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
+  if ! e=$(git push "$HAS_REMOTE" "$BRANCH" 2>&1); then
+    err "WARN: push failed after rebase, commit is local: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
+  say "pushed after rebase: $what"
+}
 if [ -z "$(git status --porcelain)" ]; then
   if [ "$(unpushed)" -eq 0 ] 2>/dev/null; then exit 0; fi
   say "clean tree but $(unpushed) unpushed commit(s) — pushing"
-  if e=$(git pull --rebase "$HAS_REMOTE" "$BRANCH" 2>&1 && git push "$HAS_REMOTE" "$BRANCH" 2>&1); then
-    say "pushed $(git rev-parse --short HEAD)"
-  else
-    # Deliberately still exit 0, as before: this path leaves the commits safely local and the next
-    # run retries. But it IS a failed sync, so it must be findable — at err, not buried at info.
-    err "WARN: push of pending commits failed: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"
-  fi
+  # Deliberately still exit 0, as before: this path leaves the commits safely local and the next
+  # run retries. sync_push has already said why at err.
+  sync_push "$(unpushed) pending commit(s)"
   exit 0
 fi
 
@@ -111,15 +141,10 @@ git commit -q -m "sync: $lanes ($n file(s))" \
 if [ -z "$HAS_REMOTE" ]; then
   say "committed locally: $lanes ($n file(s)) — no remote configured yet"; exit 0
 fi
-# Another box (or the mail lane) may have pushed since; rebase our sweep on top rather than fail.
-# Report what git ACTUALLY said. Dropping -q and letting git's own stderr flow through the tee is
-# NOT enough: a service's stderr lands in the journal at priority 6, below the level triage reads —
-# the same trap tooling-pull.sh hit on 2026-08-13, where the real cause (publickey denied) was in the
-# journal all along and invisible. Capture it and re-emit it on the err line itself.
-if ! e=$(git pull --rebase "$HAS_REMOTE" "$BRANCH" 2>&1); then
-  err "WARN: rebase failed, leaving commit local: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"; exit 1
-fi
-if ! e=$(git push "$HAS_REMOTE" "$BRANCH" 2>&1); then
-  err "WARN: push failed, commit is local: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"; exit 1
-fi
-say "pushed: $lanes ($n file(s))"
+# Another box (or the mail lane) may have pushed since; sync_push rebases our sweep on top rather
+# than fail, but only once git has told us the remote actually moved. Report what git ACTUALLY
+# said — dropping -q and letting git's own stderr flow through the tee is NOT enough: a service's
+# stderr lands in the journal at priority 6, below the level triage reads, the same trap
+# tooling-pull.sh hit on 2026-08-13 where the real cause (publickey denied) was in the journal all
+# along and invisible. sync_push captures it and re-emits it on the err line itself.
+sync_push "$lanes ($n file(s))" || exit 1
