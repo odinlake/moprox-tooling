@@ -16,6 +16,7 @@ checker is broken, which is a different thing and should look different.
 """
 import glob as globmod
 import json, os, re, subprocess, sys, time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,13 @@ import errlog
 LANES = Path(__file__).resolve().parent / "lanes.json"
 MSGID_LANE_STALE = "6d0a9d7d5f1c4a3b8e2c74f0a1b93e55"     # must match logview/server.py
 HOUR = 3600.0
+
+# Estate services sit on 10.10.10.0/24, which `no_proxy` names in CIDR form. curl parses that and
+# goes direct; urllib.request.proxy_bypass does NOT parse CIDR, so a bare urlopen to an estate IP
+# is routed into the proxy at 10.10.10.2:3128 and answered 403 — which reads exactly like an auth
+# failure or an outage and would make this checker cry stale about a healthy lane. Same idiom as
+# services/metrics/collect.py. See moprox-memory/localnews-lane-stalled-and-unwatched.md.
+DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def expand(pattern):
@@ -155,9 +163,45 @@ def check_jsonl_fraction(lane, skips):
     return None
 
 
+def check_http_json_newest(lane, skips):
+    """Age of the newest record in a JSON array served by an estate HTTP service.
+
+    For a lane whose store is a service rather than a file. The other kinds all read something on
+    this box, and for such a lane there is nothing here whose mtime moves when the feed does — the
+    consumer's own exit status is no evidence either, because a dead feed produces an empty work
+    queue, which is exactly what a healthy idle run produces.
+
+    An unreachable store is reported as a breach, not swallowed: from here it is indistinguishable
+    from a store that is gone, and either way nothing is arriving. Which one it was is in `detail`.
+    """
+    url = lane["url"]
+    try:
+        recs = json.loads(DIRECT.open(url, timeout=lane.get("timeout_s", 60)).read())
+    except Exception as exc:
+        return f"cannot read {url} — {type(exc).__name__}: {exc}"
+    if not isinstance(recs, list):
+        return f"{url} did not answer with a JSON array — got {type(recs).__name__}"
+    if not recs:
+        return f"{url} returned no records"
+    newest = None
+    for r in recs:
+        t = parse_ts(r.get(lane["field"]))
+        if t is not None and (newest is None or t > newest):
+            newest = t
+    if newest is None:
+        return f"no usable '{lane['field']}' value in {len(recs)} record(s) from {url}"
+    age = (time.time() - newest) / HOUR
+    if age > lane["max_age_h"]:
+        return (f"newest record is {age:.1f} h old (limit {lane['max_age_h']} h), "
+                f"at {datetime.fromtimestamp(newest, timezone.utc).isoformat(timespec='seconds')} "
+                f"— {len(recs)} record(s) at {url}")
+    return None
+
+
 KINDS = {"newest_file": check_newest_file,
          "jsonl_newest": check_jsonl_newest,
-         "jsonl_fraction": check_jsonl_fraction}
+         "jsonl_fraction": check_jsonl_fraction,
+         "http_json_newest": check_http_json_newest}
 
 
 def raise_incident(lane, detail):

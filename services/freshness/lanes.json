@@ -15,8 +15,9 @@
   "not 'something is broken'.",
   "",
   "Only lanes whose layout has actually been verified are listed. Declaring a path nobody checked",
-  "is the very failure this file is meant to catch \u2014 mail and local-news enrichment are absent for",
-  "exactly that reason."
+  "is the very failure this file is meant to catch \u2014 mail enrichment is absent for exactly that",
+  "reason. Local-news ARRIVAL was absent for that reason too until its store's layout was measured",
+  "on 2026-09-10; local-news ENRICHMENT still is."
  ],
  "lanes": [
   {
@@ -68,6 +69,14 @@
    "glob": "~/projects/private-data/polar/incoming/exercise_*.json",
    "max_age_h": 168,
    "note": "Same caveat as technogym-cardio."
+  },
+  {
+   "name": "localnews",
+   "kind": "http_json_newest",
+   "url": "http://10.10.10.8:8004/api/posts",
+   "field": "scraped_ts",
+   "max_age_h": 18,
+   "note": "Does the Nextdoor crawl still store anything? The store is a service on webscout, not a file on this box, so no mtime here moves when the feed does. `scraped_ts` is written by the crawler when it stores a post, in UTC — confirmed against webscout's own journal, whose nextdoor-index.service run at 2026-09-10T10:35:33Z carries the 10:3x scrape slot.\n\nThe consumer's exit status is NOT a substitute and must never be read as one: localnews-distill.service pulls /api/pending, and a feed that has stored nothing leaves that queue empty, on which distill prints `annotated=0 timecode-only=0 failed=0` and exits 0. A green distill run is what a dead feed looks like.\n\n18 h from the measured gap distribution over the store's whole 54-day history (187 scrapes, 2026-07-16..2026-09-08): the crawl runs 4x daily, median gap 5.02 h, and there is a hard shoulder at 9.1 h (the overnight 20:3x->05:3x slot) with exactly one gap between that and 58 h (a single 13.9 h). The three real silences are 58.0, 62.0 and 77.0 h. So 18 h clears every routine gap by 4+ h and every real stall by 40 h — it would have fired 3 times in 54 days, once per genuine stall, and it detects one ~40 h before the shortest of them ends.\n\nSTALE RIGHT NOW, and that is correct: nothing has been stored since 2026-09-08T15:34:34 while the crawler keeps running and exiting 0, logging `posts: 0 scraped, 0 new` at info on every run since. The crawl fault is on webscout (its CPU fell from ~19 s to ~2.3 s and memory from 1.1 G to ~330 M between the 15:34 and 20:30 runs of 2026-09-08 — a crawl that no longer renders or no longer authenticates); fixing that is not this lane's job. Being able to SEE it is."
   },
   {
    "name": "ultrahuman-coverage",
