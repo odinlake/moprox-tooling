@@ -46,8 +46,11 @@ Writes private-data/finance/amex-notifs.json (full rewrite each run; source of
 truth is the notifications archive). Reconciliation against statements happens in
 the spending-tracker build, not here.
 """
-import json, re
+import json, re, sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/lib"))
+import errlog  # noqa: E402  — a notable condition must be findable by priority; see below
 
 NOTIF = Path.home() / "projects/private-data/notifications"
 OUT = Path.home() / "projects/private-data/finance/amex-notifs.json"
@@ -122,6 +125,23 @@ def _amount(m):
         (m["sym"] or (m["code"] or "").upper())
 
 
+def _seen(path):
+    """Rows already in the file this run is about to overwrite, keyed by `ts`.
+
+    This is the whole of the run's memory, and it is deliberately the output file rather than a
+    state file of its own: the output is committed to private-data, so it survives a redeploy and
+    is the same thing a human reads. Empty means "no baseline", which makes every row new — loud,
+    not quiet, which is the right way round for a first run or a file that was hand-removed."""
+    try:
+        return {r.get("ts"): r for r in json.loads(path.read_text())}
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        errlog.warn(f"amex: cannot read {path.name}, so this run cannot tell a new row from a "
+                    f"standing one and will report every row as new", exc)
+        return {}
+
+
 def main():
     amex, wallet = _read_notifications()
     txns, unparsed, bare_alerts = [], [], []
@@ -139,6 +159,12 @@ def main():
                 "kind": "bare-no-amount" if bare else "unrecognised",
                 "card": bare["card"] if bare else None,
                 "text": text,
+                # Settled at birth, whichever kind this is: a bare alert only reaches here when it
+                # has no post_time, and the wallet join is on post_time, so there is no clock to
+                # join it on and no later run can recover it; an unrecognised wording is never
+                # offered to the join at all. Every bare-no-amount row therefore carries `settled`,
+                # which is what the novelty gate below is entitled to read.
+                "settled": True,
             })
             continue
         amount, currency = _amount(m)
@@ -162,14 +188,25 @@ def main():
             "card": m["card"], "merchant": (w.get("title") or "").strip(),
             "source": "wallet-only",
         })
+    # A bare alert whose join window has not closed yet is not a miss: its wallet row fires seconds
+    # later and lands in a later ingest batch roughly 1% of the time (10 s of a 900 s timer). The
+    # window is closed once the archive holds a notification from after it, whatever channel.
+    newest = max([t for t in (_post_time(e) for e in amex) if t is not None]
+                 + [t for t in (_post_time(w) for w, _ in wallet) if t is not None], default=None)
     for e in unpaired:
+        t = _post_time(e)
         unparsed.append({
             "ts": e.get("ts"), "kind": "bare-no-amount",
             "card": BARE.match(e["text"].strip())["card"], "text": e["text"].strip(),
+            # Recorded, not just computed: an alert first seen with its window open must still be
+            # announced on the run that closes it, and the only way to know it never was is to
+            # have written down that it was unsettled at the time.
+            "settled": not (newest is not None and t is not None and t + WALLET_JOIN_S > newest),
         })
 
     txns.sort(key=lambda r: r["ts"])
     unparsed.sort(key=lambda r: r["ts"])
+    seen_txn, seen_unparsed = _seen(OUT), _seen(OUT_UNPARSED)   # BEFORE the rewrite below
     OUT.write_text(json.dumps(txns, indent=1, ensure_ascii=False) + "\n")
     OUT_UNPARSED.write_text(json.dumps(unparsed, indent=1, ensure_ascii=False) + "\n")
 
@@ -179,13 +216,54 @@ def main():
     max_dt = max((r["join_dt_s"] for r in txns if r["source"] == "wallet-join"), default=0.0)
     print(f"amex txns: {len(txns)} ({by_src})  unparsed: {len(unparsed)} (bare {bare_n}, "
           f"unrecognised {len(unparsed) - bare_n})")
-    print(f"  wallet join: max_join_dt_s {max_dt:.2f} of {WALLET_JOIN_S:.0f} bound, "
-          f"{ambiguous} alerts with >1 candidate in range")
-    if max_dt > 0.8 * WALLET_JOIN_S or ambiguous:
-        print(f"  WARNING: wallet join is near its bound or ambiguous; re-measure WALLET_JOIN_S")
+    # The standing state stays on stdout in full, including both conditions the WARNING lines below
+    # used to announce here: nothing a human could read off this run before is missing from it now.
+    print(f"  wallet join: max_join_dt_s {max_dt:.2f} of {WALLET_JOIN_S:.0f} bound"
+          f"{' — OVER the 0.8 mark, re-measure WALLET_JOIN_S' if max_dt > 0.8 * WALLET_JOIN_S else ''}"
+          f", {ambiguous} alerts with >1 candidate in range")
     if bare_n:
-        print(f"  WARNING: {bare_n} bare Amex alerts recovered no amount from either channel; "
-              f"last is {[u['ts'] for u in unparsed if u['kind'] == 'bare-no-amount'][-1]}")
+        print(f"  standing: {bare_n} bare Amex alert(s) recovered no amount from either channel "
+              f"(issue i-20260814-154101); last is "
+              f"{[u['ts'] for u in unparsed if u['kind'] == 'bare-no-amount'][-1]}")
+    # Both alarms below speak about rows that are NEW in this run. Every quantity above is a
+    # reduction over the whole notification archive, and that archive only grows, so any threshold
+    # over one is monotone: once it trips it stays tripped, and a unit on a 15-minute timer then
+    # repeats it for ever. That is not a hypothetical. `bare_n` has been non-zero since Amex went
+    # bare on 2026-08-06 and `max_dt > 0.8 * bound` since one 8.86 s pair landed, so on
+    # 2026-09-10 EVERY run printed both WARNING lines, with 113 unchanged and nothing to do about
+    # either. services/freshness/lanes.json already reached this conclusion once and wrote it down,
+    # retiring the amex-alert-detail lane on 2026-08-15 because it "was asserting something nobody
+    # expects to be true again and fired hourly for six days". Only the lane was retired; the
+    # producer went on asserting it.
+    #
+    # And they were asserting it onto stdout, which journald files at info — so the one that IS
+    # news, "a pair came in at 8.86 s of a 10 s bound", was invisible to a priority query for the
+    # 15 days it has been true, next to one that can never be anything else. The docstring above
+    # says what to do when the join approaches its bound ("if it approaches the bound, raise it")
+    # and the mechanism that was supposed to say so could not be found.
+    slow = [r for r in txns if r["source"] == "wallet-join" and r["ts"] not in seen_txn
+            and r["join_dt_s"] > 0.8 * WALLET_JOIN_S]
+    if slow or ambiguous:
+        # ambiguous is NOT gated on novelty: >1 candidate in range means the greedy join in _join()
+        # is no longer provably exact, which is a wrong amount against a merchant, not a margin.
+        errlog.warn(f"amex: wallet join at its bound — {len(slow)} new pair(s) over "
+                    f"{0.8 * WALLET_JOIN_S:.0f}s (worst {max((r['join_dt_s'] for r in slow), default=0.0):.2f}s "
+                    f"of {WALLET_JOIN_S:.0f}s), {ambiguous} alert(s) with >1 candidate in range; "
+                    f"re-measure WALLET_JOIN_S before a real pair falls outside it")
+    # Waiting one run for an unsettled alert costs nothing: it stays in unparsed and is reported
+    # on the run that closes its window. An absent `settled` key is read as True — the rows already
+    # in the file predate this field and have long since settled, so a deploy is not a wipeout that
+    # re-announces the whole standing backlog.
+    def already_said(u):
+        prev = seen_unparsed.get(u["ts"])
+        return prev is not None and prev.get("settled", True)
+
+    fresh = [u for u in unparsed
+             if u["kind"] == "bare-no-amount" and u["settled"] and not already_said(u)]
+    if fresh:
+        errlog.warn(f"amex: {len(fresh)} new bare Amex alert(s) recovered no amount from either "
+                    f"channel and are unrecoverable ({bare_n} standing, issue i-20260814-154101); "
+                    f"last is {fresh[-1]['ts']}")
 
 
 if __name__ == "__main__":
