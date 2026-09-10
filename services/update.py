@@ -146,6 +146,30 @@ def purge_jsdelivr(paths):
                check=False, capture_output=True)
 
 
+def run_child(argv, **kw):
+    """Run one of our helper scripts, then put its stderr in OUR journal.
+
+    Every child here is captured, because report_child_error() needs the buffer to say what failed.
+    Capture also means the child's stderr exists ONLY on the returned object — so on a run that
+    SUCCEEDS it is dropped on the floor. That voids errlog's whole contract for every script this
+    file invokes: a `<3>`/`<4>` prefix on stderr is supposed to become a real PRIORITY in the
+    journal (services/lib/errlog.py), and the aggregate a per-record loop reports at exit — "skipped
+    N unusable record(s)" — is emitted on an otherwise successful exit 0, which is exactly the case
+    we were discarding. Measured 2026-09-10: strength.py emits `<4>strength.py: row missing sets:
+    skipped 3 unusable record(s)` on every run against the live log, and in 21 days the journal has
+    no such line from dashboard-update.service.
+
+    Re-emitted verbatim, one line at a time, so the level prefixes stay at the start of the line and
+    journald still files them at the child's own priority. A child that FAILS still raises through
+    to report_child_error() as before, which is why this only handles the success path."""
+    p = sp.run(argv, capture_output=True, **kw)
+    cap = p.stderr
+    if isinstance(cap, (bytes, bytearray)): cap = cap.decode("utf-8", "replace")
+    for line in (cap or "").strip().splitlines():
+        print(line, file=sys.stderr, flush=True)
+    return p
+
+
 def main():
     lock = open(LOCK, "w")
     try:
@@ -185,8 +209,8 @@ def main():
 
     # system — RRD advances every minute, so always rebuild (cheap)
     t0 = time.monotonic()
-    sp.run([sys.executable, str(REPO / "services/metrics/rrd_json.py"), "all"],
-           env={**os.environ, "OUT": str(DATA)}, check=True, capture_output=True)
+    run_child([sys.executable, str(REPO / "services/metrics/rrd_json.py"), "all"],
+              env={**os.environ, "OUT": str(DATA)}, check=True)
     timings["system"] = (round((time.monotonic() - t0) * 1000), dir_size(DATA / "system"))
 
     # dns — cheap fetch from the exporter (leave the prior file if it's unreachable)
@@ -222,16 +246,16 @@ def main():
     fp = training_fp()
     if fp != state.get("training_fp") or not (DATA / "training/sessions.json").exists():
         t0 = time.monotonic()
-        sp.run([sys.executable, str(REPO / "services/training/build.py")],
-               env={**os.environ, "POLAR_RAW": str(POLAR_RAW), "POLAR_IN": str(POLAR_RAW.parent / "incoming"),
-                    "OUT": str(DATA / "training/sessions.json")}, check=True, capture_output=True)
+        run_child([sys.executable, str(REPO / "services/training/build.py")],
+                  env={**os.environ, "POLAR_RAW": str(POLAR_RAW), "POLAR_IN": str(POLAR_RAW.parent / "incoming"),
+                       "OUT": str(DATA / "training/sessions.json")}, check=True)
         # Strength is a SIBLING feed, not a member of sessions[]: resistance work has no HR trace,
         # and a record that is 90% nulls would skew every aggregate computed over runs and rides.
         # Built in the same branch so one logged set republishes both, and non-fatal because a
         # missing strength feed must never cost us the training rebuild.
         try:
-            sp.run([sys.executable, str(REPO / "services/training/strength.py"),
-                    str(DATA / "training/strength.json")], check=True, capture_output=True)
+            run_child([sys.executable, str(REPO / "services/training/strength.py"),
+                       str(DATA / "training/strength.json")], check=True)
         except Exception as _e:
             # Same <3> convention this file already uses for the push failure below — journald turns
             # it into a real PRIORITY, and update.py has no errlog import to reach for.
@@ -253,10 +277,13 @@ def main():
 
     # agents / mcp usage for the Stats tab (cheap; publishes only when it changes)
     (DATA / "stats").mkdir(parents=True, exist_ok=True)
-    sp.run([sys.executable, str(REPO / "services/agents/agent_stats.py")],
-           env={**os.environ, "OUT": str(DATA / "stats/agents.json")}, check=False, capture_output=True)
-    sp.run([sys.executable, str(REPO / "services/agents/mcp_stats.py")],
-           env={**os.environ, "OUT": str(DATA / "stats/mcp.json")}, check=False, capture_output=True)
+    # check=False here: a stale stats panel is not worth failing the publish over. But "not fatal"
+    # was implemented as "not reported" — a traceback from either of these went into the buffer and
+    # nowhere else. run_child puts it in the journal without changing the exit policy.
+    run_child([sys.executable, str(REPO / "services/agents/agent_stats.py")],
+              env={**os.environ, "OUT": str(DATA / "stats/agents.json")}, check=False)
+    run_child([sys.executable, str(REPO / "services/agents/mcp_stats.py")],
+              env={**os.environ, "OUT": str(DATA / "stats/mcp.json")}, check=False)
 
     # what data changed?
     changed = staged_changes(DWT)
