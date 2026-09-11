@@ -514,8 +514,12 @@ def _verdict(out):
     `Expecting property name enclosed in double quotes: line 1 column 2`. That failure is fail-closed
     (a01ce81): the lens is recorded as dead and files an objection of its own, so one brace in a
     skeptic's own sentence can dispute a claim that skeptic was letting stand — and the raw reply is
-    not archived on that path, so what it actually said is gone. Every lens-death in the analyst
-    ledger (c402 x2, c409, c415, c416 x2) carries exactly that parse signature.
+    not archived on that path, so what it actually said is gone. Most lens-deaths in the analyst
+    ledger carry that parse signature, but NOT all: through c440 the objection archive holds 8
+    deaths, 7 parse and 1 timeout (c428-claim, "timed out after 420s"). Count them by matching the
+    template in adversarial() anchored at offset 0 — a bare `"LENS DID NOT COMPLETE" in text` also
+    catches every objection that merely quotes the phrase, which is 2 of 10 matches through c441,
+    both of them substantive objections about this machinery (c419-claim, c441-check).
 
     Scan candidate openings right to left with raw_decode instead, and take the last one that is
     actually a verdict. Same "last JSON object" intent, minus the assumption that no brace ever
