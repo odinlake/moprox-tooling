@@ -184,7 +184,13 @@ def load_sessions():
             idcr = int(d.get("idCr") or 0)
             if not when or str(idcr) in skip:
                 continue
-            for i, a in enumerate(d.get("activities") or []):
+            acts = d.get("activities") or []
+            # Clock the file's OTHER activities account for. Counted over every activity in the
+            # file, including any the operator excluded: a stranger's activity still occupied its
+            # share of the visit. This is the width of our ignorance about a fallback anchor, not a
+            # guess at where the activity sits inside it — see `slack_s` below.
+            total = sum(float(a.get("durationS") or 0) for a in acts)
+            for i, a in enumerate(acts):
                 key = f"{idcr}#{i}"
                 dur = float(a.get("durationS") or 0)
                 if dur <= 0 or key in skip:
@@ -192,9 +198,30 @@ def load_sessions():
                 # The per-activity clock when we have it; the file's single timestamp only as the
                 # fallback, and then under the idCr-1012 END/START split.
                 start = starts.get(key)
+                slack = 0.0
                 if start is None:
                     start = when - timedelta(seconds=dur) if idcr <= END_SEMANTICS_MAX_IDCR else when
+                    # That anchor is the SESSION's timestamp, and the trap at the top of this file
+                    # measures what it costs on a non-first activity: median 2543 s out, max 6754 s.
+                    # It is not a start time with a little clock drift on it, so the 7 min tolerance
+                    # meant for clock drift cannot be the whole allowance — applied to this anchor it
+                    # silently removes the activity from every candidate set. Replaying the archive's
+                    # 15 multi-activity sessions as clockless arrivals (the regime every session from
+                    # idCr 1096 on is already in, indooractivities.json being a manual export that no
+                    # timer refreshes): 9 of the 22 judgeable activities become unreachable, among
+                    # them four real 35-48 min runs — 1031#1, 1068#1, 1082#1, 1094#1.
+                    #
+                    # So state the ignorance instead of guessing past it. The activity started
+                    # somewhere inside its own visit, and the file bounds that: it cannot be further
+                    # from the session timestamp than the clock its siblings account for, in either
+                    # direction (later under START semantics, earlier under END). That bound WIDENS
+                    # the candidate set and never narrows it — a single-activity file gets 0, so 22
+                    # of the 23 activities on this fallback today are untouched — and choose() then
+                    # separates the siblings on duration and HR, which is the evidence it already
+                    # says is all that is left when proximity cannot separate them.
+                    slack = max(0.0, total - dur)
                 out.append({"start": start, "dur_s": dur, "idCr": idcr, "act": i, "key": key,
+                            "slack_s": slack,
                             "speed": [(float(t), float(v)) for t, v in (a.get("speed_kph") or [])]})
         except Exception as exc:
             errlog.warn(f"technogym: could not read {os.path.basename(f)} ({exc})")
@@ -202,7 +229,12 @@ def load_sessions():
 
 
 def candidates(sessions, start_iso):
-    """Every belt activity that could plausibly be this run, nearest start first."""
+    """Every belt activity that could plausibly be this run, nearest start first.
+
+    MATCH_TOLERANCE_S is drift on a MEASURED start. An activity on the file-timestamp fallback has
+    no measured start at all, and carries the width of that ignorance in `slack_s`; the window has
+    to cover both or the activity is dropped for being where the file never claimed it was.
+    """
     t0 = _parse_dt(start_iso)
     if t0 is None or not sessions:
         return []
@@ -211,7 +243,7 @@ def candidates(sessions, start_iso):
         if s["dur_s"] < MIN_BELT_S:
             continue                              # a false start; nothing to attach
         gap = abs((s["start"] - t0).total_seconds())
-        if gap <= MATCH_TOLERANCE_S:
+        if gap <= MATCH_TOLERANCE_S + float(s.get("slack_s") or 0.0):
             out.append((gap, s))
     return [s for _, s in sorted(out, key=lambda x: x[0])]
 
@@ -424,7 +456,13 @@ def choose(sessions, start_iso, trace, trace_step_s, hr_reps=None, dur_min=None)
     scored.sort(key=lambda x: x[:4])
     best = scored[0][4]
     if len(cands) > 1:
-        return best, ("%d belt activities overlap this run (%s); chose %s"
-                      % (len(cands), ", ".join(str(c.get("key") or c["idCr"]) for c in cands),
+        # A candidate on the file-timestamp fallback is here because its start is UNKNOWN, not
+        # because it was seen to overlap. Saying "overlap" of one of those reports the absence of a
+        # clock as a shared-gym sighting, which is the one thing this line exists to report.
+        return best, ("%d belt activities could be this run (%s); chose %s"
+                      % (len(cands),
+                         ", ".join("%s%s" % (c.get("key") or c["idCr"],
+                                             " start unknown" if c.get("slack_s") else "")
+                                   for c in cands),
                          best.get("key") or best["idCr"]))
     return best, None
