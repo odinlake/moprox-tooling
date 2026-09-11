@@ -35,11 +35,35 @@ OUT = Path(os.environ.get("STRENGTH_OUT",
 REQUIRED = ("ex", "date", "sets")
 
 
+# Every key in which this log says something about a set of resistance work. A row that carries NONE
+# of them was never a strength entry, so "it is missing `sets`" is not a defect in it.
+#
+# This log holds two other things, both written deliberately and both growing. Cardio, as the
+# warm-up that opens a resistance session: `treadmill-walk`, mins/kph/grade_pct. And free-standing
+# session prose, attached to a movement name or to a marker of its own: an AMENDMENT to a rep count,
+# an ORDER CORRECTION, a `jog-to-gym` disclosure, an `HR-TRACE-CAVEAT` addressed to whoever reads the
+# Polar recording. Measured on the live log 2026-09-11: 7 rows of 40, on 3 separate dates, 3 of them
+# written in the preceding 24 h. All 7 carry none of MEASURES; all 33 real entries carry `sets`. The
+# split is clean on the whole corpus, which is why it is drawn on vocabulary and not on `ex`.
+#
+# Counting them as malformed put `row missing sets` at priority 4 on EVERY dashboard-update run —
+# every 2 minutes, for ever, with a count that only goes up (3 -> 5 -> 6 -> 7 over 2026-09-10..11) —
+# and it is one of the two lines holding the log-errors incident on that unit open. It is the shape
+# lanes.json retired the amex-alert-detail lane for: a check asserting something nobody expects to be
+# true again. Worse, it buries the case the warn exists for, because a genuinely malformed strength
+# row now arrives as n+1 in a line that was already there.
+#
+# So they are separated, not silenced: counted as `notes`, published in the feed beside `skipped`,
+# and stated on stdout on every run. A row that DOES speak strength and still misses `sets` is
+# malformed, and warns exactly as before.
+MEASURES = ("sets", "reps", "kg", "secs", "rir")
+
+
 def entries():
-    """(rows, skipped). Rows that do not satisfy REQUIRED are dropped, not fatal."""
+    """(rows, skipped, notes). Rows that do not satisfy REQUIRED are dropped, not fatal."""
     if not LOG.exists():
-        return [], 0
-    out, skipped = [], 0
+        return [], 0, 0
+    out, skipped, notes = [], 0, 0
     for line in LOG.read_text().splitlines():
         if not line.strip():
             continue
@@ -51,6 +75,9 @@ def entries():
             continue
         missing = [k for k in REQUIRED if r.get(k) is None]
         if missing:
+            if all(r.get(k) is None for k in MEASURES):
+                notes += 1          # cardio or prose: not an entry, and not an error either
+                continue
             # Named, not counted-in-silence: this is how a writer using the wrong vocabulary gets
             # noticed instead of being rounded off.
             errlog.skip("strength.py: row missing %s" % ",".join(missing),
@@ -58,7 +85,7 @@ def entries():
             skipped += 1
             continue
         out.append(r)
-    return sorted(out, key=lambda r: (r["date"], r.get("ts", ""))), skipped
+    return sorted(out, key=lambda r: (r["date"], r.get("ts", ""))), skipped, notes
 
 
 # Where a load CAME FROM, alongside the load itself. The log is a number plus prose, and the prose
@@ -130,7 +157,7 @@ def volume(r):
 
 
 def build():
-    rows, skipped = entries()
+    rows, skipped, notes = entries()
     by_date = OrderedDict()
     movements = defaultdict(list)
 
@@ -199,6 +226,11 @@ def build():
             # In the feed, not only in the journal: a panel that quietly shows fewer rows than the
             # log holds is the thing this module just failed at. 0 is the normal case.
             "skipped": skipped,
+            # Rows the log holds that this feed is not the reader for — cardio warm-ups and session
+            # prose. Published for the same reason `skipped` is: the count is the only thing that
+            # says the panel is showing fewer rows than the log. Unlike `skipped`, it is expected
+            # to be non-zero, which is exactly why it must not be reported as a fault.
+            "notes": notes,
             # Stated in the feed so the UI can label it honestly rather than implying kilograms.
             "volume_note": "volume load = sets x reps x kg; an index comparable only against itself",
             "sessions": sessions,
@@ -210,8 +242,9 @@ def main(argv):
     data = build()
     out.parent.mkdir(parents=True, exist_ok=True)
     json.dump(data, open(out, "w"), separators=(",", ":"))
-    print("strength: %d session(s), %d entries, %d movement(s), %d skipped -> %s"
-          % (data["count"], data["entries"], len(data["movements"]), data["skipped"], out))
+    print("strength: %d session(s), %d entries, %d movement(s), %d skipped, %d note/cardio row(s)"
+          " -> %s" % (data["count"], data["entries"], len(data["movements"]), data["skipped"],
+                      data["notes"], out))
     return 0
 
 
