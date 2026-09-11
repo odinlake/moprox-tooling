@@ -513,8 +513,10 @@ def _verdict(out):
     — puts the last `{` INSIDE the verdict, so the slice starts mid-string and json.loads dies with
     `Expecting property name enclosed in double quotes: line 1 column 2`. That failure is fail-closed
     (a01ce81): the lens is recorded as dead and files an objection of its own, so one brace in a
-    skeptic's own sentence can dispute a claim that skeptic was letting stand — and the raw reply is
-    not archived on that path, so what it actually said is gone. Most lens-deaths in the analyst
+    skeptic's own sentence can dispute a claim that skeptic was letting stand. Before 97df320 the
+    raw reply was not archived on that path either, so for every death up to then what the skeptic
+    actually said is gone; since 97df320 it is kept (c440-check-reply.txt, the only one so far).
+    Most lens-deaths in the analyst
     ledger carry that parse signature, but NOT all: through c440 the objection archive holds 8
     deaths, 7 parse and 1 timeout (c428-claim, "timed out after 420s"). Count them by matching the
     template in adversarial() anchored at offset 0 — a bare `"LENS DID NOT COMPLETE" in text` also
@@ -601,11 +603,13 @@ def refute(prop, evidence, lens, agent, tree=None):
     try:
         v = _verdict(out)
     except LensFailed as exc:
-        # Carry the reply out with the exception so adversarial() can archive it. Every lens-death
-        # on record is a parse failure, and for every one of them the only surviving trace is the
-        # exception message — what the skeptic actually SAID is gone, so nobody can tell a model
-        # that wrote a malformed verdict from a parser that mangled a well-formed one. That is the
-        # whole reason c418/c419 had to argue the point from brace rates instead of reading it off.
+        # Carry the reply out with the exception so adversarial() can archive it. Most lens-deaths
+        # on record are parse failures but not all — see _verdict's docstring for the split — and
+        # before this line existed the only surviving trace of any of them was the exception
+        # message: what the skeptic actually SAID was gone, so nobody could tell a model that wrote
+        # a malformed verdict from a parser that mangled a well-formed one, which is the whole
+        # reason c418/c419 had to argue the point from brace rates instead of reading it off. A
+        # timeout leaves `out` empty, so a reply survives only on the paths that produced output.
         exc.reply = out
         warn(f"refuter[{name}] {exc} — claim not audited on this lens")
         raise
