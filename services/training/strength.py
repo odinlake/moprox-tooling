@@ -93,10 +93,29 @@ def kg_src(r):
     An explicit `kg_src` on the row wins, so a writer that learns to say it outright never has to be
     parsed for; the note is the fallback for the rows already logged.
     """
-    if r.get("kg") is None:
+    if load(r) is None:
         return None
     return r.get("kg_src") or ("assumed" if ASSUMED_NOTE.search((r.get("note") or "").lower())
                                else "stated")
+
+
+# An explicit `kg: 0` is how this log spells "no external load", and it is not a load of zero.
+# volume() below already commits to that reading in prose — bodyweight returns None rather than a
+# zero — but every "is there a load" question was asked as `kg is None`, which is a different
+# question, and the difference broke exactly the rows the contract was written for. The log spells
+# one movement class both ways and the two spellings came out as two kinds: heel-raise-unloaded,
+# logged with no `kg` at all, published kind "bodyweight" with a best of "10 reps", while
+# heel-raise-bent-knee-DL — same calf-rehab block, note says "bodyweight" — carried `kg: 0` and
+# published kind "weighted", kg_src "stated", volume 0.0, and a best the panel renders as "0 kg × 15".
+# Measured on the live log 2026-09-11: four of the four rows logged that way, the whole of the
+# current calf-rehab progression, and the coach's own note says the next rung is external load — so
+# the first real dumbbell would extend a progression line from a zero nobody ever lifted.
+# The writer is an agent composing free-form JSON and both spellings will keep arriving. The reader
+# is where they have to mean the same thing.
+def load(r):
+    """The external load in kg, or None when the row carries none — absent or an explicit zero."""
+    kg = r.get("kg")
+    return None if kg is None or kg == 0 else kg
 
 
 def volume(r):
@@ -104,9 +123,10 @@ def volume(r):
     pulldown is not 30 kg of squat, so it is comparable against itself over time and nothing else.
     Bodyweight and timed movements deliberately return None rather than a zero that would drag a
     session total down and look like a bad week."""
-    if r.get("kg") is None or r.get("reps") is None:
+    kg = load(r)
+    if kg is None or r.get("reps") is None:
         return None
-    return round(float(r["sets"]) * float(r["reps"]) * float(r["kg"]), 1)
+    return round(float(r["sets"]) * float(r["reps"]) * float(kg), 1)
 
 
 def build():
@@ -122,8 +142,9 @@ def build():
         src = kg_src(r)
         e = {"ex": r["ex"], "sets": r["sets"]}
         for k in ("reps", "kg", "secs", "rir", "note"):
-            if r.get(k) is not None:
-                e[k] = r[k]
+            val = load(r) if k == "kg" else r.get(k)
+            if val is not None:
+                e[k] = val
         if src:
             e["kg_src"] = src
         if v is not None:
@@ -136,8 +157,9 @@ def build():
 
         m = {"date": d, "sets": r["sets"]}
         for k in ("reps", "kg", "secs", "rir"):
-            if r.get(k) is not None:
-                m[k] = r[k]
+            val = load(r) if k == "kg" else r.get(k)
+            if val is not None:
+                m[k] = val
         if src:
             m["kg_src"] = src
         if v is not None:
