@@ -68,7 +68,20 @@ def read_jsonl(paths, skips):
                     try:
                         yield json.loads(ln)
                     except Exception as exc:
-                        skips.skip(f"{os.path.basename(p)}:{i} unparseable", exc)
+                        # `Skips` has no .skip() — that is errlog's module-level one-liner, and this
+                        # was the only site in the repo calling it on the instance. The resulting
+                        # AttributeError was raised INSIDE this handler, so the outer except below
+                        # caught it, reported the false "cannot read <file>", and abandoned the rest
+                        # of the file: one truncated append hid every record after it. Measured at
+                        # 5b3598a on a 3-line fixture (old row, bad line, row dated now) —
+                        # check_jsonl_newest returned "newest record is 58718.6 h old" for a lane
+                        # holding a record from this second. The corrupt-line net was the thing that
+                        # broke, so the lane it guards fails toward a false alarm on one bad byte,
+                        # and jsonl_fraction fails the other way: the window lands past the bad line,
+                        # total drops under min_records, and the lane stops judging in silence.
+                        # The location goes in the exception so the single report still names it.
+                        skips.add(ValueError(f"{os.path.basename(p)}:{i} unparseable: "
+                                             f"{type(exc).__name__}: {exc}"))
         except Exception as exc:
             errlog.err(f"freshness: cannot read {p}", exc)
 
@@ -249,6 +262,12 @@ def main():
         else:
             print(f"ok     {lane['name']}")
 
+    # Say the skipped lines out loud, once. This object was constructed above and then never
+    # reported, so even with the call site above fixed a corrupt lane file would have been counted
+    # into silence — the second half of the same swallow. No `total` here on purpose: it would be
+    # a count across every lane's files and "ALL n records unusable" is not a claim this loop is in
+    # a position to make. A lane with nothing left readable already breaches on its own, at err.
+    skips.report()
     print(f"{breaches} breach(es) across {len(cfg.get('lanes', []))} lane(s)")
     return 0            # breaches are reported as incidents, not as a unit failure
 
