@@ -55,6 +55,24 @@ def warn(context, exc=None):
     _emit(4, f"{context}{detail}")
 
 
+def die(context, exc=None):
+    """An unexpected condition this process cannot continue past: say it at err, then exit 1.
+
+    `sys.exit("message")` is Python's idiom for exactly this and under systemd it is a trap. The
+    message goes to stderr with no level prefix, and journald files an un-prefixed stderr line at
+    PRIORITY=6 — so the ONE err-level record a dead unit leaves is systemd's own generic
+    "Failed to start ...", and the sentence naming the cause is below the level any priority query
+    looks at. Measured on claude-dev at 2026-09-10T04:50:06Z: localnews-distill exited with
+    "every pending post (3/3) had a media timecode as its whole body — suspect the reader's body
+    extraction, not the classifier" and the journal records that line at PRIORITY=6, one index
+    before the PRIORITY=3 line that says nothing but the unit's name.
+
+    So the only reason a fatal exit was quieter than a survivable one was that this module offered
+    an idiom for the survivable case and none for the fatal one. It does now."""
+    err(context, exc)
+    sys.exit(1)
+
+
 class Skips:
     """Counts records skipped in a loop and reports ONCE at the end.
 

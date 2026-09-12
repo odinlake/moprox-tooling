@@ -171,6 +171,9 @@ def main():
                     f"{', '.join(timecoded_ids[:10])}")
     # A total wipeout is a broken classifier, not a quiet day. Exit non-zero so the unit goes red,
     # which puts it in logview's incident queue instead of dying silently in a green log line.
+    # Via errlog.die, because a bare `sys.exit(msg)` writes the reason to stderr with no level
+    # prefix and journald files that at info: on 2026-09-10T04:50:06Z this unit went red and the
+    # only err-level line it left was systemd's "Failed to start localnews-distill.service".
     #
     # But "all of them" has to mean something. On 2026-08-17T20:50 this fired on 1/1 — a single
     # `claude -p` returned non-JSON, the batch happened to hold one post, and the unit went red for a
@@ -186,11 +189,11 @@ def main():
     # were annotated above, so they leave the queue and the next run is green unless the reader is
     # still doing it.
     if timecoded == len(pending) and len(pending) >= MIN_WIPEOUT:
-        sys.exit(f"every pending post ({timecoded}/{len(pending)}) had a media timecode as its "
-                 f"whole body — suspect the reader's body extraction, not the classifier")
+        errlog.die(f"every pending post ({timecoded}/{len(pending)}) had a media timecode as its "
+                   f"whole body — suspect the reader's body extraction, not the classifier")
     if sent and ok == 0:
         if sent >= MIN_WIPEOUT:
-            sys.exit(f"every classification failed ({failed}/{sent}) — classifier is broken")
+            errlog.die(f"every classification failed ({failed}/{sent}) — classifier is broken")
         print(f"  ! all {failed} of this batch failed, below the {MIN_WIPEOUT}-post bar for calling "
               f"the classifier broken — left pending for the next run", flush=True)
 

@@ -95,7 +95,10 @@ def fetch_day(bearer, d):
     r = requests.get(f"{API}/metrics", params={"date": d.isoformat()},
                      headers={"Authorization": f"Bearer {bearer}"}, timeout=60)
     if r.status_code == 401:
-        raise SystemExit("401 from metrics — token rejected; re-run the authorize flow")
+        # errlog.die, not `raise SystemExit(msg)`: SystemExit's argument is printed to stderr with
+        # no level prefix and journald files that at info, so the ring lane would go stale with the
+        # word "token" nowhere a priority query can reach.
+        errlog.die("ultrahuman: 401 from metrics — token rejected; re-run the authorize flow")
     r.raise_for_status()
     return r.json()
 

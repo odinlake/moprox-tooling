@@ -81,20 +81,25 @@ def login(s, e):
                         "x-mwapps-appid": APP_ID},
                json={"username": e["MYWELLNESS_USER"], "password": e["MYWELLNESS_PASS"],
                      "keepMeLoggedIn": True})
+    # errlog.die, not sys.exit(msg): this is the whole cardio lane dying of a credential, and a
+    # bare sys.exit writes its reason to stderr unprefixed, which journald files at info. The unit
+    # would go red with nothing at err level but systemd's own "Failed to start" — the shape
+    # moprox-memory/credential-death-has-no-shared-vocabulary is about.
     if r.status_code == 401:
-        sys.exit("login failed — 401 from core.mywellness.com. Empty-bodied 401 usually means the "
-                 "x-mwapps-appid header was rejected, not that the password is wrong; check both "
-                 "(creds in mywellness.env, app id in APP_ID).")
+        errlog.die("technogym: login failed — 401 from core.mywellness.com. Empty-bodied 401 "
+                   "usually means the x-mwapps-appid header was rejected, not that the password "
+                   "is wrong; check both (creds in mywellness.env, app id in APP_ID).")
     try:
         b = r.json()
     except ValueError:
-        sys.exit(f"login failed — non-JSON reply ({r.status_code}) from core.mywellness.com")
+        errlog.die(f"technogym: login failed — non-JSON reply ({r.status_code}) from "
+                   f"core.mywellness.com")
     if b.get("errors"):
-        sys.exit(f"login failed — {b['errors']}")
+        errlog.die(f"technogym: login failed — {b['errors']}")
     uid = str((b.get("userContext") or {}).get("id", ""))
     tok = str(b.get("token", ""))
     if not uid or not tok:
-        sys.exit("login failed — reply had no userContext.id / token")
+        errlog.die("technogym: login failed — reply had no userContext.id / token")
     cult = str((b.get("userContext") or {}).get("defaultCulture") or "en-GB")
     return uid, tok, cult
 
