@@ -15,7 +15,7 @@ checker is broken, which is a different thing and should look different.
     check.py --dry      evaluate and print; log nothing
 """
 import glob as globmod
-import json, os, re, subprocess, sys, time
+import json, os, re, socket, subprocess, sys, time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -217,19 +217,69 @@ KINDS = {"newest_file": check_newest_file,
          "http_json_newest": check_http_json_newest}
 
 
+JOURNAL_SOCKET = "/run/systemd/journal/socket"
+
+
+def journal_field(key, value):
+    """One field in journald's native wire format.
+
+    `KEY=value\\n` cannot carry a newline, and a breach detail is free text built from whatever the
+    lane check found, so a value containing one is sent in the binary form journald also accepts:
+    the key, a newline, a 64-bit little-endian length, the raw bytes, a newline.
+    """
+    raw = str(value).encode("utf-8", "replace")
+    if b"\n" in raw:
+        return key.encode() + b"\n" + len(raw).to_bytes(8, "little") + raw + b"\n"
+    return key.encode() + b"=" + raw + b"\n"
+
+
+def journal_send(fields):
+    """Hand one record to journald FROM THIS PROCESS, not from a child.
+
+    journald does not trust what a sender says about itself: it reads the sender's pid out of the
+    socket's SCM_CREDENTIALS and looks that pid's cgroup up to fill in `_SYSTEMD_UNIT` and
+    `_SYSTEMD_INVOCATION_ID`. It does that when it DEQUEUES the datagram, which is not when the
+    datagram was sent. `logger --journald` — what this used to shell out to — has already exited by
+    then, so under any queueing at all the lookup finds no such pid and the record lands with no
+    unit and no invocation id on it.
+
+    That is not theoretical. On claude-dev, of 74 `lane polar STALE` records over 2026-09-04..08,
+    14 arrived with no trusted unit, interleaved run by run — and an incident whose newest record
+    lost its invocation id is one `get_incident_detail()` answers with `rows: []`, which is the same
+    answer as a lane that never fired (moprox-memory/lane-stale-detail-unreachable.md). Sending
+    from this long-lived process gives journald a pid that is still there to resolve.
+    """
+    payload = b"".join(journal_field(k, v) for k, v in fields)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC)
+    try:
+        sock.sendto(payload, JOURNAL_SOCKET)
+    finally:
+        sock.close()
+
+
 def raise_incident(lane, detail):
     """Log a journal record the sink aggregates as a lane-stale incident."""
     msg = f"lane {lane['name']} STALE: {detail}"
     if lane.get("note"):
         msg += f" | {lane['note']}"
-    fields = "\n".join([f"MESSAGE_ID={MSGID_LANE_STALE}", "PRIORITY=3",
-                        f"UNIT=lane-{lane['name']}", f"LANE={lane['name']}",
-                        f"MESSAGE={msg}"]) + "\n"
+    fields = [("MESSAGE_ID", MSGID_LANE_STALE), ("PRIORITY", "3"),
+              ("UNIT", f"lane-{lane['name']}"), ("LANE", lane["name"]),
+              ("MESSAGE", msg)]
     try:
-        subprocess.run(["logger", "--journald"], input=fields, text=True, check=True, timeout=20)
+        journal_send(fields)
     except Exception as exc:
-        # The whole point is that a degraded lane becomes visible; if we cannot say so, say THAT.
-        errlog.err(f"freshness: could not raise the incident for lane {lane['name']} ({detail})", exc)
+        # Delivering the breach matters more than its attribution, so keep the old child as the
+        # fallback — but say at err that we took it. A record too big for a datagram, or a missing
+        # journal socket, is not a thing this should absorb quietly.
+        errlog.err(f"freshness: in-process journal send failed for lane {lane['name']}, falling "
+                   f"back to logger(1) — the record may land with no unit attached", exc)
+        try:
+            blob = "".join(f"{k}={v}\n" for k, v in fields)
+            subprocess.run(["logger", "--journald"], input=blob, text=True, check=True, timeout=20)
+        except Exception as exc2:
+            # The whole point is that a degraded lane becomes visible; if we cannot say so, say THAT.
+            errlog.err(f"freshness: could not raise the incident for lane {lane['name']} ({detail})",
+                       exc2)
 
 
 def main():
