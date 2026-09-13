@@ -115,7 +115,14 @@ def flat_publish(wt, branch):
     msg = f"publish {branch} " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     new = sp.run(["git", "commit-tree", tree, "-m", msg], cwd=str(wt), env=env,
                  check=True, text=True, capture_output=True).stdout.strip()
-    git(wt, "reset", "--hard", "-q", new)
+    # Push the commit OBJECT, and move the local branch only once the remote has taken it. This used
+    # to be `git reset --hard -q new` right here, BEFORE the push: a publish the remote refused still
+    # advanced the local branch, `ensure_wt` never fetches, and so the next tick compared the freshly
+    # built tree against the unpushed commit — identical, so the branch was skipped and no push was
+    # attempted, for ever. That silently freezes `gh-pages`, whose tree changes only when dashboard
+    # code does. See moprox-memory/dashboard-publish-strands-after-double-push-failure.md. Leaving the
+    # branch where it is costs nothing: main() rebuilds the whole worktree from source every tick.
+    #
     # capture_output swallows git's stderr, so a failed push used to raise a CalledProcessError whose
     # traceback said only "exit status 128" — 7 failures between 2026-08-06 and 2026-08-14 are on the
     # incident board and NONE of them can be diagnosed, because the one line that said why was
@@ -126,8 +133,10 @@ def flat_publish(wt, branch):
     # not worth an incident. A push that fails TWICE is a different animal (auth, a poisoned object
     # store, GitHub down) and should still go red, now with git's own words attached.
     for attempt in (1, 2):
-        p = sp.run(["git", "push", "-qf", "origin", branch], cwd=str(wt), text=True, capture_output=True)
+        p = sp.run(["git", "push", "-qf", "origin", f"{new}:refs/heads/{branch}"],
+                   cwd=str(wt), text=True, capture_output=True)
         if p.returncode == 0:
+            git(wt, "reset", "--hard", "-q", new)
             return True
         err = (p.stderr or p.stdout or "").strip().replace("\n", " ")[:400]
         if attempt == 1:
