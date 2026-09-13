@@ -4,8 +4,8 @@
 It listens to EVERY message in the configured channel, but only INVOKES the theming agent when the
 bot's trigger name appears as a real word token — `M4`, `@M4`, `M4?` fire; `M40` / `xM4` don't
 (word-boundary, punctuation-aware, case-insensitive). An EDIT that adds the trigger counts: people
-routinely send a question and then put `@M4` on the front of it, and for five hours on 2026-09-13
-that was a question nobody answered. On invocation it pulls the recent channel
+routinely send a question and then put `@M4` on the front of it, and until 2026-09-13 that was a
+question nobody answered. On invocation it pulls the recent channel
 history (Read Message History permission) in as context, runs the theming agent (totolo MCP + the
 theme-ontology/theming repo), and posts the reply. Both sides are logged to the shared convo store so
 Discord + Telegram share one timeline.
@@ -162,10 +162,12 @@ async def on_message(message):
 async def on_message_edit(before, after):
     """A question posted first and ADDRESSED second is not an edge case, it is how people write.
 
-    On 2026-09-13 Paul asked M4 for a list of stories and got no answer for five hours. He had typed
-    the question, sent it, then edited it to put `@M4:` on the front. The bridge saw the original --
-    68 characters, no mention, correctly not a trigger -- and never saw the edit, because there was
-    no handler for one. M4 was healthy the whole time and had simply never been spoken to.
+    On 2026-09-13 Paul asked M4 for a list of stories and got no answer. He had typed the question,
+    sent it at 11:41:19Z, and edited it 46 seconds later to put `@M4:` on the front. The bridge saw
+    the original -- 68 characters, no mention, correctly not a trigger -- and never saw the edit,
+    because there was no handler for one. M4 was healthy throughout and had simply never been
+    spoken to; the journal line "mention=False role=False trig=False len=68" sits against a message
+    the REST API reports as 92 characters with M4 in its mentions array.
 
     Only an edit that TURNS a message into one addressed to M4 fires. If it was already addressed,
     it was handled when it arrived; re-running on every subsequent edit would answer the same
