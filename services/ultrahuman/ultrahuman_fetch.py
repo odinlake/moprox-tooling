@@ -122,7 +122,24 @@ def scalars(d, payload):
     rec["movement_index"]  = val("movement_index")
     rec["vo2_max"]         = val("vo2_max")
     rec["active_minutes"]  = val("active_minutes")
-    rec["morning_alertness"] = val("morning_alertness")
+
+    # `morning_alertness` is the vendor's display title and it asserts the wrong polarity. The
+    # object is labelled `unit: "minutes"` on 177/177 archived days and the values run 2..107, so
+    # it is sleep INERTIA — minutes from waking to being alert — and higher is worse. Ultrahuman
+    # grades it itself in the same payload (Sleep.sleep_inertia_interpretation.title): its "good"
+    # titles span 2..13, its "bad" ones 47..107, no overlap. Stored under that name with no unit
+    # anywhere in the row, the only reading left to a later consumer is the inverted one. So the
+    # unit goes in the key, as it already does elsewhere in this record (hr_gap_max_min, *_s).
+    #
+    # `status` travels with it because a null here has five distinguishable causes and they are
+    # not the same fact: non_wear_interrupt (3) and charging_interrupt (2) say the ring was off,
+    # low_activity (4) and missing_data_interrupt (7) say the night was not scorable, and `pending`
+    # (3) says the cloud has not computed it yet and the day is worth refetching. The bare
+    # passthrough collapsed all five, plus the 32 days with no status at all, into one None.
+    ma = by.get("morning_alertness")
+    ma = ma if isinstance(ma, dict) else {}
+    rec["morning_inertia_min"]    = ma.get("value")
+    rec["morning_inertia_status"] = ma.get("status")
 
     # night_rhr is ECHOED, not recomputed: when the ring stops delivering, the partner API keeps
     # serving the last real reading — same value, same ORIGINAL timestamp — for every later date.
