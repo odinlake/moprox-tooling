@@ -3,7 +3,9 @@
 
 It listens to EVERY message in the configured channel, but only INVOKES the theming agent when the
 bot's trigger name appears as a real word token — `M4`, `@M4`, `M4?` fire; `M40` / `xM4` don't
-(word-boundary, punctuation-aware, case-insensitive). On invocation it pulls the recent channel
+(word-boundary, punctuation-aware, case-insensitive). An EDIT that adds the trigger counts: people
+routinely send a question and then put `@M4` on the front of it, and for five hours on 2026-09-13
+that was a question nobody answered. On invocation it pulls the recent channel
 history (Read Message History permission) in as context, runs the theming agent (totolo MCP + the
 theme-ontology/theming repo), and posts the reply. Both sides are logged to the shared convo store so
 Discord + Telegram share one timeline.
@@ -134,18 +136,69 @@ client = discord.Client(intents=intents)
 async def on_ready():
     print("discord-theming up as %s; channel=%s; trigger=%r" % (client.user, CHANNEL_ID or "any", TRIGGER), flush=True)
 
-@client.event
-async def on_message(message):
-    if message.author.id == client.user.id: return                  # ignore our own messages
-    if CHANNEL_ID and message.channel.id != CHANNEL_ID: return      # only the configured channel
+# Message ids already handed to M4. An edit must be able to WAKE the agent (see on_message_edit)
+# without ever waking it twice for the same message, and Discord will happily deliver several edits
+# of one message -- a typo fix on an answered question must not re-run it.
+HANDLED = set()
+HANDLED_MAX = 500
+
+
+def _addressed(message):
+    """(triggered, mentioned, role_pinged, bot_role_ids) -- is this message talking to M4?"""
     content = message.content or ""
     bot_role_ids = {r.id for r in message.guild.me.roles} if message.guild else set()
     mentioned = client.user in message.mentions                     # @M4 the user
     role_pinged = any(r.id in bot_role_ids for r in message.role_mentions)  # @M4 the bot's managed role
-    triggered = mentioned or role_pinged or bool(TRIG_RX.search(content))   # or the literal "M4" token
-    print("rx: ch=%s mention=%s role=%s trig=%s len=%d from=%s" % (
-        message.channel.id, mentioned, role_pinged, triggered, len(content), message.author.display_name), flush=True)
+    return (mentioned or role_pinged or bool(TRIG_RX.search(content)),
+            mentioned, role_pinged, bot_role_ids)
+
+
+@client.event
+async def on_message(message):
+    await _consider(message, "rx")
+
+
+@client.event
+async def on_message_edit(before, after):
+    """A question posted first and ADDRESSED second is not an edge case, it is how people write.
+
+    On 2026-09-13 Paul asked M4 for a list of stories and got no answer for five hours. He had typed
+    the question, sent it, then edited it to put `@M4:` on the front. The bridge saw the original --
+    68 characters, no mention, correctly not a trigger -- and never saw the edit, because there was
+    no handler for one. M4 was healthy the whole time and had simply never been spoken to.
+
+    Only an edit that TURNS a message into one addressed to M4 fires. If it was already addressed,
+    it was handled when it arrived; re-running on every subsequent edit would answer the same
+    question repeatedly, which is the failure this bridge would then be famous for instead.
+
+    Deliberately NOT paired with on_raw_message_edit. discord.py delivers this event only for a
+    message still in its cache (1000 by default); an edit to anything older arrives raw, with no
+    `before` to compare against, so the "was it already addressed" test cannot be made and an old
+    message given a typo fix could be answered afresh. This channel sees a handful of messages a
+    day, so anything anyone is still editing is cached -- and if it is not, it is old enough that
+    answering it unbidden is the wrong instinct anyway.
+    """
+    if before and _addressed(before)[0]:
+        return                                  # already answered when it was posted
+    await _consider(after, "edit")
+
+
+async def _consider(message, how):
+    if message.author.id == client.user.id: return                  # ignore our own messages
+    if CHANNEL_ID and message.channel.id != CHANNEL_ID: return      # only the configured channel
+    content = message.content or ""
+    triggered, mentioned, role_pinged, bot_role_ids = _addressed(message)
+    print("%s: ch=%s mention=%s role=%s trig=%s len=%d from=%s" % (
+        how, message.channel.id, mentioned, role_pinged, triggered, len(content),
+        message.author.display_name), flush=True)
     if not triggered: return                                        # listen to all, invoke only when addressed
+    if message.id in HANDLED:
+        print("%s: already handled message %s -- not running again" % (how, message.id), flush=True)
+        return
+    HANDLED.add(message.id)
+    if len(HANDLED) > HANDLED_MAX:                                  # bounded; the bridge runs for months
+        for old_id in sorted(HANDLED)[:len(HANDLED) - HANDLED_MAX]:
+            HANDLED.discard(old_id)
     # the question: strip the bot's user/role mention markup + the trigger token
     text = content
     for _id in ({client.user.id} | bot_role_ids):
