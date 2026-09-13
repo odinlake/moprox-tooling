@@ -22,7 +22,29 @@ import sys as _sys, pathlib as _pl
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
-RUN_SPORTS = {1, 17, 83}
+RUN_SPORTS = {1, 17}
+# The export ships numeric sport ids with NO mapping table, so for a session the export does not
+# name (801 of 926 are unnamed) this set alone decides whether the run classifier ever sees it. It
+# was wrong on both edges, measured over the whole export:
+#   - 83 was in it and is not running. 0 of its 132 sessions carry a runningIndex or a route, the
+#     median is 3.47 kph (walking) and the export's own label for it, where it names one, is
+#     "Other indoor". It was classified easy/tempo/speed against running LT1/LT2.
+#   - 27 was not in it and is. All 11 carry a runningIndex, a GPS route and 9.08 kph median over
+#     36-42 min; they are 11 of the 13 route-carrying sessions in the entire 2026 record, and the
+#     export names none of them, so nothing but the id spoke for them.
+# 27 is not added to the set: has_running_index() below settles it on the evidence instead, which
+# also covers the next unnamed id without waiting for someone to notice it. See
+# moprox-memory/polar-run-sports-whitelist-wrong.md.
+def has_running_index(d):
+    """True if Polar attached a runningIndex to this export session.
+
+    Polar derives runningIndex from a running speed+HR recording, so its presence is positive
+    evidence of running that survives an unmapped sport id. Its ABSENCE proves nothing and must not
+    be read as one: 189 of the 445 id-1 sessions predate the metric, and only 1 of the 97 treadmill
+    (id 17) sessions has one, which is why RUN_SPORTS still exists."""
+    if d.get("runningIndex") is not None: return True
+    return any((ex or {}).get("runningIndex") is not None for ex in (d.get("exercises") or []))
+
 # Matched on NAME, not Polar's numeric sport id: no ride has ever arrived here, so the cycling ids
 # are unverified and guessing one would silently mis-route the first real session. Anything matching
 # neither is still INGESTED (cat "other") and its sport is logged, so the first unrecognised session
@@ -44,8 +66,8 @@ TRACE_POINTS_THIN = 50           # unknown / very short
 def _hr_val(v):
     """One HR sample -> float in (30, 220), else None. The export is not type-clean: values are
     usually floats but at least one block ships a QUOTED "NaN" string, and `30 < v < 220` on a str
-    raises TypeError. That block happens to sit on a sport outside RUN_SPORTS, so the sport filter
-    shields the build today — coerce here so a quoted NaN in a running session can't kill it."""
+    raises TypeError. That block sits on the single id-27 session that has_running_index() now routes
+    to the run classifier, so nothing shields the build any more — this coercion is what holds."""
     try: f = float(v)
     except (TypeError, ValueError): return None
     return f if 30 < f < 220 else None      # NaN fails both comparisons, so it is dropped here too
@@ -252,7 +274,7 @@ def from_export(raw_dir):
                 errlog.skip("build.py: sport id", _e)
                 continue
             label = "%s %s" % (d.get("name") or "", (d.get("sport") or {}).get("name") or "")
-            kind = "run" if sid in RUN_SPORTS else sport_kind(label)
+            kind = "run" if (sid in RUN_SPORTS or has_running_index(d)) else sport_kind(label)
             args = (hr_series(d), label, d.get("startTime", ""), sid,
                     (d.get("identifier") or {}).get("id", ""))
             if kind == "run":
