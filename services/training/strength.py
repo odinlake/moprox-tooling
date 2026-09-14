@@ -32,7 +32,24 @@ OUT = Path(os.environ.get("STRENGTH_OUT",
 # session, including the load confirmation that supersedes an assumed one, invisible with no
 # outward sign. The gate now covers exactly what the code requires, and a row that misses it is
 # skipped and counted, per this module's own "one bad line must not lose the rest".
-REQUIRED = ("ex", "date", "sets")
+#
+# `sets` is no longer among them. Requiring it asked "how many sets" as a precondition for reading
+# the row AT ALL, so a row that knew what was lifted but not how many times lost the load as well.
+# The log's producer is an agent composing free-form JSON and it keeps writing exactly that row —
+# an at-home session, or a movement identified after the fact — reaching for vocabulary that did
+# not exist (`sets_uncertain: true`, on a row it wrote by hand because strength_note.py rejects a
+# set-less append). Measured on the live log 2026-09-14: four such rows, and the cost is not the
+# four. `heel-raise-bent-knee-SL-loaded` published its best as 10 kg × 8 from 11 Sep while the log
+# held a 14 Sep row for that same movement at 32 kg × 10 — the row the coach wrote to correct the
+# knee angle on the heaviest calf load in the corpus — so the panel understated the athlete's best
+# in the provocative position by 3.2x, on the number his next session's load is set from. Two more
+# movements (`heel-raise-SL-loaded-home`, `heel-raise-bent-knee-SL-loaded-home`) were absent from
+# the feed entirely, taking a whole weekend of loaded rehab with them.
+#
+# An unknown set count is now what it is: a fact about the row, carried through as the absence of
+# `sets`, counted as `sets_unknown` in the feed and marked on the panel. It is not a fault and it
+# is not silence. What sets DOES gate is the one thing that genuinely needs it — volume load, below.
+REQUIRED = ("ex", "date")
 
 
 # Every key in which this log says something about a set of resistance work. A row that carries NONE
@@ -73,11 +90,16 @@ def entries():
             errlog.skip("strength.py: log line", e)      # one bad line must not lose the rest
             skipped += 1
             continue
+        # Asked FIRST, and on its own. It used to hang off `missing`, which worked only while
+        # `sets` was required — every prose row misses `sets`, so every prose row reached it. With
+        # the gate down to ex+date a prose row misses nothing, so nested it would never be asked
+        # and all 7 of them would be admitted as entries. "Does this row speak strength at all" is
+        # a question about vocabulary, not about which fields are absent, and it stands alone.
+        if all(r.get(k) is None for k in MEASURES):
+            notes += 1              # cardio or prose: not an entry, and not an error either
+            continue
         missing = [k for k in REQUIRED if r.get(k) is None]
         if missing:
-            if all(r.get(k) is None for k in MEASURES):
-                notes += 1          # cardio or prose: not an entry, and not an error either
-                continue
             # Named, not counted-in-silence: this is how a writer using the wrong vocabulary gets
             # noticed instead of being rounded off.
             errlog.skip("strength.py: row missing %s" % ",".join(missing),
@@ -151,7 +173,7 @@ def volume(r):
     Bodyweight and timed movements deliberately return None rather than a zero that would drag a
     session total down and look like a bad week."""
     kg = load(r)
-    if kg is None or r.get("reps") is None:
+    if kg is None or r.get("reps") is None or r.get("sets") is None:
         return None
     return round(float(r["sets"]) * float(r["reps"]) * float(kg), 1)
 
@@ -164,11 +186,15 @@ def build():
     for r in rows:
         d = r["date"]
         s = by_date.setdefault(d, {"date": d, "entries": [], "sets": 0,
-                                   "volume_load": 0.0, "has_unweighted": False})
+                                   "volume_load": 0.0, "has_unweighted": False,
+                                   # The session's set total is a sum over rows, so a row with no
+                                   # set count makes it a FLOOR, not the total. Said here so the
+                                   # panel can mark it rather than publish a short number bare.
+                                   "sets_partial": False})
         v = volume(r)
         src = kg_src(r)
-        e = {"ex": r["ex"], "sets": r["sets"]}
-        for k in ("reps", "kg", "secs", "rir", "note"):
+        e = {"ex": r["ex"]}
+        for k in ("sets", "reps", "kg", "secs", "rir", "note"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 e[k] = val
@@ -180,10 +206,13 @@ def build():
         else:
             s["has_unweighted"] = True
         s["entries"].append(e)
-        s["sets"] += int(r["sets"] or 0)
+        if r.get("sets") is None:
+            s["sets_partial"] = True
+        else:
+            s["sets"] += int(r["sets"])
 
-        m = {"date": d, "sets": r["sets"]}
-        for k in ("reps", "kg", "secs", "rir"):
+        m = {"date": d}
+        for k in ("sets", "reps", "kg", "secs", "rir"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 m[k] = val
@@ -231,6 +260,12 @@ def build():
             # says the panel is showing fewer rows than the log. Unlike `skipped`, it is expected
             # to be non-zero, which is exactly why it must not be reported as a fault.
             "notes": notes,
+            # Rows that are ON the panel but whose set count the log does not hold. Unlike
+            # `skipped` nothing is withheld, and unlike `notes` they are strength entries — but
+            # their volume load is absent and their session's set total is a floor, so the count
+            # is published for the same reason the other two are: the feed says what it does not
+            # know rather than letting a short number pass for a complete one.
+            "sets_unknown": sum(1 for r in rows if r.get("sets") is None),
             # Stated in the feed so the UI can label it honestly rather than implying kilograms.
             "volume_note": "volume load = sets x reps x kg; an index comparable only against itself",
             "sessions": sessions,
@@ -242,9 +277,10 @@ def main(argv):
     data = build()
     out.parent.mkdir(parents=True, exist_ok=True)
     json.dump(data, open(out, "w"), separators=(",", ":"))
-    print("strength: %d session(s), %d entries, %d movement(s), %d skipped, %d note/cardio row(s)"
-          " -> %s" % (data["count"], data["entries"], len(data["movements"]), data["skipped"],
-                      data["notes"], out))
+    print("strength: %d session(s), %d entries, %d movement(s), %d skipped, %d note/cardio row(s),"
+          " %d with no set count -> %s"
+          % (data["count"], data["entries"], len(data["movements"]), data["skipped"],
+             data["notes"], data["sets_unknown"], out))
     return 0
 
 

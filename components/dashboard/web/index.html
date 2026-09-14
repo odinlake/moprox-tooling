@@ -378,8 +378,20 @@ async function loadStrength(){
   // estimated speed: .est, and the reason on hover. Nothing is hidden or dropped.
   const asm = (t,e) => e.kg_src==="assumed"
     ? `<span class="est" title="load assumed from prescription, not stated">${t}</span>` : t;
-  const dose = e => e.secs!=null ? `${e.sets}×${e.secs}s`
-                  : (e.kg!=null ? `${e.sets}×${e.reps} @ ${asm(`${e.kg} kg`,e)}` : `${e.sets}×${e.reps}`);
+  // The log can hold a movement whose LOAD is known and whose set count is not — an at-home
+  // session, or a movement named after the fact. strength.py carries that through as an absent
+  // `sets` rather than dropping the row (and its load) whole, so this has to render the gap
+  // instead of interpolating `undefined` into the dose.
+  const nx = e => e.sets!=null ? `${e.sets}×`
+    : `<span class="est" title="set count not recorded in the log">?×</span>`;
+  // Same gap, the other axis, and it is the one actually on disk: the 12-13 Sep at-home calf rows
+  // carry a load (~6 kg, a bike held in hand) and no rep count at all — the burn point lives in
+  // their prose. `${e.reps}` on an absent rep count is the string "undefined", so once a row can
+  // reach the panel without `sets` it can reach it without `reps`, and the dose has to say so.
+  const nr = e => e.reps!=null ? `${e.reps}`
+    : `<span class="est" title="rep count not recorded in the log">?</span>`;
+  const dose = e => e.secs!=null ? `${nx(e)}${e.secs}s`
+                  : (e.kg!=null ? `${nx(e)}${nr(e)} @ ${asm(`${e.kg} kg`,e)}` : `${nx(e)}${nr(e)}`);
   // Per movement: current best + a bare progression line. One session in, the line is a dot; that is
   // honest, and it fills in without any change here.
   const spark = m => {
@@ -393,7 +405,7 @@ async function loadStrength(){
   const movs = Object.entries(d.movements).sort((a,b)=>a[0].localeCompare(b[0])).map(([ex,m])=>{
     const b = m.best || {};
     const best = b.secs!=null ? `${b.secs}s`
-               : (b.kg!=null ? asm(`${b.kg} kg × ${b.reps}`,b) : `${b.reps} reps`);
+               : (b.kg!=null ? asm(`${b.kg} kg × ${nr(b)}`,b) : `${nr(b)} reps`);
     return `<tr><td>${esc(ex)}</td><td class="num">${best}</td><td class="num">${m.n}</td><td>${spark(m)}</td></tr>`;
   }).join("");
   const sess = d.sessions.slice(0,8).map(s=>{
@@ -405,7 +417,12 @@ async function loadStrength(){
     const vol = !s.volume_load ? "—" : (va
       ? `<span class="est" title="${Math.round(va/s.volume_load*100)}% of this from loads assumed from prescription, not stated">${num}</span>`
       : num);
-    return `<tr><td style="width:1%;white-space:nowrap">${s.date}</td><td class="num" style="width:1%">${s.sets}</td>`
+    // A session holding a set-less row has a set total that is a floor, not a total. Same "+"
+    // this table already uses on volume load for the same reason.
+    const st = s.sets_partial
+      ? `<span class="est" title="at least this many — one or more rows record no set count">${s.sets}+</span>`
+      : s.sets;
+    return `<tr><td style="width:1%;white-space:nowrap">${s.date}</td><td class="num" style="width:1%">${st}</td>`
          + `<td class="num" style="width:1%">${vol}</td><td class="muted" style="font-size:.75rem">${items}</td></tr>`;
   }).join("");
   // strength.py publishes `skipped` and `notes` "in the feed, not only in the journal", for one

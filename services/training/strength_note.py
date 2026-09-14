@@ -23,6 +23,10 @@ against itself over time and nothing else. Per-movement load is the honest view.
 A load that was NOT read back off the machine is marked as such, with --kg-src assumed:
 
   strength_note.py --ex seated-row --sets 2 --reps 10 --kg 35 --kg-src assumed
+
+A session whose set count was never tracked says so, rather than losing the load with it:
+
+  strength_note.py --ex heel-raise-SL-loaded --sets-unknown --reps 10 --kg 32
 """
 import argparse, json, os, sys, time
 from datetime import datetime
@@ -54,7 +58,19 @@ KG_SRC = ("stated", "assumed")
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Append one movement to the strength log.")
     ap.add_argument("--ex", required=True, help="movement, lowercase-hyphenated (seated-row, goblet-squat)")
-    ap.add_argument("--sets", type=int, required=True)
+    ap.add_argument("--sets", type=int)
+    # Not "--sets optional". Forgetting a set count and declaring one unknown are different acts,
+    # and only one of them should be possible by accident — so --sets stays mandatory unless this
+    # is passed, and passing both is an error. The need is real and already on disk: four rows in
+    # the live log carry a load and no set count, every one of them appended as hand-written JSON
+    # that went around this script because this script would not take them, one of them carrying
+    # an invented `sets_uncertain: true` that no reader has ever looked at. A producer reaching for
+    # a word the sanctioned writer does not have writes raw JSON instead, and then the vocabulary
+    # is whatever it improvised. strength.py reads the absence of `sets`, which is what this emits.
+    ap.add_argument("--sets-unknown", action="store_true",
+                    help="the set count was not tracked (an at-home session, a movement named "
+                         "after the fact). Volume load is then not computed for this row and the "
+                         "session's set total is published as a floor.")
     ap.add_argument("--reps", type=int, help="reps per set (omit for a timed movement)")
     ap.add_argument("--kg", type=float, help="load per set; omit for bodyweight")
     ap.add_argument("--kg-src", choices=KG_SRC,
@@ -67,6 +83,8 @@ def main(argv=None):
     ap.add_argument("--agent", default=os.environ.get("AGENT_ID", ""))
     a = ap.parse_args(argv)
 
+    if (a.sets is None) != a.sets_unknown:
+        ap.error("give --sets N, or --sets-unknown if it was not tracked — not both, not neither")
     if a.reps is None and a.secs is None:
         ap.error("give --reps (weighted or bodyweight) or --secs (timed)")
     if a.reps is not None and a.secs is not None:
@@ -80,8 +98,9 @@ def main(argv=None):
 
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
-           "ex": a.ex.strip().lower().replace(" ", "-"), "sets": a.sets}
-    for k, v in (("reps", a.reps), ("kg", a.kg), ("kg_src", a.kg_src), ("secs", a.secs),
+           "ex": a.ex.strip().lower().replace(" ", "-")}
+    for k, v in (("sets", a.sets), ("reps", a.reps), ("kg", a.kg), ("kg_src", a.kg_src),
+                 ("secs", a.secs),
                  ("rir", a.rir), ("note", a.note or None), ("agent", a.agent or None)):
         if v is not None:
             rec[k] = v
