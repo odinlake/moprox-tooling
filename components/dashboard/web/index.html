@@ -408,6 +408,20 @@ async function loadStrength(){
     return `<tr><td style="width:1%;white-space:nowrap">${s.date}</td><td class="num" style="width:1%">${s.sets}</td>`
          + `<td class="num" style="width:1%">${vol}</td><td class="muted" style="font-size:.75rem">${items}</td></tr>`;
   }).join("");
+  // strength.py publishes `skipped` and `notes` "in the feed, not only in the journal", for one
+  // stated reason: "a panel that quietly shows fewer rows than the log holds is the thing this
+  // module just failed at". This panel then threw both counts away, which is that same failure one
+  // layer out — on 2026-09-13 the log gained three loaded calf-rehab rows carrying kg but no sets,
+  // strength.py skipped all three and said so at warn level, and the panel showed the athlete a
+  // progression ending on 11 Sep with nothing on screen saying rows were missing.
+  // The two are not the same kind and are not reported as one: `skipped` is a fault (a row that
+  // spoke strength and could not be read — it is also a warn in the journal), `notes` is expected
+  // (cardio warm-ups and session prose this feed is deliberately not the reader for).
+  const withheld = [];
+  if(d.skipped) withheld.push(`<span class="est" title="row(s) that spoke strength and could not be read — strength.py logs each at warn level; the log holds them, this panel cannot show them">${d.skipped} unreadable</span>`);
+  if(d.notes) withheld.push(`${d.notes} cardio or prose`);
+  const wline = withheld.length
+    ? `<div class="muted" style="font-size:.72rem;margin-top:.4rem">In the log but not on this panel: ${withheld.join(", ")}.</div>` : "";
   el.innerHTML = `<h2>Strength <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— no HR; load and reps are the measurement</span></h2>
     <div class="row" style="gap:1rem;align-items:flex-start;flex-wrap:wrap">
       <div style="flex:1;min-width:260px"><table class="compact">
@@ -418,7 +432,7 @@ async function loadStrength(){
           <th class="num" title="${esc(d.volume_note||"")}">vol</th><th>movements</th></tr></thead>
         <tbody>${sess}</tbody></table></div>
     </div>
-    <div class="muted" style="font-size:.72rem;margin-top:.4rem">vol = sets × reps × kg, an index comparable only against itself. “+” means the session also held bodyweight or timed work, which carries no volume. <span class="est">Italic</span> is a load the log says was assumed from the prescription, not observed — hover it.</div>`;
+    <div class="muted" style="font-size:.72rem;margin-top:.4rem">vol = sets × reps × kg, an index comparable only against itself. “+” means the session also held bodyweight or timed work, which carries no volume. <span class="est">Italic</span> is a load the log says was assumed from the prescription, not observed — hover it.</div>${wline}`;
 }
 
 async function loadTraining(){
