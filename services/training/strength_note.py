@@ -19,6 +19,10 @@ against itself over time and nothing else. Per-movement load is the honest view.
 
   strength_note.py --ex lat-pulldown --sets 2 --reps 9 --kg 30 --rir 2
   strength_note.py --ex plank --sets 2 --secs 45 --note "at limit"
+
+A load that was NOT read back off the machine is marked as such, with --kg-src assumed:
+
+  strength_note.py --ex seated-row --sets 2 --reps 10 --kg 35 --kg-src assumed
 """
 import argparse, json, os, sys, time
 from datetime import datetime
@@ -31,12 +35,31 @@ LOG = Path(os.environ.get("STRENGTH_LOG",
                           Path.home() / "projects/private-data/training/strength.jsonl"))
 
 
+# Where the load CAME FROM, as a field rather than as a sentence. A pulldown or row is a pin the
+# operator may never read back, so "35 kg" in this log is sometimes an observation and sometimes the
+# coach's own prescription written forward. strength.py publishes that distinction as `kg_src` and
+# prefers an explicit one on the row — but until now nothing could write one, so the only way to say
+# "assumed" was to phrase a note matching its regex, and an unparsed note does not fall back to
+# unknown: it falls back to "stated", asserting an observation nobody made.
+#
+# Measured on the live log 2026-09-14 (moprox-memory/strength-adherence-unobserved-load): 8 of the
+# 20 load cells are assumed, all four seated-row dates and three of four lat-pulldown dates among
+# them, and for those movements "the weight was held" and "the weight was never reported" are the
+# same record — 5 of 13 next-session directives cannot score a miss. The prose parser agrees with an
+# independent reading on all 28 rows today; it is one rephrasing away from not doing, and it fails
+# toward the claim. This is the field that ends the parse.
+KG_SRC = ("stated", "assumed")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Append one movement to the strength log.")
     ap.add_argument("--ex", required=True, help="movement, lowercase-hyphenated (seated-row, goblet-squat)")
     ap.add_argument("--sets", type=int, required=True)
     ap.add_argument("--reps", type=int, help="reps per set (omit for a timed movement)")
     ap.add_argument("--kg", type=float, help="load per set; omit for bodyweight")
+    ap.add_argument("--kg-src", choices=KG_SRC,
+                    help="where --kg came from: 'stated' (read off the machine) or 'assumed' "
+                         "(the prescription, not read back). Omit if you do not know.")
     ap.add_argument("--secs", type=int, help="seconds per set, for timed movements (plank etc)")
     ap.add_argument("--rir", type=float, help="reps in reserve — how many were left. 0 = to failure")
     ap.add_argument("--date", help="YYYY-MM-DD; default today. Resolve 'Friday' yourself.")
@@ -48,12 +71,18 @@ def main(argv=None):
         ap.error("give --reps (weighted or bodyweight) or --secs (timed)")
     if a.reps is not None and a.secs is not None:
         ap.error("--reps and --secs are different movement shapes; give one")
+    # `kg: 0` is how this log spells "no external load", not a load of zero, and strength.py's
+    # load() reads it that way — so it attributes no source for either spelling and would drop the
+    # field. Rejecting here is the difference between the writer knowing that and believing it
+    # recorded a provenance it did not.
+    if a.kg_src and not a.kg:
+        ap.error("--kg-src describes --kg; give a non-zero --kg or drop it")
 
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
            "ex": a.ex.strip().lower().replace(" ", "-"), "sets": a.sets}
-    for k, v in (("reps", a.reps), ("kg", a.kg), ("secs", a.secs), ("rir", a.rir),
-                 ("note", a.note or None), ("agent", a.agent or None)):
+    for k, v in (("reps", a.reps), ("kg", a.kg), ("kg_src", a.kg_src), ("secs", a.secs),
+                 ("rir", a.rir), ("note", a.note or None), ("agent", a.agent or None)):
         if v is not None:
             rec[k] = v
 
