@@ -28,7 +28,10 @@ Two modes, one script:
            timer never goes red on a transport blip.
 
 `tg` is imported lazily inside --warn only: the gate runs on every session start and must not depend on
-the Telegram stack (telegramify_markdown, convo) being importable.
+the Telegram stack (telegramify_markdown, convo) being importable. And --warn no longer depends on it
+either — when that import fails, plain_send() posts the same text with stdlib urllib. claude-loop has
+neither module installed, so before that fallback the ONE box that has already lost its refresh token
+was also the one box whose warning could not be delivered.
 """
 import argparse, json, os, socket, sys, time
 from datetime import datetime
@@ -37,10 +40,15 @@ from pathlib import Path
 CREDS = Path(os.environ.get("CLAUDE_CREDS", Path.home() / ".claude/.credentials.json"))
 
 
-def refresh_expiry_ms(path=CREDS):
+def refresh_expiry_ms(path=None):
     """Epoch-ms expiry of the refresh token, or None if it can't be POSITIVELY determined.
 
-    None means 'unknown' and every caller must treat it as fine — see the fail-open rule above."""
+    None means 'unknown' and every caller must treat it as fine — see the fail-open rule above.
+
+    The path defaults at CALL time, not in the signature: `path=CREDS` bound the module global once
+    at import, so a caller that set CREDS (a test, or anything driving warn() in-process) silently
+    kept reading the live file and asserted against the real box instead of its fixture."""
+    path = CREDS if path is None else path
     try:
         oauth = json.loads(path.read_text()).get("claudeAiOauth")
     except Exception:
@@ -105,6 +113,45 @@ def forward_dir():
     return None
 
 
+TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
+
+
+def plain_send(msg, handle):
+    """Last-resort Telegram post: stdlib urllib plus telegram.env, and nothing else.
+
+    `tg` is the estate's one transport and stays first choice, but it imports telegramify_markdown
+    and convo at module level and NEITHER is installed on claude-loop. warn() caught the resulting
+    ModuleNotFoundError, printed to plain stderr and returned 0 — so on the one box whose refresh
+    token has already hit its ceiling once (38 h dark, 2026-09-04) the pre-expiry warning could not
+    be delivered at all, and the timer stayed green while doing nothing. The message IS the product
+    of this timer, so the send no longer depends on anything outside the standard library.
+
+    Markdown is stripped, not escaped: MarkdownV2 escaping is exactly what needs telegramify_markdown,
+    and an unrendered warning beats no warning. Raises on any failure so the caller reports it.
+    """
+    import urllib.parse, urllib.request
+    tok = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if (not tok or not chat) and TG_ENV.exists():
+        for ln in TG_ENV.read_text().splitlines():
+            k, _, v = ln.partition("=")
+            if k.strip() == "TELEGRAM_BOT_TOKEN" and not tok:
+                tok = v.strip().strip("'\"")
+            if k.strip() == "TELEGRAM_CHAT_ID" and not chat:
+                chat = v.strip().strip("'\"")
+    if not tok or not chat:
+        raise RuntimeError("no telegram creds in env or %s" % TG_ENV)
+    text = msg.replace("**", "").replace("`", "")
+    if handle:
+        h = "#" + str(handle).lstrip("#")
+        if not text.lstrip().startswith(h):
+            text = "%s %s" % (h, text)
+    data = urllib.parse.urlencode({"chat_id": chat, "text": text[:3900],
+                                   "disable_web_page_preview": "true"}).encode()
+    urllib.request.urlopen(urllib.request.Request(
+        "https://api.telegram.org/bot%s/sendMessage" % tok, data=data), timeout=20)
+
+
 def warn(threshold_days, remedy=None, handle="dev"):
     """Telegram a heads-up. NAMES THE HOST, because more than one box runs on these credentials now.
 
@@ -134,7 +181,12 @@ def warn(threshold_days, remedy=None, handle="dev"):
     except BaseException as e:                       # a transport blip must not red the timer. NOT
         # `except Exception`: tg.creds() raises SystemExit when telegram.env is missing, which is
         # exactly the degraded case where we still want the timer green and the reason in the journal.
-        print("moprox-creds-check: warn send failed: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        print("moprox-creds-check: tg send failed: %s: %s — falling back to plain"
+              % (type(e).__name__, e), file=sys.stderr)
+        try:
+            plain_send(msg, handle)
+        except BaseException as e2:
+            print("moprox-creds-check: warn send failed: %s: %s" % (type(e2).__name__, e2), file=sys.stderr)
     return 0
 
 
