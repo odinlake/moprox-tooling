@@ -1,0 +1,13 @@
+{
+  "name": "mo/dash",
+  "short_name": "mo/dash",
+  "start_url": "/dashboard/training/",
+  "scope": "/dashboard/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0969da",
+  "icons": [
+    {"src": "/dashboard/apple-touch-icon.png", "sizes": "180x180", "type": "image/png"},
+    {"src": "/dashboard/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
