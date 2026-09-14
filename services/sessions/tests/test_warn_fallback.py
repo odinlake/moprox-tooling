@@ -7,11 +7,12 @@ claude-loop has neither telegramify_markdown nor convo, so `import tg` raises th
 only behaviour was to print to stderr and return 0 — green timer, no message, on the one box that
 had already lost its refresh token once. These cases pin the fallback: nothing is sent above the
 threshold, the real HTTP request is built below it, the handle and remedy survive, and a dead
-transport still exits 0.
+transport still exits 0 — but reaches the journal at err, because a warning that could not be
+delivered is otherwise indistinguishable from no warning being due.
 
 No network: urlopen is replaced, so a PASS means the request was CONSTRUCTED, not delivered.
 """
-import importlib.util, json, os, sys, tempfile, time, urllib.parse, urllib.request
+import contextlib, importlib.util, io, json, os, sys, tempfile, time, urllib.parse, urllib.request
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "creds-check.py"
@@ -85,10 +86,26 @@ cc.CREDS = tmp / "gone.json"
 cc.warn(5.0, "REMEDY-TEXT", "loop")
 check("unreadable credentials still raise a message", len(sent) == 1 and "unreadable" in sent[0][1]["text"][0])
 
-# --- no creds for the fallback either: exit 0, nothing thrown --------------------------
+# --- no creds for the fallback either: exit 0, but LOUD --------------------------------
+# journald files an un-prefixed stderr line at PRIORITY=6, so the guard that could not speak used to
+# look exactly like the guard with nothing to say. `<3>` is the only thing that reaches a detector.
 setup(3.2)
 cc.TG_ENV = tmp / "no-env"
-check("a dead transport still exits 0", cc.warn(5.0, "R", "loop") == 0 and not sent)
+buf = io.StringIO()
+with contextlib.redirect_stderr(buf):
+    rc = cc.warn(5.0, "R", "loop")
+undelivered = buf.getvalue()
+check("a dead transport still exits 0", rc == 0 and not sent)
+check("...and says so at err level, naming the deadline it could not deliver",
+      any(l.startswith("<3>") and "2026-" in l for l in undelivered.splitlines()))
+
+# --- the fallback WORKS: a delivered warning must not red anything ---------------------
+setup(3.2)
+buf = io.StringIO()
+with contextlib.redirect_stderr(buf):
+    cc.warn(5.0, "R", "loop")
+check("a delivered warning leaves no err record",
+      len(sent) == 1 and not any(l.startswith("<3>") for l in buf.getvalue().splitlines()))
 
 print("\n%d/%d passed" % (sum(ok), len(ok)))
 sys.exit(0 if all(ok) else 1)

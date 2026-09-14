@@ -25,7 +25,8 @@ Two modes, one script:
 
   --warn   Daily timer (moprox-creds-warn.timer). Telegrams a heads-up while there is still time to
            act, turning a surprise outage into a scheduled 30-second `/login`. Always exits 0 so the
-           timer never goes red on a transport blip.
+           timer never goes red on a transport blip — but when EVERY transport fails it says so at
+           err level, because green-and-silent is what a guard with nothing to warn about looks like.
 
 `tg` is imported lazily inside --warn only: the gate runs on every session start and must not depend on
 the Telegram stack (telegramify_markdown, convo) being importable. And --warn no longer depends on it
@@ -163,12 +164,14 @@ def warn(threshold_days, remedy=None, handle="dev"):
     host = socket.gethostname()
     exp = refresh_expiry_ms()
     if exp is None:
+        state = "expiry unreadable"
         msg = ("**Claude credentials unreadable on %s** — `%s` is missing or not in the expected "
                "shape.\nVerify with `moprox-creds-check --status` on that box." % (host, CREDS))
     else:
         days, when = describe(exp)
         if days > threshold_days:
             return 0
+        state = "expires %s, %.1f days left" % (when, days)
         head = ("**Claude credentials EXPIRED on %s** %s" % (host, when) if days <= 0 else
                 "**Claude credentials on %s expire in %.1f days** (%s)" % (host, days, when))
         msg = head + "\n" + (remedy or DEV_REMEDY)
@@ -186,7 +189,21 @@ def warn(threshold_days, remedy=None, handle="dev"):
         try:
             plain_send(msg, handle)
         except BaseException as e2:
-            print("moprox-creds-check: warn send failed: %s: %s" % (type(e2).__name__, e2), file=sys.stderr)
+            # BOTH transports are gone, so the warning does not exist anywhere except here, and this
+            # line is the only evidence it was ever due. It went out un-prefixed, which journald
+            # files at PRIORITY=6 — below every query the estate's detectors run — so a guard that
+            # could not speak was indistinguishable from a guard with nothing to say. Measured on
+            # claude-loop 2026-09-13T08:27:25Z: the first firing with a real deadline to announce
+            # (4.1 days out) logged its ModuleNotFoundError at info and nothing raised an incident.
+            #
+            # `<3>` is errlog.err's whole mechanism, inlined: journald reads the syslog prefix off
+            # stderr and files a genuine err record. errlog is NOT imported because this script is
+            # DEPLOYED as a flat copy to /usr/local/bin with no sibling tree (see forward_dir) — the
+            # report that the last transport died must not itself depend on a tree that isn't there.
+            print("<3>moprox-creds-check: credential warning UNDELIVERED on %s (%s) — every "
+                  "transport failed; plain: %s: %s; tg: %s: %s"
+                  % (host, state, type(e2).__name__, e2, type(e).__name__, e),
+                  file=sys.stderr, flush=True)
     return 0
 
 
