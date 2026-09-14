@@ -39,12 +39,25 @@ OUT = Path(os.environ.get("STRENGTH_OUT",
 # an at-home session, or a movement identified after the fact — reaching for vocabulary that did
 # not exist (`sets_uncertain: true`, on a row it wrote by hand because strength_note.py rejects a
 # set-less append). Measured on the live log 2026-09-14: four such rows, and the cost is not the
-# four. `heel-raise-bent-knee-SL-loaded` published its best as 10 kg × 8 from 11 Sep while the log
-# held a 14 Sep row for that same movement at 32 kg × 10 — the row the coach wrote to correct the
-# knee angle on the heaviest calf load in the corpus — so the panel understated the athlete's best
-# in the provocative position by 3.2x, on the number his next session's load is set from. Two more
-# movements (`heel-raise-SL-loaded-home`, `heel-raise-bent-knee-SL-loaded-home`) were absent from
-# the feed entirely, taking a whole weekend of loaded rehab with them.
+# four.
+#
+# The cost is NOT magnitude, and an earlier draft of this comment said it was — that "the panel
+# understated the athlete's best in the provocative position by 3.2x" (10 kg × 8 published for
+# `heel-raise-bent-knee-SL-loaded` against a dropped 14 Sep row at 32 kg × 10). Replaying the old
+# gate against the same log refutes it: the dropped row is a CORRECTS/COMPLETES amendment to a row
+# that DID carry `sets`, and the old feed published that one in full — `heel-raise-SL-loaded`,
+# 32 kg × 8, 14 Sep, noted "BIGGEST CALF LOAD YET" — in the same session, so the heaviest calf load
+# in the corpus was on the panel the whole time. Feed max published load equalled log max load
+# (35 kg both) before the change and after it. Anyone sizing this defect by load is measuring the
+# wrong thing; do not reinstate that figure.
+#
+# What the gate actually cost is ATTRIBUTION and COVERAGE. The 32 kg appeared only under a key whose
+# own note says the variant was not stated, while the bent-knee key — the provocative position the
+# rehab block is built to watch — stopped at 10 kg, so the feed could not say which tissue took the
+# heaviest load. And two whole training dates (2026-09-12, 2026-09-13) with two movements
+# (`heel-raise-SL-loaded-home`, `heel-raise-bent-knee-SL-loaded-home`) were absent from the feed
+# entirely, taking a whole weekend of loaded rehab with them. Both are fixed by the shorter gate:
+# 40 entries / 4 skipped becomes 44 / 0, 6 sessions become 8.
 #
 # An unknown set count is now what it is: a fact about the row, carried through as the absence of
 # `sets`, counted as `sets_unknown` in the feed and marked on the panel. It is not a fault and it
