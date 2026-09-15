@@ -48,9 +48,19 @@ OUT = Path(os.environ.get("STRENGTH_OUT",
 # `heel-raise-bent-knee-SL-loaded` published its best as 10 kg and now publishes 32 kg — 3.2x, the
 # dropped 14 Sep row exactly. Across the corpus it is not: feed max published load equalled log max
 # load (35 kg) before the change and after, because the corpus max is carried by seated-row and
-# lat-pulldown rows that always had `sets` and so were never at risk. That equality is FORCED — set
-# every gate-dropped row to 999 kg and the old feed's max still reads 35 — so it tests nothing about
-# the calf block, and it cannot be used to withdraw the per-movement figure. Nor was the 32 kg
+# lat-pulldown rows that always had `sets` and so were never at risk.
+#
+# An earlier draft of this paragraph called that equality FORCED — "set every gate-dropped row to
+# 999 kg and the old feed's max still reads 35". That is wrong, and wrong in a way worth naming: it
+# mutated only ONE operand. The equality is `old feed max == LOG max`, and the mutation moves the
+# log side too — 35 == 999 is false, so the comparison breaks. It was a real test of the dropped
+# rows, just a WEAK one: it can only fire when a dropped row outweighs the whole corpus, and the
+# heaviest dropped row is 32 kg against a 35 kg corpus max. What it established is exactly that, and
+# no more. The reason it cannot withdraw the per-movement figure is not that it tests nothing, but
+# that a corpus max and a per-movement best are different quantities: 32 kg can vanish from
+# `heel-raise-bent-knee-SL-loaded` while seated-row holds the corpus max pinned at 35.
+#
+# Nor was the 32 kg
 # invisible: the dropped row is a CORRECTS/COMPLETES amendment to one that DID carry `sets`, and the
 # old feed published that one — `heel-raise-SL-loaded`, 32 kg × 8, 14 Sep, "BIGGEST CALF LOAD YET".
 # So: the load was on the panel, under the wrong movement. State it per key or not at all.
