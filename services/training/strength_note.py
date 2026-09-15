@@ -27,13 +27,23 @@ A load that was NOT read back off the machine is marked as such, with --kg-src a
 A session whose set count was never tracked says so, rather than losing the load with it:
 
   strength_note.py --ex heel-raise-SL-loaded --sets-unknown --reps 10 --kg 32
+
+A row that was WRONG is retracted by appending its replacement and naming it. The file still keeps
+both; the feed counts only the later one:
+
+  strength_note.py --ex side-plank --sets 2 --secs 30 --supersedes 9c10c7f80c9b
 """
 import argparse, json, os, sys, time
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import errlog
+# The reader, imported for `rid`/`resolve` alone. Row identity has to be ONE function: a writer that
+# names rows its own way and a reader that resolves them another way agree until the day they do
+# not, and the disagreement shows up as a retraction that deletes the wrong row.
+import strength
 
 LOG = Path(os.environ.get("STRENGTH_LOG",
                           Path.home() / "projects/private-data/training/strength.jsonl"))
@@ -53,6 +63,26 @@ LOG = Path(os.environ.get("STRENGTH_LOG",
 # independent reading on all 28 rows today; it is one rephrasing away from not doing, and it fails
 # toward the claim. This is the field that ends the parse.
 KG_SRC = ("stated", "assumed")
+
+
+def log_rows():
+    """The log as parsed rows. A READ, not a read-modify-write: this script stays a pure append, so
+    a line arriving between this read and the append below can only be a row --supersedes did not
+    name. A line too corrupt to parse is skipped rather than fatal, for the same reason the reader
+    skips it — but it is never silent, because a reference that would have named it must come out
+    as "no such row" and not as "no rows at all"."""
+    if not LOG.exists():
+        return []
+    rows = []
+    for line in LOG.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError as e:
+            errlog.err(f"strength_note: unparseable line in {LOG}, not searchable by --supersedes",
+                       e)
+    return rows
 
 
 def main(argv=None):
@@ -78,6 +108,19 @@ def main(argv=None):
                          "(the prescription, not read back). Omit if you do not know.")
     ap.add_argument("--secs", type=int, help="seconds per set, for timed movements (plank etc)")
     ap.add_argument("--rir", type=float, help="reps in reserve — how many were left. 0 = to failure")
+    # The vocabulary for "that earlier row was wrong". Without it the only way to retract is prose,
+    # and prose is what nothing reads: three live cases where a correction was appended, said so in
+    # its note, and the panel counted both halves — one lift under two movement keys each
+    # publishing 32 kg, a session set total of 13 for 10 sets performed.
+    #
+    # It takes a row's id, not its timestamp, and it RESOLVES the reference here rather than
+    # storing whatever was typed, so the file carries an unambiguous name even when the caller
+    # gave an ambiguous one. See strength.rid for why a timestamp is not a name: today's log has
+    # the retracted side-plank and the heaviest lift in the corpus stamped in the same second.
+    ap.add_argument("--supersedes", metavar="ROW",
+                    help="retract the earlier row this one replaces, by its id (printed by this "
+                         "script on every append) or by its timestamp if that names exactly one "
+                         "row. The retracted row stays in the log and leaves the feed.")
     ap.add_argument("--date", help="YYYY-MM-DD; default today. Resolve 'Friday' yourself.")
     ap.add_argument("--note", default="")
     ap.add_argument("--agent", default=os.environ.get("AGENT_ID", ""))
@@ -96,11 +139,30 @@ def main(argv=None):
     if a.kg_src and not a.kg:
         ap.error("--kg-src describes --kg; give a non-zero --kg or drop it")
 
+    # Resolved BEFORE the append, and refused rather than guessed at. An ambiguous reference is the
+    # one thing this field must never absorb: the row it does not name is a real set of work, and
+    # deleting it looks exactly like the retraction succeeding. So the caller is handed the ids and
+    # made to choose — which is also the only place the ids are discoverable for rows appended
+    # before they were printed.
+    sup = None
+    if a.supersedes is not None:
+        hit = strength.resolve(a.supersedes, log_rows())
+        if not hit:
+            ap.error("--supersedes %s names no row in %s" % (a.supersedes, LOG))
+        if len(hit) > 1:
+            ap.error("--supersedes %s names %d rows — give one of these ids instead:\n%s"
+                     % (a.supersedes, len(hit),
+                        "\n".join("  %s  %s  %-34s %s" % (strength.rid(h), h.get("date", "?"),
+                                                          h.get("ex", "?"),
+                                                          (h.get("note") or "")[:50])
+                                  for h in hit)))
+        sup = strength.rid(hit[0])
+
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
            "ex": a.ex.strip().lower().replace(" ", "-")}
     for k, v in (("sets", a.sets), ("reps", a.reps), ("kg", a.kg), ("kg_src", a.kg_src),
-                 ("secs", a.secs),
+                 ("secs", a.secs), ("supersedes", sup),
                  ("rir", a.rir), ("note", a.note or None), ("agent", a.agent or None)):
         if v is not None:
             rec[k] = v
@@ -114,6 +176,11 @@ def main(argv=None):
         raise
 
     print(json.dumps(rec, ensure_ascii=False))
+    # The id is printed on EVERY append, not only when one was retracted, because the row that will
+    # need retracting is never the row you expected to. It is the only moment the name is free:
+    # afterwards it has to be recovered by resolving an ambiguous timestamp.
+    print("id %s%s" % (strength.rid(rec),
+                       "  (supersedes %s)" % sup if sup else "  — pass to --supersedes to retract"))
     return 0
 
 

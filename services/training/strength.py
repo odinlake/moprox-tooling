@@ -10,7 +10,7 @@ What is published instead is what resistance work actually has: load, reps, sets
 
   strength.py [out_path]      default: ~/.cache/moprox-dashboard-data/training/strength.json
 """
-import json, os, re, sys, time
+import hashlib, json, os, re, sys, time
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
@@ -103,19 +103,122 @@ REQUIRED = ("ex", "date")
 MEASURES = ("sets", "reps", "kg", "secs", "rir")
 
 
+# A row's NAME, and the reason it is not `ts`.
+#
+# This log is append-only and corrects itself by appending: a later row that replaces an earlier one
+# and says so in its `note` — "supersedes the 'not stated' row above", "CORRECTS/COMPLETES the
+# earlier 32 kg row". Nothing read that prose, so both halves reached the panel as work done: on
+# 2026-09-14 one lift published under two movement keys, each claiming 32 kg, 8 movements counted
+# for 7 (moprox-memory/strength-log-supersession-unread). The retraction needs a field, and the
+# field needs to name a row.
+#
+# `ts` does not name a row. It is stamped at second resolution by a writer whose own docstring
+# advertises concurrent use, so 27 of the live log's 58 rows share a timestamp with at least one
+# other — ten groups, the widest seven rows across. Today's real correction is the worst case:
+# 2026-09-15T13:10:08 carries BOTH the assumed 3x30 s side-plank that the 13:40 row retracts AND
+# the 3x70 kg seated-calf-raise, the heaviest load in the log. A ts-keyed retraction deletes both
+# and reports one number, so the loss is indistinguishable from the retraction working. (ts, ex) is
+# no better: the log already holds two such pairs.
+#
+# So a row is named by its own content. That is unique across all 58 live rows — and across their
+# 8-character prefixes — it adds no field to any row and rewrites no file, and it names rows written
+# long before this function existed. Two rows that hash alike are the same record field for field,
+# which is the one case where "which of these did you mean" has no answer; both the reader below
+# and the writer refuse it rather than pick.
+def rid(r):
+    """This row's identity: first 12 hex of the sha256 of its canonical JSON."""
+    return hashlib.sha256(json.dumps(r, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()[:12]
+
+
+def resolve(ref, rows):
+    """Every row in `rows` that `ref` names — by rid, by an rid prefix, or by `ts`.
+
+    `ts` is accepted because it is what a human or an agent reading the log has in front of it, and
+    on 31 of 58 live rows it IS unambiguous. Ambiguity is not resolved here; it is returned, so the
+    caller has to decide what to do with more than one hit. Every caller refuses.
+
+    A ref that is not a string names nothing, and says so by returning nothing. This function is
+    TOTAL over whatever a JSON row can hold, because the thing on the other side of it is a
+    free-form log: its producer is an agent composing JSON by hand, and the vocabulary it reaches
+    for when a field does not exist yet is a bare `true` — the live log already carries two,
+    `sets_uncertain` and `date_uncertain`, from that same producer. An earlier draft did
+    `(ref or "").strip()`, which is a string operation wearing a None-guard, and a hand-written
+    `"supersedes": true` took AttributeError out through entries() and killed the whole feed:
+    update.py's non-fatal wrapper then goes on serving the previous strength.json, so one row in a
+    vocabulary nobody had defined yet costs every row in the file, silently. That is the exact
+    one-bad-line-loses-the-rest failure this module's gate comment was written about, and it is not
+    permitted to come back in through the retraction path. The refusal still has to be LOUD — it is
+    superseded() that says so, at err, naming the row.
+    """
+    if not isinstance(ref, str):
+        return []
+    ref = ref.strip()
+    if not ref:
+        return []
+    return ([r for r in rows if rid(r).startswith(ref)]
+            or [r for r in rows if r.get("ts") == ref])
+
+
+def superseded(rows):
+    """The rids of rows retracted by a later row's `supersedes`.
+
+    A retracted row stays in the file — it is history, and the correction is only legible next to
+    it — and leaves the feed: the session's set total, the movement's history, its best and its n.
+
+    A ref that names no row, or more than one, retracts NOTHING and reaches the journal at err.
+    Guessing is how the ts-keyed version lost the 70 kg row: a reader that deletes two when it was
+    told one, and publishes a count that looks the same either way, has turned a correction into
+    data loss with no outward sign. Refusing leaves the double-count this field exists to fix,
+    which is the defect it was already living with — loudly, and with both rows still on the panel
+    where the athlete can see the disagreement.
+
+    A ref of the wrong TYPE is reported as its own thing rather than folded into "names 0 rows",
+    because the two send the operator to different places: "names 0 rows" means the id was wrong,
+    and this means the field was never an id. Both are one row's error and neither is the file's.
+    """
+    out = set()
+    for r in rows:
+        ref = r.get("supersedes")
+        if ref is None:
+            continue
+        if not isinstance(ref, str):
+            errlog.err("strength.py: supersedes is %s, not a row id, so nothing was retracted"
+                       % type(ref).__name__,
+                       ValueError(json.dumps(r, ensure_ascii=False)[:200]))
+            continue
+        hit = [t for t in resolve(ref, rows) if rid(t) != rid(r)]
+        if len(hit) != 1:
+            errlog.err("strength.py: supersedes %r names %d rows, so nothing was retracted"
+                       % (ref, len(hit)),
+                       ValueError(json.dumps(r, ensure_ascii=False)[:200]))
+            continue
+        out.add(rid(hit[0]))
+    return out
+
+
 def entries():
-    """(rows, skipped, notes). Rows that do not satisfy REQUIRED are dropped, not fatal."""
+    """(rows, skipped, notes, retracted). Rows that do not satisfy REQUIRED are dropped, not fatal."""
     if not LOG.exists():
-        return [], 0, 0
-    out, skipped, notes = [], 0, 0
+        return [], 0, 0, 0
+    parsed, skipped = [], 0
     for line in LOG.read_text().splitlines():
         if not line.strip():
             continue
         try:
-            r = json.loads(line)
+            parsed.append(json.loads(line))
         except ValueError as e:
             errlog.skip("strength.py: log line", e)      # one bad line must not lose the rest
             skipped += 1
+    # Resolved over the WHOLE file before anything is classified, because a retraction may name a
+    # row this feed is not the reader for — a cardio warm-up, a prose amendment — and a `supersedes`
+    # that silently missed such a row would be the dangling-ref case, reported as an error, for a
+    # row that is sitting right there.
+    gone = superseded(parsed)
+    out, notes, retracted = [], 0, 0
+    for r in parsed:
+        if rid(r) in gone:
+            retracted += 1
             continue
         # Asked FIRST, and on its own. It used to hang off `missing`, which worked only while
         # `sets` was required — every prose row misses `sets`, so every prose row reached it. With
@@ -134,7 +237,7 @@ def entries():
             skipped += 1
             continue
         out.append(r)
-    return sorted(out, key=lambda r: (r["date"], r.get("ts", ""))), skipped, notes
+    return sorted(out, key=lambda r: (r["date"], r.get("ts", ""))), skipped, notes, retracted
 
 
 # Where a load CAME FROM, alongside the load itself. The log is a number plus prose, and the prose
@@ -206,7 +309,7 @@ def volume(r):
 
 
 def build():
-    rows, skipped, notes = entries()
+    rows, skipped, notes, retracted = entries()
     by_date = OrderedDict()
     movements = defaultdict(list)
 
@@ -293,6 +396,11 @@ def build():
             # is published for the same reason the other two are: the feed says what it does not
             # know rather than letting a short number pass for a complete one.
             "sets_unknown": sum(1 for r in rows if r.get("sets") is None),
+            # Rows the log holds and the athlete's own correction took off the panel. Published
+            # beside `skipped` and `notes` for the same reason they are: this feed says what it is
+            # not showing. Distinct from both — nothing is wrong with a retracted row, and it is a
+            # strength entry, it has simply been replaced by a later one.
+            "superseded": retracted,
             # Stated in the feed so the UI can label it honestly rather than implying kilograms.
             "volume_note": "volume load = sets x reps x kg; an index comparable only against itself",
             "sessions": sessions,
@@ -305,9 +413,9 @@ def main(argv):
     out.parent.mkdir(parents=True, exist_ok=True)
     json.dump(data, open(out, "w"), separators=(",", ":"))
     print("strength: %d session(s), %d entries, %d movement(s), %d skipped, %d note/cardio row(s),"
-          " %d with no set count -> %s"
+          " %d with no set count, %d superseded -> %s"
           % (data["count"], data["entries"], len(data["movements"]), data["skipped"],
-             data["notes"], data["sets_unknown"], out))
+             data["notes"], data["sets_unknown"], data["superseded"], out))
     return 0
 
 
