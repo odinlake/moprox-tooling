@@ -41,17 +41,21 @@ OUT = Path(os.environ.get("STRENGTH_OUT",
 # set-less append). Measured on the live log 2026-09-14: four such rows, and the cost is not the
 # four.
 #
-# The cost is NOT magnitude, and an earlier draft of this comment said it was — that "the panel
-# understated the athlete's best in the provocative position by 3.2x" (10 kg × 8 published for
-# `heel-raise-bent-knee-SL-loaded` against a dropped 14 Sep row at 32 kg × 10). Replaying the old
-# gate against the same log refutes it: the dropped row is a CORRECTS/COMPLETES amendment to a row
-# that DID carry `sets`, and the old feed published that one in full — `heel-raise-SL-loaded`,
-# 32 kg × 8, 14 Sep, noted "BIGGEST CALF LOAD YET" — in the same session, so the heaviest calf load
-# in the corpus was on the panel the whole time. Feed max published load equalled log max load
-# (35 kg both) before the change and after it. Anyone sizing this defect by load is measuring the
-# wrong thing; do not reinstate that figure.
+# The cost is ATTRIBUTION, not CORPUS MAGNITUDE, and the two readings need keeping apart — a
+# previous draft of this comment conflated them in each direction in turn.
 #
-# What the gate actually cost is ATTRIBUTION and COVERAGE. The 32 kg appeared only under a key whose
+# Per movement the figure is real and reproduces: replaying the old gate against the same log,
+# `heel-raise-bent-knee-SL-loaded` published its best as 10 kg and now publishes 32 kg — 3.2x, the
+# dropped 14 Sep row exactly. Across the corpus it is not: feed max published load equalled log max
+# load (35 kg) before the change and after, because the corpus max is carried by seated-row and
+# lat-pulldown rows that always had `sets` and so were never at risk. That equality is FORCED — set
+# every gate-dropped row to 999 kg and the old feed's max still reads 35 — so it tests nothing about
+# the calf block, and it cannot be used to withdraw the per-movement figure. Nor was the 32 kg
+# invisible: the dropped row is a CORRECTS/COMPLETES amendment to one that DID carry `sets`, and the
+# old feed published that one — `heel-raise-SL-loaded`, 32 kg × 8, 14 Sep, "BIGGEST CALF LOAD YET".
+# So: the load was on the panel, under the wrong movement. State it per key or not at all.
+#
+# What the gate cost is that ATTRIBUTION, and COVERAGE. The 32 kg appeared only under a key whose
 # own note says the variant was not stated, while the bent-knee key — the provocative position the
 # rehab block is built to watch — stopped at 10 kg, so the feed could not say which tissue took the
 # heaviest load. And two whole training dates (2026-09-12, 2026-09-13) with two movements
