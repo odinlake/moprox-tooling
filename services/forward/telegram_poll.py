@@ -10,7 +10,9 @@ import json, os, sys, time, urllib.parse, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import tg_files          # documents/photos/voice -> a real file on disk (see tg_files.py)
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 TG_ENV = Path(os.environ.get("TELEGRAM_ENV", Path.home() / ".config/claude-dev/telegram.env"))
 INBOX  = Path(os.environ.get("TELEGRAM_INBOX", Path.home() / ".local/share/moprox/telegram-inbox.jsonl"))
@@ -19,6 +21,25 @@ LOCATION = Path.home() / ".local/share/moprox/location.json"   # freshest fix fr
 # capture-only: the dispatcher service tails this inbox and does triage + routing (single-flight
 # per agent), so a long agent run never blocks message pickup here. Location pins / Live Location
 # updates are captured separately to LOCATION (latest wins) for the valet's "where am I" check.
+
+# When this loop cannot reach Telegram, nothing in the estate can tell. It catches every exception
+# and continues, so the unit stays `active (running)` and unit-failed never raises; the only trace is
+# the info-level `poll error:` lines below, which a priority query does not return. There is no
+# freshness lane to fall back on either — an inbox with no new messages in it is the normal state of
+# an inbox, so silence there proves nothing. claude-dev's 2026-09-14 19:08-20:44 inbound outage
+# reached the operator only because logscan happened to shape-match three of those info lines.
+#
+# The predicate is EPISODE DURATION, not consecutive failures. Measured over the 150 poll errors in
+# the fleet journal's 30-day window (2026-08-17..09-14): that outage was a FLAP, 27 errors across
+# 5774 s with successful polls in between — 22 of its 26 inter-error gaps exceed the ~50 s one
+# back-to-back failing cycle takes — so an "N failures in a row" gate would have sat at zero
+# throughout it. What separates it cleanly is how long the channel stayed unhealthy AT ALL. An
+# episode starts at the first error and ends only after CLEAR_S with no error whatsoever; on that
+# definition the whole archive holds exactly one episode over 216 s: 4226 s from 2026-09-14 19:34.
+# The runner-up is the recurring ~01:11 nightly blip, 2-8 errors inside four minutes, which is
+# weather and must stay quiet. STALL_S sits 8x above it, so this speaks once per real outage.
+STALL_S = 1800   # unhealthy this long without a clear window => news, say so at err
+CLEAR_S = 600    # this long with no error at all => the episode is over
 
 def capture_location(loc):
     rec = {"lat": loc["latitude"], "lon": loc["longitude"], "ts": int(time.time()),
@@ -46,12 +67,30 @@ def main():
     INBOX.parent.mkdir(parents=True, exist_ok=True)
     offset = int(STATE.read_text()) if STATE.exists() else 0
     print(f"telegram-poll up; offset={offset}; inbox={INBOX}")
+    ep_start = ep_last = None      # current unhealthy episode: first error, most recent error
+    ep_n, stalled = 0, False
     while True:
         try:
             r = api(tok, "getUpdates", {"offset": offset, "timeout": 30,
                                         "allowed_updates": json.dumps(["message", "edited_message"])})
         except Exception as e:
-            print("poll error:", e); time.sleep(5); continue
+            print("poll error:", e)    # one blip is weather; the retry below covers it
+            now = time.monotonic()
+            if ep_start is None or now - ep_last > CLEAR_S:
+                ep_start, ep_n, stalled = now, 0, False      # a fresh episode
+            ep_last, ep_n = now, ep_n + 1
+            if not stalled and now - ep_start >= STALL_S:
+                stalled = True
+                errlog.err(f"telegram inbound down: {ep_n} poll errors over "
+                           f"{(now - ep_start) / 60:.0f} min with no {CLEAR_S // 60}-minute clear "
+                           f"window; still retrying every 5s; last error", e)
+            time.sleep(5); continue
+        if ep_start is not None and time.monotonic() - ep_last > CLEAR_S:
+            if stalled:
+                print(f"telegram inbound recovered; episode ran {(ep_last - ep_start) / 60:.0f} min, "
+                      f"{ep_n} poll errors")
+            ep_start = ep_last = None
+            ep_n, stalled = 0, False
         for u in r.get("result", []):
             offset = u["update_id"] + 1
             m = u.get("message") or u.get("edited_message")    # live location streams as edited_message
