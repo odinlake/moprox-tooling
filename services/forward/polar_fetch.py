@@ -131,6 +131,53 @@ def upload_age_h(ex):
     try: return (time.time() - calendar.timegm(time.strptime(up, "%Y-%m-%dT%H:%M:%S"))) / 3600.0
     except Exception: return 0.0
 
+_DUR = re.compile(r"^PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$")
+
+def workout_seconds(ex):
+    """How long the WORKOUT ran, per the device — AccessLink `duration`, ISO-8601. None if absent.
+
+    This is the one length in the payload that is not derived from the HR array. Everything else
+    here counts samples, so when the samples are the thing that went missing, counting them can
+    only report zero and cannot say whether zero is the truth."""
+    m = _DUR.match(str(ex.get("duration") or "").strip())
+    if not m or not any(m.groups()):
+        return None
+    h, mi, s = (float(g or 0) for g in m.groups())
+    return h * 3600 + mi * 60 + s
+
+def gate_note(eid, ex, hr):
+    """Why this workout gets no coach read: (is_error, one line saying so).
+
+    MIN_HR_SECONDS is the COACH gate and its message names the reason it assumes: the workout was
+    too short to read. `mins` is not that. It counts the per-second HR samples hr_from() returned,
+    and hr_from() comes back empty in two ways that have nothing to do with a short workout — the
+    exercise carries no HR at all (strap not worn, not paired, or never synced), or it carries HR
+    at a recording_rate this extractor requires to be 1 and drops otherwise. Both land on the same
+    info line, asserting a duration nobody measured, and then `seen.add(eid)` makes it terminal:
+    no retry, no post, and the estate's only record of a lost workout says it was a short one.
+
+    MEASURED in the live archive: private-data/polar/incoming/exercise_5ZMRgqeA.json is 48.1 min
+    of TREADMILL_RUNNING on 2026-07-24 (`duration: PT2883S`, `heart_rate: {}`, `samples: []`),
+    reported as "0 min HR — below coach gate" and dropped. A 48-minute run whose strap delivered
+    nothing is exactly the failure strap_health.py exists to surface, and it was filed as routine.
+
+    So ask the summary how long the workout was, and let the two cases say different things. A
+    workout genuinely below the gate is routine and stays at info, unchanged. A workout that ran
+    long enough to read and yielded too little usable HR is an unexpected condition and reaches
+    the journal at err, naming BOTH numbers so the next reader does not have to open the file to
+    learn which of them was small.
+
+    The outcome is deliberately NOT changed: both stay terminal. Retrying a workout whose HR Polar
+    itself does not hold (5ZMRgqeA's summary has no heart_rate average or maximum) would loop until
+    RETRY_WINDOW_H and abandon it anyway, one err at a time. What was missing was the sentence, not
+    the retry."""
+    mins = len(hr) / 60.0
+    dur_s = workout_seconds(ex)
+    if dur_s is not None and dur_s >= MIN_HR_SECONDS:
+        return True, ("polar: %s ran %.0f min but yielded %.0f min of usable per-second HR — no "
+                      "session read will ever be sent for this workout" % (eid, dur_s / 60.0, mins))
+    return False, "polar: %s stored, %.0f min HR — below coach gate" % (eid, mins)
+
 # What kind of session is this? Matched on the NAME, not Polar's numeric sport id: the ids for
 # cycling are unverified here (no ride has ever arrived) and guessing one would silently mis-route
 # the first real one. The names come straight from AccessLink's `sport` / `detailed_sport_info`.
@@ -253,7 +300,9 @@ def main():
         # posted again — a transient Telegram failure turned into permanent, silent loss of the
         # session. Deciding not to post is terminal; failing to post is not.
         if len(hr) < MIN_HR_SECONDS:
-            print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins))
+            bad, note = gate_note(eid, ex, hr)
+            if bad: errlog.err(note)
+            else:   print(note)
             seen.add(eid); continue
         # The freshness gate is a COLD-START filter: its job is to keep the 90-day back-catalogue
         # out of the DM, and a session we have already tried to post is not back-catalogue. It used
