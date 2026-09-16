@@ -27,8 +27,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
 sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))   # errlog: beside this file
 from run import run_agent
 import convo
+import errlog
 
 import discord
 
@@ -215,6 +217,13 @@ async def _consider(message, how):
                 _reply_for, text or "(addressed you with no other text)",
                 message.author.display_name, message.channel.id, message.id, ctx)
     except Exception as e:
+        # The apology goes to the channel; the CAUSE goes to the journal at err. run_agent raises
+        # the diagnosed reason the CLI failed (credentials, timeout, exit code) and nothing below
+        # this line ever reads it again: the 160-char emoji message is not logged to convo either,
+        # so before this the entire failure existed only as one line of Discord chat. The unit
+        # stays up either way, so "M4 answered" and "M4 died" looked identical to any query.
+        errlog.err("discord-theming: replying to message %s from %s"
+                   % (message.id, message.author.display_name), e)
         posted, reply = False, "⚠️ couldn't finish that — %s" % str(e)[:160]
     if posted:
         return                          # M4 posted its own reply (+ any files) via discord_api — done
