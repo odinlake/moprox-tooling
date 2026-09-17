@@ -47,9 +47,23 @@ LOCK="${PRIVATE_DATA_LOCK:-$(basename "$REPO")-sync.lock}"
 if ! { exec 9>"/run/lock/$LOCK"; } 2>/dev/null; then exec 9>"/tmp/$LOCK"; fi
 flock -w 300 9 || { say "busy: another sync holds the lock, skipping"; exit 0; }
 
-# Never touch a tree someone left mid-rebase/merge — that needs a human.
+# Never touch a tree someone left mid-rebase/merge — that needs a human. Which is exactly why this
+# is err + exit 1 and not `say` + exit 0, as it was: nothing here resolves the state, so this run
+# publishes nothing and neither will the next one. A conflicted `git pull --rebase` — sync_push's own
+# line 89, and memory-sync rebases on most runs — leaves precisely this state behind, so the script
+# can wedge itself and then report the wedge as routine.
+#
+# Exit 0 hid it three ways at once, which is why the level alone was not enough: systemd saw a
+# success, so no unit-failed — the ONLY incident kind this unit has ever been filed under, since
+# logscan raises no log-errors for it at all (0 in 20 d, measured in
+# moprox-memory/err-line-is-not-an-incident-private-data-sync); priority 6 is below what a priority
+# query reads; and the watchdog's silence>4h rule is defeated by this very line arriving every hour.
+# A repo that had stopped publishing indefinitely was indistinguishable from one with nothing to do.
+# Same "needs a human" shape as the oversize guard below, now reported the same way. The tree is
+# still not touched: this returns before anything stages, commits, pulls or pushes.
 if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] || [ -f .git/MERGE_HEAD ]; then
-  say "SKIP: rebase/merge in progress"; exit 0
+  err "SKIP: rebase/merge in progress in $REPO, needs a human — this sweep published nothing and will keep publishing nothing until the tree is resolved"
+  exit 1
 fi
 
 BRANCH="$(git symbolic-ref --quiet --short HEAD || echo main)"
