@@ -16,7 +16,7 @@ FRESH_WINDOW_H is a COLD-START filter and stops applying once we have tried to p
 those are tracked in polar-retry.json and retried until RETRY_WINDOW_H, and giving up on one is
 an err, not a print.
 """
-import calendar, json, re, sys, time, urllib.error, urllib.request
+import calendar, json, os, re, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
 # Siblings come from THIS tree, resolved from __file__. The units execute out of
 # /opt/moprox-tooling, which tooling-pull.timer holds at origin/main; naming an absolute
@@ -118,13 +118,32 @@ def samples_by_name(ex):
 def store_raw(ex, hr):
     """Store EVERY exercise, every sport, whole. `hr` stays a top-level key for the readers that
     already expect it; `samples` is the lossless view. Operator instruction 2026-08-27: capture
-    everything now so the analysis can be revised backwards later."""
+    everything now so the analysis can be revised backwards later.
+
+    Built in a temporary file beside the target and moved in with os.replace(), which is atomic, so
+    the destination only ever holds a whole exercise. Writing in place truncated the file FIRST and
+    then refilled it over several write() syscalls (these are 45-60 KB), and this function is
+    re-entered for the SAME exercise on every retry -- 5ebbBM6B was re-fetched and re-stored through
+    an 11 h credential outage on 2026-09-07 -- so the window was not rare, and it sat open on a
+    file git tracks. Two readers are in it: private-data-sync runs `git add -A` on this tree every
+    15 min and would commit whatever prefix was on disk, and a crash or restart mid-write left that
+    prefix as the ONLY copy, destroying an exercise Polar's 90-day listing may no longer serve.
+    A failed write is re-raised unchanged, and the temporary is removed first because the same
+    sweeper would otherwise commit the debris."""
     INCOMING.mkdir(parents=True, exist_ok=True)
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
-    (INCOMING / ("exercise_%s.json" % fid)).write_text(
-        json.dumps({"summary": ex, "hr": hr, "samples": samples_by_name(ex),
-                    "stored_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
-                   separators=(",", ":")))
+    dest = INCOMING / ("exercise_%s.json" % fid)
+    fd, tmp = tempfile.mkstemp(dir=str(INCOMING), prefix="." + dest.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"summary": ex, "hr": hr, "samples": samples_by_name(ex),
+                       "stored_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, f,
+                      separators=(",", ":"))
+        os.chmod(tmp, 0o644)     # write_text() made these world-readable; mkstemp() makes them 0600
+        os.replace(tmp, dest)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 def upload_age_h(ex):
     up = (ex.get("upload_time") or "")[:19]            # e.g. 2026-06-24T11:40:40 (Z/UTC)
