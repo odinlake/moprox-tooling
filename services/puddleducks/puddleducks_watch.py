@@ -52,6 +52,7 @@ the gate can then be tightened against something real instead of a guess.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
@@ -74,6 +75,8 @@ DAY = os.environ.get("PD_DAY", "Sunday")
 LEVEL = os.environ.get("PD_LEVEL", "Level 1 & 2 Swim Academy")
 TIME = os.environ.get("PD_TIME", "15:15")
 STATE = Path.home() / ".local/share/moprox/puddleducks-watch.json"
+# How often to say "that place is STILL open" while nothing has changed. See main().
+REMIND_EVERY_S = float(os.environ.get("PD_REMIND_EVERY_H", "168")) * 3600.0
 
 # Structured, not text-scraped. An earlier innerText parse of this page silently mixed adjacent rows
 # together and reported both "available" and "unavailable" for the same class — there are TWO
@@ -95,59 +98,63 @@ TIMETABLE_JS = """
   return JSON.stringify(out); })()
 """
 
-# Reads the courtesy panel WITHOUT assuming which shape it is in. `booked` is the one shape actually
-# observed; `block` is whatever the panel says, so an unseen shape arrives as evidence rather than
-# as a parse failure, and `links` would carry a "Book Courtesy Class" URL the moment one exists.
+# REWRITTEN 2026-09-19: the portal was redesigned on or about 2026-09-17 and every selector in the
+# previous version silently stopped matching. A booked Courtesy Class is no longer a paragraph on the
+# overview ("You have booked a Courtesy Class for X on"); it is a ROW in the Scheduled Lessons
+# carousel, flagged by `.carousel-table__field-value--courtesy` and a badge with
+# aria-label="Courtesy class". `signedIn` and `lessons` are returned so the caller can tell a real
+# "nothing booked" from a page that no longer parses -- the failure that ran for two days undetected,
+# because the PUBLIC timetable kept working and the job therefore looked healthy.
 OVERVIEW_JS = r"""
 (() => {
-  const anchor = Array.from(document.querySelectorAll('p'))
-    .find(e => /You have booked a Courtesy Class for/i.test(e.innerText||''));
-  // The SMALLEST block that mentions a courtesy class and carries a detail (a date, or the words
-  // an entitlement notice would use). Walking up from the anchor instead swept in the whole
-  // dashboard -- the recommend-a-friend blurb, the current class, the next payment -- which is
-  // 600 characters of noise around the one line that matters.
-  const cands = Array.from(document.querySelectorAll('div')).filter(d => {
-    const t = d.innerText || '';
-    return /courtesy class/i.test(t) && t.length >= 40 &&
-           /\d{2}-\d{2}-\d{4}|available|to book/i.test(t);
-  }).sort((a,b) => (a.innerText||'').length - (b.innerText||'').length);
+  const rows = [];
+  document.querySelectorAll('.carousel-table__fields').forEach(dl => {
+    const f = {}, dts = dl.querySelectorAll('dt'), dds = dl.querySelectorAll('dd');
+    for (let i = 0; i < dts.length && i < dds.length; i++)
+      f[(dts[i].innerText||'').trim().toLowerCase()] = (dds[i].innerText||'').replace(/\s+/g,' ').trim();
+    rows.push({
+      courtesy: !!dl.querySelector('.carousel-table__field-value--courtesy, [aria-label="Courtesy class"]'),
+      date: f.date || '', pool: f.pool || '', time: f.time || '', cls: f['class'] || ''
+    });
+  });
+  const booked = rows.filter(r => r.courtesy);
   return JSON.stringify({
-    booked: !!anchor,
-    block: (cands[0] ? cands[0].innerText : '').replace(/\s+/g,' ').trim().slice(0, 400),
+    signedIn: !!Array.from(document.querySelectorAll('a')).find(a => /sign out/i.test(a.innerText||'')),
+    lessons: rows.length,
+    booked: booked.length > 0,
+    rows: booked,
+    block: booked.map(r => [r.date, r.pool, r.time, r.cls].filter(Boolean).join(' ')).join(' | ').slice(0, 400),
     links: Array.from(document.querySelectorAll('a[href*="catchup" i]'))
              .map(a => ((a.innerText||'').trim()) + ' => ' + a.getAttribute('href'))
   }); })()
 """
 
 
-# One entry per child who HAS a criteria panel — a child with no current class (Yuko, 2026-09-06)
-# has none, and that is a fact about enrolment, not a parse failure. The child's name comes from the
-# "Current class for <name>" heading in the same `.my-children-div` block, so the report can name
-# them without this file hard-coding who is in the family.
+# REWRITTEN 2026-09-19 with the rest of the portal. The criteria are still a collapsed accordion that
+# reads without a click, but it is now `#criteria-accordion-content-<childPersonPK>` and the status is
+# TEXT ("Achieved" / "In progress") in `.criteria-table__status strong`. That is a straight
+# improvement: the old markup carried the state only in a 16x16 icon filename with no alt text, which
+# had to be confirmed by rendering the PNGs. The child's name comes off "Full name:" in the enclosing
+# `.panel`. A child with no current class (Yuko) has no panel, which is enrolment, not a fault.
 CRITERIA_JS = r"""
 (() => {
-  const TICK = 'dialog_ok_apply';
   const out = [];
-  document.querySelectorAll('[id^="my-criteria-"]').forEach(panel => {
-    const box = panel.closest('.my-children-div') || panel.parentElement;
-    const head = box ? Array.from(box.querySelectorAll('p'))
-                          .find(e => /Current class for/i.test(e.innerText||'')) : null;
-    const strong = head ? head.querySelector('strong') : null;
+  document.querySelectorAll('[id^="criteria-accordion-content-"]').forEach(p => {
+    const box = p.closest('.panel');
+    const m = box ? (box.innerText||'').match(/Full name:\s*([^\n]+)/i) : null;
     const items = [];
-    panel.querySelectorAll('p.mypuddle-body-text').forEach(p => {
-      const txt = (p.innerText||'').replace(/\s+/g,' ').trim();
-      const img = p.querySelector('img');
-      if (!txt || !img) return;                 // the panel's own heading has no icon
-      const src = (img.getAttribute('src')||'');
-      items.push({txt: txt, achieved: src.indexOf(TICK) !== -1});
+    p.querySelectorAll('.criteria-table__item').forEach(it => {
+      const t = it.querySelector('.criteria-table__text');
+      const st = it.querySelector('.criteria-table__status strong');
+      if (!t) return;
+      items.push({txt: (t.innerText||'').replace(/\s+/g,' ').trim(),
+                  status: st ? (st.innerText||'').trim() : '',
+                  achieved: st ? /achieved/i.test(st.innerText||'') : false});
     });
-    out.push({pk: panel.id.replace('my-criteria-',''),
-              child: strong ? (strong.innerText||'').trim()
-                            : (head ? (head.innerText||'').replace(/Current class for/i,'').trim() : ''),
-              items: items});
+    out.push({pk: p.id.replace('criteria-accordion-content-',''),
+              child: m ? m[1].trim() : '', items: items});
   });
-  return JSON.stringify(out);
-})()
+  return JSON.stringify(out); })()
 """
 
 
@@ -285,6 +292,21 @@ def main():
                    % (DAY, TIME, LEVEL, len(rows)))
         return 1
 
+    # THE AUTHENTICATED HALF MUST PROVE IT READ SOMETHING. The timetable above is a PUBLIC page and
+    # kept parsing perfectly through the 2026-09-17 redesign, so the job went on reporting success
+    # while the signed-in half returned nothing at all: no courtesy booking, no criteria. "Nothing
+    # booked" and "the page no longer parses" are not the same fact and must never look the same.
+    if not courtesy.get("signedIn"):
+        errlog.err("puddleducks_watch: the overview came back with no Sign Out link, so the stored "
+                   "session is not logged in. Refusing to read 'no courtesy class' off a logged-out "
+                   "page. Re-establish it: establish_session('%s')." % SITE)
+        return 1
+    if not courtesy.get("lessons"):
+        errlog.err("puddleducks_watch: signed in, but the Scheduled Lessons carousel parsed to ZERO "
+                   "rows on %s. That is a page-shape change, not an empty diary, and every courtesy "
+                   "reading below it would be a false negative." % OVERVIEW)
+        return 1
+
     open_rows = [r for r in targets if norm(r.get("avail")) == "available"]
     booked = bool(courtesy.get("booked"))
     alertable = bool(open_rows) and not booked
@@ -295,6 +317,13 @@ def main():
         errlog.skip("puddleducks_watch: reading state", e)
         state = {}
     was = bool(state.get("alertable"))
+    # Re-remind while a place STAYS open. Edge-triggering alone was wrong for this signal: the
+    # 2026-09-07 alert was correct and was delivered, then the place stayed open for twelve days and
+    # the design said nothing more, so the operator eventually found it himself and asked why he had
+    # never been told. A standing, actionable fact deserves an occasional nudge; a nudge every twelve
+    # hours would be the drip this job exists to avoid. Weekly is the compromise.
+    last = float(state.get("last_courtesy_alert") or 0)
+    stale = (time.time() - last) >= REMIND_EVERY_S if last else True
 
     now = criteria_map(panels)
     before = state.get("criteria") or {}
@@ -306,6 +335,15 @@ def main():
         errlog.err("puddleducks_watch: criteria panel(s) %s parsed to ZERO items — treating the "
                    "read as broken and keeping the previous snapshot." % ", ".join(empty))
         now = before
+    # ...and the case that guard MISSED, which cost the real baseline. On 2026-09-17 the redesign
+    # removed the old `#my-criteria-` panels entirely, so there were no panels to be empty: `now`
+    # became {}, no diff was computed against it, and Akiko's 9-of-20 snapshot was overwritten with
+    # nothing. Children do not silently lose their criteria; a page does. Keep what we had.
+    if before and not now:
+        errlog.err("puddleducks_watch: %d child(ren) had criteria yesterday and the page yields NO "
+                   "panels today. Treating that as a shape change, not as cleared criteria, and "
+                   "keeping the previous snapshot." % len(before))
+        now = before
     changes = criteria_lines(now, before) if before else []
     if not before and now:
         print("seeded criteria for %d child(ren): %s"
@@ -314,8 +352,11 @@ def main():
                                                    len(c["items"])) for c in now.values())))
 
     lines = []
-    if alertable and not was:
+    say_courtesy = alertable and (not was or stale)
+    if say_courtesy:
         lines += courtesy_lines(open_rows, courtesy)
+        if was:
+            lines.append("_(still open, and still unbooked, since the last time I mentioned it.)_")
     if changes:
         if lines:
             lines.append("")
@@ -327,14 +368,17 @@ def main():
         lines.append("(Read-only — nothing on the portal was clicked.)")
         try:
             tg.send("\n".join(lines), agent="puddleducks")
-            print("alerted: courtesy=%s criteria_lines=%d"
-                  % (bool(alertable and not was), len(changes)))
+            if say_courtesy:
+                state["last_courtesy_alert"] = time.time()
+            print("alerted: courtesy=%s criteria_lines=%d" % (say_courtesy, len(changes)))
         except Exception as e:
             errlog.err("puddleducks_watch: sending the Telegram alert", e)
             return 1                # do NOT record it; retry next run rather than lose the alert
     else:
-        print("no alert: open=%d/%d booked=%s (was alertable=%s), criteria unchanged for %d child(ren)"
-              % (len(open_rows), len(targets), booked, was, len(now)))
+        print("no alert: open=%d/%d booked=%s (was alertable=%s, next nudge in %.1f h), "
+              "criteria unchanged for %d child(ren)"
+              % (len(open_rows), len(targets), booked, was,
+                 max(0.0, (last + REMIND_EVERY_S - time.time()) / 3600.0) if last else 0.0, len(now)))
 
     state.update({"alertable": alertable, "open": len(open_rows), "targets": len(targets),
                   "booked": booked, "courtesy_block": (courtesy.get("block") or "")[:600],
