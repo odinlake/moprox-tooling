@@ -55,6 +55,12 @@ LOG = STATE / "filed.jsonl"
 # scan on 2026-08-27: seen once, skipped once, then "nothing new in root" for ever after.
 PENDING = STATE / "pending.jsonl"
 RETRY_MAX = int(os.environ.get("DOCWATCH_RETRY_MAX", "5"))
+# Drive error reasons that will NEVER come good, however many times they are retried. A Google My
+# Maps file (application/vnd.google-apps.map) reports capabilities.canCopy=false and canDownload=
+# =false and answers a copy with 403 cannotCopyFile: the format simply has no Drive API
+# representation to copy or export. Retrying that is not resilience, it is five identical Telegram
+# messages about a file that can never be filed, which is what "Untitled map" did on 2026-09-21.
+PERMANENT_REASONS = {"cannotCopyFile", "cannotDownloadFile", "cannotExportFile", "fileNotExportable"}
 FOLDER_MIME = "application/vnd.google-apps.folder"
 MAXTXT = 8000
 # Credential material must never reach the index, the digest, or a model prompt. This is not
@@ -217,8 +223,8 @@ def upsert(f, d, copy_id, dest):
     c.close()
 
 
-def notify(filed, skipped):
-    if not filed and not skipped:
+def notify(filed, skipped, given_up=()):
+    if not filed and not skipped and not given_up:
         return
     lines = [f"**{len(filed)} document(s) filed from Drive root**"]
     for r in filed:
@@ -230,7 +236,21 @@ def notify(filed, skipped):
             f"\n[filed copy](https://drive.google.com/file/d/{r['copy_id']}/view)"
             f" · [original: {r['old_name']}](https://drive.google.com/file/d/{r['drive_id']}/view)")
     for r in skipped:
-        lines.append(f"\n⚠️ **{r['old_name']}** — not filed: {r['why']}")
+        # A permanent refusal is a different message from a transient one. It is not "this failed,
+        # I will try again", it is "nothing will ever file this, here it is, deal with it or leave
+        # it" — and saying so once is the difference between a useful note and five identical ones.
+        if r.get("permanent"):
+            lines.append(f"\n⚠️ **{r['old_name']}** — cannot be filed, and I will not raise it "
+                         f"again: {r['why']}"
+                         f"\n[open it](https://drive.google.com/open?id={r['drive_id']})")
+        else:
+            lines.append(f"\n⚠️ **{r['old_name']}** — not filed: {r['why']}")
+    for r in given_up:
+        # Reaching RETRY_MAX used to drop a file from the retry set in silence, which is the exact
+        # shape of the 2026-08-27 lost scan this file already warns about, just five runs later.
+        lines.append(f"\n⚠️ **{r['name']}** — giving up after {r['tries']} attempts. Last reason: "
+                     f"{r.get('last_why', 'unknown')}"
+                     f"\n[open it](https://drive.google.com/open?id={r['id']})")
     lines.append("\n_Originals left in root for you to delete once you've checked the copy._")
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
@@ -238,6 +258,14 @@ def notify(filed, skipped):
         tg.send("\n".join(lines), agent="docwatch")
     except BaseException as e:                      # tg.creds() raises SystemExit without telegram.env
         errlog.err(f"docwatch: notify failed: {type(e).__name__}: {e}")
+
+
+def http_reason(e):
+    """The machine-readable `reason` out of an HttpError, or "" if it has none."""
+    try:
+        return (json.loads(e.content.decode())["error"]["errors"][0].get("reason") or "")
+    except Exception:
+        return ""
 
 
 def pending_load():
@@ -287,7 +315,7 @@ def main():
     while token:
         resp = drive().changes().list(
             pageToken=token, pageSize=200, restrictToMyDrive=True,
-            fields="nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,trashed))"
+            fields="nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,trashed,capabilities(canCopy)))"
         ).execute()
         for ch in resp.get("changes", []):
             f = ch.get("file") or {}
@@ -305,19 +333,28 @@ def main():
     # Re-offer anything seen before and never filed. Their change is long gone from the feed, so
     # this list is the only route back for them.
     pend = pending_load()
+    given_up = []
     for fid, rec in list(pend.items()):
-        if fid in seen or rec.get("tries", 0) >= RETRY_MAX:
+        if fid in seen:
+            continue
+        if rec.get("tries", 0) >= RETRY_MAX:
+            # Announce the abandonment ONCE, then stay quiet about it for good.
+            if not rec.get("told"):
+                rec["told"] = True
+                given_up.append(rec)
             continue
         try:
             new.append(drive().files().get(
-                fileId=fid, fields="id,name,mimeType,parents,trashed").execute())
+                fileId=fid,
+                fields="id,name,mimeType,parents,trashed,capabilities(canCopy)").execute())
         except HttpError as exc:
             errlog.warn(f"docwatch: pending {fid} is no longer readable ({exc}) — dropping it")
             pend.pop(fid, None)
 
     if only:                                        # --file=<id>: one document, on demand
         new = [drive().files().get(
-            fileId=only, fields="id,name,mimeType,parents,trashed").execute()]
+            fileId=only,
+            fields="id,name,mimeType,parents,trashed,capabilities(canCopy)").execute()]
 
     new = {f["id"]: f for f in new}.values()        # a file edited twice is still one file
     if not new:
@@ -350,7 +387,9 @@ def main():
                                           fields="id").execute()
             except HttpError as e:
                 skipped.append({"drive_id": fid, "old_name": name,
-                                "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
+                                "permanent": http_reason(e) in PERMANENT_REASONS,
+                                "why": f"Drive refused the copy ({getattr(e.resp,'status','?')} "
+                                       f"{http_reason(e) or 'no reason given'})"})
                 continue
             rec = {"key": f"docwatch:{fid}", "drive_id": fid, "name": name, "mime": mime,
                    "bucket": bucket_of(mime, name), "text": ""}
@@ -366,6 +405,15 @@ def main():
             filed.append(row)
             errlog.warn(f"docwatch: {name!r} filed to {SECRET_FOLDER} UNREAD (name matched the "
                         f"credential pattern). Drive is not a secret store — consider Vaultwarden.")
+            continue
+
+        # Ask before trying. Drive publishes canCopy on the file itself, so a format it will never
+        # hand over (My Maps, Sites, some shared-drive items) can be recognised without burning a
+        # request, a model call and a Telegram message to be told 403 for the fifth time.
+        if f.get("capabilities") and not f["capabilities"].get("canCopy", True):
+            skipped.append({"drive_id": fid, "old_name": name, "permanent": True,
+                            "why": f"Drive says this file cannot be copied at all "
+                                   f"(type {mime.rsplit('.', 1)[-1]}); it has no API form to file"})
             continue
 
         rec = {"key": f"docwatch:{fid}", "drive_id": fid, "name": name, "mime": mime,
@@ -389,7 +437,9 @@ def main():
                                       fields="id").execute()
         except HttpError as e:
             skipped.append({"drive_id": fid, "old_name": name,
-                            "why": f"Drive refused the copy ({getattr(e.resp,'status','?')})"})
+                            "permanent": http_reason(e) in PERMANENT_REASONS,
+                            "why": f"Drive refused the copy ({getattr(e.resp,'status','?')} "
+                                   f"{http_reason(e) or 'no reason given'})"})
             continue
         upsert(rec, d, cp["id"], dest)
         row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "drive_id": fid, "copy_id": cp["id"],
@@ -403,17 +453,30 @@ def main():
         pend.pop(r["drive_id"], None)
     for s in skipped:
         fid = s.get("drive_id")
-        if fid:
-            e = pend.setdefault(fid, {"id": fid, "name": s["old_name"], "tries": 0})
-            e["tries"] += 1
-            e["last_why"] = s["why"]
+        if not fid:
+            continue
+        e = pend.setdefault(fid, {"id": fid, "name": s["old_name"], "tries": 0})
+        e["tries"] += 1
+        e["last_why"] = s["why"]
+        # Retrying something Drive has refused on principle is not resilience. Park it, say so
+        # once, and never raise it again unless the operator asks with --file.
+        if s.get("permanent"):
+            e["permanent"] = True
+            e["tries"] = max(e["tries"], RETRY_MAX)
+            # The permanent note above has just said "I will not raise it again". Mark it told, or
+            # the give-up path announces the very same file a second time on the next run and makes
+            # a liar of it.
+            e["told"] = True
     pending_save(pend)
 
     state_save(st)
-    notify(filed, skipped)
+    notify(filed, skipped, given_up)
     for s in skipped:                               # the digest is not a log; the journal is
         errlog.warn(f"docwatch: skipped {s['old_name']!r} — {s['why']}")
-    print(f"docwatch: filed {len(filed)}, skipped {len(skipped)}")
+    for g in given_up:
+        errlog.warn(f"docwatch: giving up on {g['name']!r} after {g['tries']} attempts — "
+                    f"{g.get('last_why', 'unknown')}")
+    print(f"docwatch: filed {len(filed)}, skipped {len(skipped)}, gave up on {len(given_up)}")
     return 0
 
 
