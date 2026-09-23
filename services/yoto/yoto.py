@@ -27,7 +27,7 @@ THREE THINGS THAT COST AN EVENING TO LEARN, DO NOT REDISCOVER THEM:
    offline_access`. The API names the missing one in its 403 body, which is the only reason this was
    debuggable.
 """
-import json, math, os, ssl, sys, threading, time, urllib.parse, urllib.request
+import base64, json, math, os, ssl, sys, threading, time, urllib.parse, urllib.request
 
 ENV = os.path.expanduser("~/.config/claude-dev/yoto.env")
 API = "https://api.yotoplay.com"
@@ -45,19 +45,39 @@ def env():
     return d
 
 
+def _put(key, val):
+    lines = [l for l in open(ENV).read().splitlines() if not l.startswith(key + "=")]
+    lines.append(f"{key}={val}")
+    open(ENV, "w").write("\n".join(lines) + "\n")
+    os.chmod(ENV, 0o600)
+
+
 def token():
-    """Mint an access token from the stored refresh token. Auth0 may rotate it; persist if so."""
+    """A usable access token: reuse the stored one until it expires, else spend the refresh token.
+
+    REFRESH TOKENS ROTATE. Auth0 invalidates the old one the moment it is used, so any script that
+    refreshes and forgets to persist the replacement silently bricks every later run. That is exactly
+    how this broke an hour after it was written: an ad-hoc calibration script refreshed, kept only the
+    access token, and the stored refresh token died with `invalid_grant`. Never refresh outside here.
+    """
     e = env()
+    cur = e.get("YOTO_ACCESS_TOKEN")
+    if cur:
+        try:
+            b = cur.split(".")[1]
+            b += "=" * (-len(b) % 4)
+            if json.loads(base64.urlsafe_b64decode(b)).get("exp", 0) - time.time() > 300:
+                return cur
+        except Exception:
+            pass
     body = urllib.parse.urlencode({"grant_type": "refresh_token", "client_id": e["YOTO_CLIENT_ID"],
                                    "refresh_token": e["YOTO_REFRESH_TOKEN"]}).encode()
     r = urllib.request.urlopen(urllib.request.Request(
         TOKEN_URL, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=45)
     t = json.loads(r.read())
-    new = t.get("refresh_token")
-    if new and new != e["YOTO_REFRESH_TOKEN"]:
-        txt = open(ENV).read().replace(e["YOTO_REFRESH_TOKEN"], new)
-        open(ENV, "w").write(txt)          # rotation would otherwise lock us out on the next run
-        os.chmod(ENV, 0o600)
+    if t.get("refresh_token"):
+        _put("YOTO_REFRESH_TOKEN", t["refresh_token"])   # rotation: persist or be locked out
+    _put("YOTO_ACCESS_TOKEN", t["access_token"])
     return t["access_token"]
 
 
