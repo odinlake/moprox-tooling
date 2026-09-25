@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Yoto player: REST inventory + MQTT query and control.
 
-    yoto.py library|devices|card <id>|status|play <cardId> [chapterKey] [trackKey]
+    yoto.py library|devices|card <id>|status|nowplaying|play <cardId> [chapterKey] [trackKey] [secondsIn]
     yoto.py pause|resume|stop|sleep <seconds>|volume <step 0-8>|ambient <r> <g> <b>
 
 Credentials live in ~/.config/claude-dev/yoto.env (0600, not in git). The access token is
@@ -131,6 +131,24 @@ def token():
 def get(path, tok):
     return json.loads(urllib.request.urlopen(urllib.request.Request(
         API + path, headers={"Authorization": "Bearer " + tok}), timeout=45).read())
+
+
+def now_playing(link, wait=6):
+    """What the device says it is doing, from data/events -- the only honest answer.
+
+    `events/request` asks for a full report rather than waiting for something to change. The fields
+    are documented at yoto.dev/players-mqtt/mqtt-docs: cardId, chapterKey/chapterTitle,
+    trackKey/trackTitle, position, trackLength, playbackStatus, source. Nothing in /response or
+    data/status names the chapter, so this is the ONLY way to check a chapter actually started.
+    """
+    link.msgs.clear()
+    link.send("events/request", None, wait=wait)
+    for kind, m in link.msgs:
+        if kind == "events" and ("chapterTitle" in m or "chapterKey" in m):
+            return {k: m.get(k) for k in ("cardId", "chapterKey", "chapterTitle", "trackKey",
+                                          "trackTitle", "position", "trackLength",
+                                          "playbackStatus", "source")}
+    return {"playbackStatus": "unknown", "note": "no chapter event returned"}
 
 
 def vol_cmd(step):
@@ -272,13 +290,31 @@ def main():
         return
 
     with Link(tok, dev) as link:
+        if cmd == "nowplaying":
+            print(json.dumps(now_playing(link), ensure_ascii=False, indent=1)); return
         if cmd == "status":
             print(json.dumps(link.state(), indent=1))
         elif cmd == "play":
-            pl = {"uri": f"https://yoto.io/{rest[0]}"}
-            if len(rest) > 1: pl["chapterKey"] = rest[1]
-            if len(rest) > 2: pl["trackKey"] = rest[2]
-            print(link.send("card/start", pl))
+            # secondsIn IS NOT OPTIONAL. card/start on the card that is already active RESUMES at its
+            # saved position, and a resume ignores chapterKey/trackKey completely -- so `play <card> 02`
+            # sat there replaying chapter 1 from wherever it last stopped, acking "card-play: OK" every
+            # time. card/stop does NOT clear that position, so stopping first does not help either, and
+            # neither does the yoto.io/<card>-<chapter> deep-link form. Sending secondsIn is what makes
+            # this a START; then the chapter argument is honoured. Measured on v3e fw v2.23.3.
+            # A 4th arg seeks that many seconds into the chosen chapter.
+            pl = {"uri": f"https://yoto.io/{rest[0]}",
+                  "secondsIn": int(rest[3]) if len(rest) > 3 else 0}
+            if len(rest) > 1:
+                pl["chapterKey"] = rest[1]
+                # Each MYO chapter holds exactly one track, keyed "01". Both were sent in the run
+                # that verified this, so the default matches what was actually tested.
+                pl["trackKey"] = rest[2] if len(rest) > 2 else "01"
+            link.send("card/start", pl, wait=6)
+            # Say what is ACTUALLY playing, not what we asked for. `card-play: OK` only means the
+            # command was received -- it is returned just the same when the device ignores every
+            # field and resumes something else, which is how the chapter bug above went unnoticed
+            # through a whole evening of "OK" responses. data/events carries the ground truth.
+            print(json.dumps(now_playing(link)))
         elif cmd in ("pause", "resume", "stop"):
             print(link.send(f"card/{cmd}"))
         elif cmd == "sleep":
