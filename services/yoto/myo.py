@@ -39,7 +39,9 @@ def title_of(path):
     try:
         t = ID3(path).get("TIT2")
         if t and str(t).strip():
-            return str(t).strip()
+            # Adlibris tags the single-file MP3 as "<title> - 01": a track number on a one-track
+            # file. The chapter is the book, so the suffix goes.
+            return re.sub(r"\s*-\s*\d{1,2}$", "", str(t).strip())
     except Exception:
         pass
     return re.sub(r"[_-]+", " ", os.path.splitext(os.path.basename(path))[0]).strip().capitalize()
