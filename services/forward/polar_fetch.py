@@ -12,25 +12,17 @@ dashboard updater ingests it.
 Dedup + no-history-spam: a seen-set (polar-seen.json) tracks processed ids. On a cold start the
 90-day back-catalogue is stored raw and marked seen, but only exercises uploaded within
 FRESH_WINDOW_H are actually posted — so today's workout posts while 90 days don't flood the DM.
-FRESH_WINDOW_H is a COLD-START filter and stops applying once we have tried to post a session:
-those are tracked in polar-retry.json and retried until RETRY_WINDOW_H, and giving up on one is
-an err, not a print.
 """
-import calendar, json, os, re, sys, tempfile, time, urllib.error, urllib.request
+import calendar, json, re, sys, time, urllib.error, urllib.request
 from pathlib import Path
-# Siblings come from THIS tree, resolved from __file__. The units execute out of
-# /opt/moprox-tooling, which tooling-pull.timer holds at origin/main; naming an absolute
-# $HOME path here made every imported module come from ~/projects/moprox-tooling — the
-# shared DEVELOPMENT checkout — so deploying the tree did not deploy the half it imports.
-# services/deploy/tooling-pull.sh: "Deployment and development cannot share a working tree."
-_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_ROOT / "services/agents"))
-sys.path.insert(0, str(_ROOT / "services/forward"))
-sys.path.insert(0, str(_ROOT / "services/training"))
-sys.path.insert(0, str(_ROOT / "services/lib"))
+sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
+sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
+sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
+sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/lib"))
 import errlog
 from run import run_agent
 import strap_health              # is the chest-strap battery going? (see its docstring)
+import wattbike                  # ride data pull, started early and joined before coach
 import tg
 import convo
 from analysis import Athlete, analyse_safe
@@ -38,10 +30,8 @@ from analysis import Athlete, analyse_safe
 POLAR_ENV = Path.home() / ".config/claude-dev/polar.env"
 INCOMING  = Path.home() / "projects/private-data/polar/incoming"
 SEEN      = Path.home() / ".local/share/moprox/polar-seen.json"
-RETRY     = Path.home() / ".local/share/moprox/polar-retry.json"
 MIN_HR_SECONDS = 600          # 10 min — the coach gate
 FRESH_WINDOW_H = 6            # only post exercises uploaded within this many hours (no history spam)
-RETRY_WINDOW_H = 48           # how long a session that FAILED to post keeps being retried
 BASE = "https://www.polaraccesslink.com"
 ATHLETE_JSON = Path.home() / "projects/private-data/agents/coach/athlete.json"
 ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls back to defaults)
@@ -77,22 +67,6 @@ def save_seen(s):
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     SEEN.write_text(json.dumps(sorted(s)))
 
-def load_retry():
-    """eid -> epoch of the FIRST failed post attempt. Membership is what separates "we have never
-    managed to post this" from "this is 90-day back-catalogue"; the two are otherwise identical to
-    the freshness gate below. Kept in its own file so polar-seen.json stays the plain id list."""
-    if not RETRY.exists(): return {}                      # first run — not an error
-    try:
-        return {str(k): float(v) for k, v in json.loads(RETRY.read_text()).items()}
-    except Exception as e:
-        errlog.err("polar: retry state %s unreadable — pending retries will be treated as "
-                   "back-catalogue and dropped" % RETRY, e)
-        return {}
-
-def save_retry(d):
-    RETRY.parent.mkdir(parents=True, exist_ok=True)
-    RETRY.write_text(json.dumps(d, sort_keys=True))
-
 # AccessLink sample_type -> a name we can read two years from now. Only 0 (HR) has ever appeared
 # here, because the athlete records with a chest strap and no other sensors — but a bike with a
 # power meter or cadence sensor would start filling the rest in, and a stored file that names them
@@ -118,84 +92,18 @@ def samples_by_name(ex):
 def store_raw(ex, hr):
     """Store EVERY exercise, every sport, whole. `hr` stays a top-level key for the readers that
     already expect it; `samples` is the lossless view. Operator instruction 2026-08-27: capture
-    everything now so the analysis can be revised backwards later.
-
-    Built in a temporary file beside the target and moved in with os.replace(), which is atomic, so
-    the destination only ever holds a whole exercise. Writing in place truncated the file FIRST and
-    then refilled it over several write() syscalls (these are 45-60 KB), and this function is
-    re-entered for the SAME exercise on every retry -- 5ebbBM6B was re-fetched and re-stored through
-    an 11 h credential outage on 2026-09-07 -- so the window was not rare, and it sat open on a
-    file git tracks. Two readers are in it: private-data-sync runs `git add -A` on this tree every
-    15 min and would commit whatever prefix was on disk, and a crash or restart mid-write left that
-    prefix as the ONLY copy, destroying an exercise Polar's 90-day listing may no longer serve.
-    A failed write is re-raised unchanged, and the temporary is removed first because the same
-    sweeper would otherwise commit the debris."""
+    everything now so the analysis can be revised backwards later."""
     INCOMING.mkdir(parents=True, exist_ok=True)
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
-    dest = INCOMING / ("exercise_%s.json" % fid)
-    fd, tmp = tempfile.mkstemp(dir=str(INCOMING), prefix="." + dest.name + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump({"summary": ex, "hr": hr, "samples": samples_by_name(ex),
-                       "stored_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, f,
-                      separators=(",", ":"))
-        os.chmod(tmp, 0o644)     # write_text() made these world-readable; mkstemp() makes them 0600
-        os.replace(tmp, dest)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    (INCOMING / ("exercise_%s.json" % fid)).write_text(
+        json.dumps({"summary": ex, "hr": hr, "samples": samples_by_name(ex),
+                    "stored_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                   separators=(",", ":")))
 
 def upload_age_h(ex):
     up = (ex.get("upload_time") or "")[:19]            # e.g. 2026-06-24T11:40:40 (Z/UTC)
     try: return (time.time() - calendar.timegm(time.strptime(up, "%Y-%m-%dT%H:%M:%S"))) / 3600.0
     except Exception: return 0.0
-
-_DUR = re.compile(r"^PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$")
-
-def workout_seconds(ex):
-    """How long the WORKOUT ran, per the device — AccessLink `duration`, ISO-8601. None if absent.
-
-    This is the one length in the payload that is not derived from the HR array. Everything else
-    here counts samples, so when the samples are the thing that went missing, counting them can
-    only report zero and cannot say whether zero is the truth."""
-    m = _DUR.match(str(ex.get("duration") or "").strip())
-    if not m or not any(m.groups()):
-        return None
-    h, mi, s = (float(g or 0) for g in m.groups())
-    return h * 3600 + mi * 60 + s
-
-def gate_note(eid, ex, hr):
-    """Why this workout gets no coach read: (is_error, one line saying so).
-
-    MIN_HR_SECONDS is the COACH gate and its message names the reason it assumes: the workout was
-    too short to read. `mins` is not that. It counts the per-second HR samples hr_from() returned,
-    and hr_from() comes back empty in two ways that have nothing to do with a short workout — the
-    exercise carries no HR at all (strap not worn, not paired, or never synced), or it carries HR
-    at a recording_rate this extractor requires to be 1 and drops otherwise. Both land on the same
-    info line, asserting a duration nobody measured, and then `seen.add(eid)` makes it terminal:
-    no retry, no post, and the estate's only record of a lost workout says it was a short one.
-
-    MEASURED in the live archive: private-data/polar/incoming/exercise_5ZMRgqeA.json is 48.1 min
-    of TREADMILL_RUNNING on 2026-07-24 (`duration: PT2883S`, `heart_rate: {}`, `samples: []`),
-    reported as "0 min HR — below coach gate" and dropped. A 48-minute run whose strap delivered
-    nothing is exactly the failure strap_health.py exists to surface, and it was filed as routine.
-
-    So ask the summary how long the workout was, and let the two cases say different things. A
-    workout genuinely below the gate is routine and stays at info, unchanged. A workout that ran
-    long enough to read and yielded too little usable HR is an unexpected condition and reaches
-    the journal at err, naming BOTH numbers so the next reader does not have to open the file to
-    learn which of them was small.
-
-    The outcome is deliberately NOT changed: both stay terminal. Retrying a workout whose HR Polar
-    itself does not hold (5ZMRgqeA's summary has no heart_rate average or maximum) would loop until
-    RETRY_WINDOW_H and abandon it anyway, one err at a time. What was missing was the sentence, not
-    the retry."""
-    mins = len(hr) / 60.0
-    dur_s = workout_seconds(ex)
-    if dur_s is not None and dur_s >= MIN_HR_SECONDS:
-        return True, ("polar: %s ran %.0f min but yielded %.0f min of usable per-second HR — no "
-                      "session read will ever be sent for this workout" % (eid, dur_s / 60.0, mins))
-    return False, "polar: %s stored, %.0f min HR — below coach gate" % (eid, mins)
 
 # What kind of session is this? Matched on the NAME, not Polar's numeric sport id: the ids for
 # cycling are unverified here (no ride has ever arrived) and guessing one would silently mis-route
@@ -230,7 +138,7 @@ THIS IS NOT A RUN — sport is %s.
   judge. Say so rather than filling the gap with running-shaped conclusions.
 """
 
-def post_session(ex, hr):
+def post_session(ex, hr, wb=None):
     """A new workout came in. Coach OWNS the post: it builds its OWN light-mode chart and sends ONE
     Telegram message — the chart with the read written into its caption (its firm standing rule; no
     separate chart, no separate text). The pipeline no longer draws a chart or sends any commentary
@@ -283,6 +191,11 @@ def post_session(ex, hr):
                "dur_min": round(dur_min, 1), "n_work_bouts": cls.n_work_bouts,
                "five_min_max": round(float(m5)) if m5 == m5 else None,
                "above_lt2": bool(cls.above_lt2), "clamp": bool(cls.hr_clamp_suspected)}
+    # Join the Wattbike pull started back in main(). It has been running in parallel through the
+    # receipt, the strap check and the analysis, so by now it has usually already landed and this
+    # costs nothing. Bounded either way: if the Hub is being slow, coach goes ahead without it
+    # rather than sitting on a finished read (operator, 2026-09-25). Returns "" for a non-ride.
+    wb_line = wattbike.join_line(wb)
     prompt = (
         "A new training session just came in. Computed classification (a hint — the raw per-second HR "
         "is in `raw_file` as {summary, hr}; recompute/refit from it as you see fit, you're the "
@@ -293,7 +206,7 @@ def post_session(ex, hr):
         "separate chart, no separate text, no preamble or follow-up. Reuse and maintain your own "
         "charting library (see your CLAUDE.md), not throwaway /tmp scripts. Apply anything relevant "
         "from the recent conversation below.%s%s\n\nRecent conversation:\n%s"
-        % (json.dumps(summary), strap_line,
+        % (json.dumps(summary), strap_line + wb_line,
            "" if kind == "run" else NON_RUN_CAVEAT % (ex.get("sport") or "unknown"),
            convo.transcript(16)))
     run_agent("coach", prompt, timeout=600)   # coach sends its own single post; nothing else is sent
@@ -304,7 +217,7 @@ def main():
     st, lst = api("/v3/exercises", tok)
     if st != 200 or lst is None:
         print("polar: /v3/exercises returned %s" % st); return
-    seen = load_seen(); retry = load_retry(); posted = 0
+    seen = load_seen(); posted = 0
     print("polar: %d exercises listed; %d seen" % (len(lst), len(seen)))
     for summ in lst:
         eid = str(summ.get("id") or "")
@@ -312,6 +225,12 @@ def main():
         st2, ex = api("/v3/exercises/%s?samples=true" % eid, tok)
         if st2 != 200 or not ex:
             print("polar: fetch %s -> %s" % (eid, st2)); continue
+        # EARLIEST possible start: the instant we know this is a ride, and before any of the work
+        # below. It runs in parallel with the raw store, the gates, the receipt, the strap check and
+        # the analysis, and is joined inside post_session just before coach is invoked. Started even
+        # for sessions that will not be posted (backfills, sub-gate rides): the data is worth having
+        # regardless, and the fetcher skips what it already holds.
+        wb = wattbike.start() if sport_kind(ex) == "ride" else None
         hr = hr_from(ex); store_raw(ex, hr)
         mins = len(hr) / 60.0
         # seen is added at each TERMINAL outcome only. It used to be set next to store_raw, above,
@@ -319,38 +238,21 @@ def main():
         # posted again — a transient Telegram failure turned into permanent, silent loss of the
         # session. Deciding not to post is terminal; failing to post is not.
         if len(hr) < MIN_HR_SECONDS:
-            bad, note = gate_note(eid, ex, hr)
-            if bad: errlog.err(note)
-            else:   print(note)
+            print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins))
             seen.add(eid); continue
-        # The freshness gate is a COLD-START filter: its job is to keep the 90-day back-catalogue
-        # out of the DM, and a session we have already tried to post is not back-catalogue. It used
-        # to be re-evaluated on every retry, so a post that kept failing was marked handled at
-        # upload_time + 6 h and dropped for good — emitting only the same "stored (backfill)" line
-        # a genuine history item prints, so the log could not tell loss from routine. On 2026-09-07
-        # an 11 h credential outage came within 40 s of losing a session that way (71 failed posts,
-        # deadline 19:00:41Z, the run that finally succeeded started 19:00:01Z).
-        waited_h = (time.time() - retry[eid]) / 3600.0 if eid in retry else None
-        if waited_h is None and upload_age_h(ex) > FRESH_WINDOW_H:
+        if upload_age_h(ex) > FRESH_WINDOW_H:
             print("polar: %s stored (backfill) — not posting" % eid)
             seen.add(eid); continue
-        if waited_h is not None and waited_h > RETRY_WINDOW_H:
-            # The only place a real session is abandoned unposted. It is an err because nothing
-            # else in the estate will ever say this workout got no read.
-            errlog.err("polar: %s GIVING UP after %.1f h of failed posts — raw HR is stored but no "
-                       "session read was ever sent for this workout" % (eid, waited_h))
-            seen.add(eid); retry.pop(eid, None); continue
         try:
-            cat = post_session(ex, hr); posted += 1
+            cat = post_session(ex, hr, wb); posted += 1
             print("polar: POSTED %s (%s, %s, %.0f min)" % (eid, ex.get("sport"), cat, mins))
-            seen.add(eid); retry.pop(eid, None)
+            seen.add(eid)
         except Exception as e:
-            # Left OUT of seen so the next run retries, and recorded in `retry` so the freshness
-            # gate above stops applying to it. The deadline this message quotes is now the real one.
-            retry.setdefault(eid, time.time())
-            errlog.err("polar: posting exercise %s failed — left unposted, retrying for another "
-                       "%.1f h" % (eid, RETRY_WINDOW_H - (time.time() - retry[eid]) / 3600.0), e)
-    save_seen(seen); save_retry(retry)
+            # Left OUT of seen so the next run retries. Note the retry is still subject to
+            # FRESH_WINDOW_H above, so a failure that outlives the window stops being postable —
+            # the raw data is kept either way, and this err is now the thing that says so.
+            errlog.err("polar: posting exercise %s failed — left unposted, will retry next run" % eid, e)
+    save_seen(seen)
     print("polar: done; posted %d" % posted)
 
 if __name__ == "__main__":
