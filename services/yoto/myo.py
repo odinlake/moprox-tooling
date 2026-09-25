@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Build or update one MYO playlist on the family's Yoto account from local audio files.
 
-    myo.py <playlist title> <file.mp3> [file.mp3 ...]
+    myo.py <playlist title> <file.mp3> [file.mp3 ...]   build/update from local audio
+    myo.py reorder <card> reverse                       reverse (no audio moves, ~0.5 s)
+    myo.py reorder <card> <title> [title ...]           named first, rest as-is
+    myo.py shuffle <card> [title ...]                   named first, rest shuffled
 
 One chapter per file, in the order given, titled from the file's ID3 title (falling back to the
 filename). Idempotent: the card id is remembered in yoto.env under YOTO_CARD_<slug>, and a later run
@@ -14,7 +17,7 @@ The flow is yoto.dev/myo/uploading-to-cards, verbatim: GET uploadUrl -> PUT the 
 Needs the user:content:manage scope (yoto.py auth). Linking the playlist to a physical MYO card is
 done once in the Yoto app; there is no API for that step.
 """
-import hashlib, json, os, re, sys, time, urllib.request, urllib.error
+import hashlib, json, os, random, re, sys, time, urllib.request, urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yoto
 from mutagen.id3 import ID3
@@ -61,7 +64,97 @@ def upload(path, tok):
     sys.exit("transcode timed out for " + path)
 
 
+def card_of(title_or_id, tok):
+    """Resolve a library entry by cardId, exact title, or case-insensitive substring."""
+    lib = req("GET", "/card/family/library", tok)
+    cards = lib.get("cards") or lib
+    rows = [(c.get("card") or c) for c in (cards.values() if isinstance(cards, dict) else cards)]
+    q = (title_or_id or "").strip().lower()
+    for r in rows:
+        if r.get("cardId") == title_or_id:
+            return r["cardId"]
+    for pred in (lambda t: t == q, lambda t: q and q in t):
+        for r in rows:
+            if pred((r.get("title") or "").lower()):
+                return r["cardId"]
+    sys.exit("no card matching %r; have: %s" % (title_or_id, [r.get("title") for r in rows]))
+
+
+def renumber(chapters):
+    """Chapter keys and overlayLabels are POSITIONAL. Reordering the list without rewriting them
+    leaves chapter 21 still calling itself 1, and the player's display follows the label, not the
+    position -- so this is not cosmetic."""
+    for i, ch in enumerate(chapters, 1):
+        ch["key"] = "%02d" % i
+        ch["overlayLabel"] = str(i)
+        for tr in ch.get("tracks") or []:
+            tr["overlayLabel"] = str(i)
+    return chapters
+
+
+def set_order(card_id, chapters, tok, title=None):
+    """POST a new chapter order. NO AUDIO MOVES: every track already carries its own
+    `trackUrl` (yoto:#<sha>), so the card is self-describing and this is pure metadata. Measured at
+    0.45 s for 21 chapters, against ~115 s to rebuild the same card from local files."""
+    d = req("GET", "/card/" + card_id, tok)
+    card = d.get("card") or d
+    chapters = renumber(chapters)
+    tot_d = sum(c.get("duration") or 0 for c in chapters)
+    tot_s = sum(c.get("fileSize") or 0 for c in chapters)
+    req("POST", "/content", tok, {
+        "cardId": card_id, "title": title or card.get("title"),
+        "content": {"chapters": chapters},
+        "metadata": {"media": {"duration": tot_d, "fileSize": tot_s,
+                               "readableFileSize": round(tot_s / 1024 / 1024, 1)}}})
+    return chapters
+
+
+def chapters_of(card_id, tok):
+    d = req("GET", "/card/" + card_id, tok)
+    return ((d.get("card") or d).get("content") or {}).get("chapters") or []
+
+
+def pick(chapters, wanted):
+    """Titles named by the caller, in the order named, then everything else. Matching is
+    case-insensitive substring on the chapter title, so "rymdskeppet" or "space" both land, and an
+    unmatched name is reported rather than silently dropped -- a kid asking for a story that is not
+    on the card should hear about it."""
+    rest, first, missed = list(chapters), [], []
+    for w in wanted:
+        q = (w or "").strip().lower()
+        hit = next((c for c in rest if q and q in (c.get("title") or "").lower()), None)
+        if hit is None:
+            missed.append(w)
+        else:
+            first.append(hit); rest.remove(hit)
+    return first, rest, missed
+
+
 def main():
+    # Fast paths that touch no audio. These exist because rebuilding a card from local files costs
+    # ~115 s for 21 chapters while reordering the same card costs 0.45 s, and a kids-facing agent
+    # asking for "shuffle but start with X" must not wait two minutes to make a sound.
+    if len(sys.argv) >= 3 and sys.argv[1] in ("reorder", "shuffle"):
+        mode, ident, wanted = sys.argv[1], sys.argv[2], sys.argv[3:]
+        tok = yoto.token()
+        cid = card_of(ident, tok)
+        chapters = chapters_of(cid, tok)
+        if mode == "reorder":
+            if wanted and wanted[0] == "reverse":
+                ordered, missed = list(reversed(chapters)), []
+            else:
+                first, rest, missed = pick(chapters, wanted)
+                ordered = first + rest          # named first, remainder left in its current order
+        else:
+            first, rest, missed = pick(chapters, wanted)
+            random.shuffle(rest)
+            ordered = first + rest
+        set_order(cid, ordered, tok)
+        print(json.dumps({"cardId": cid, "mode": mode, "chapters": len(ordered),
+                          "order": [c.get("title") for c in ordered],
+                          "not_found": missed}, ensure_ascii=False))
+        return
+
     if len(sys.argv) < 3:
         sys.exit(__doc__)
     title, files = sys.argv[1], sys.argv[2:]

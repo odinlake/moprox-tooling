@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Single stable command name so an agent can be allowlisted with just Bash(yoto:*) -- no paths, no
+# interpreter, no ~ expansion for the permission matcher to trip over (same trick as drive-put).
+#
+# Routes the content verbs to myo.py and the player verbs to yoto.py. Needs an interpreter with
+# mutagen (myo.py) and paho-mqtt (device control); the system python has neither and no pip.
+set -euo pipefail
+DIR=/home/mikael/projects/moprox-tooling/services/yoto
+for py in "$HOME/docindex/venv/bin/python" /usr/bin/python3; do
+  if [ -x "$py" ] && "$py" -c 'import paho.mqtt.client, mutagen' 2>/dev/null; then
+    case "${1:-}" in
+      reorder|shuffle|build) exec "$py" "$DIR/myo.py" "$@" ;;
+      *)                     exec "$py" "$DIR/yoto.py" "$@" ;;
+    esac
+  fi
+done
+echo "yoto: no python with paho-mqtt + mutagen (tried ~/docindex/venv, /usr/bin/python3)" >&2
+exit 1

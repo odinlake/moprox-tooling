@@ -17,6 +17,7 @@ AGENTS = {
     "valet":   HOME / "projects/private-data/agents/valet",
     "theming": HOME / "projects/private-data/agents/theming",
     "analyst": HOME / "projects/private-data/agents/analyst",   # loop agent (read-mostly)
+    "bard":    HOME / "projects/private-data/agents/bard",      # kids' Yoto entertainer
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -41,6 +42,7 @@ DEV_DENY = ",".join("Bash(%s)" % p for p in (
 TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
 DRIVE_TOOL = "Bash(drive-put:*)"        # ...plus the one-verb Drive uploader (services/drive/drive-put)
+YOTO_TOOL = "Bash(yoto:*)"              # the ONE verb bard may run: player + playlist, nothing else
 THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
 # theming pushes feature BRANCHES and opens PRs, but never bypasses protections: deny force-push +
 # direct master/main pushes, the dangerous `gh` verbs (merge a PR, delete/archive a repo), and the
@@ -92,6 +94,15 @@ AGENT_FLAGS = {
                 "--disallowedTools", THEMING_DENY,
                 "--mcp-config", str(AGENTS["theming"] / "mcp.json"), "--strict-mcp-config",
                 "--add-dir", str(THEMING_REPO), str(SHARED_MEM)],   # + theming-memory.md; variadic: keep last
+    # bard: the kids' Yoto entertainer. Almost every request is one command (play/stop/volume/
+    # shuffle/sleep), so it is configured for REFLEX, not deliberation: a fast model, and a persona
+    # that answers in one line and only slows down when something is genuinely unusual (operator,
+    # 2026-09-25). Its whole surface is the single `yoto` verb -- no free Bash, because nothing it
+    # does needs it and a children's speaker is not a place for improvisation.
+    "bard": ["--model", "sonnet",
+             "--permission-mode", "acceptEdits",
+             "--allowedTools", "Read,Grep,Glob,Edit,Write,%s,%s" % (YOTO_TOOL, CONVO_TOOL),
+             "--add-dir", str(SHARED_MEM)],   # bard-memory.md lives in the memory store; variadic: keep last
 }
 
 def _log_usage(agent, j):

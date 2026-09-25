@@ -142,7 +142,9 @@ def now_playing(link, wait=6):
     data/status names the chapter, so this is the ONLY way to check a chapter actually started.
     """
     link.msgs.clear()
-    link.send("events/request", None, wait=wait)
+    link.send("events/request", None, wait=wait,
+              until=lambda new: any(k == "events" and ("chapterKey" in m or "chapterTitle" in m)
+                                    for k, m in new))
     for kind, m in link.msgs:
         if kind == "events" and ("chapterTitle" in m or "chapterKey" in m):
             return {k: m.get(k) for k in ("cardId", "chapterKey", "chapterTitle", "trackKey",
@@ -196,9 +198,29 @@ class Link:
         self.c.loop_stop()
         self.c.disconnect()
 
-    def send(self, action, payload=None, wait=6):
+    def send(self, action, payload=None, wait=6, until=None):
+        """Publish, then return as soon as the reply lands -- `wait` is now a CEILING, not a sleep.
+
+        It used to be a flat `time.sleep(wait)`, so every call cost its full budget even though the
+        round trip is under a second (measured on a v3e: 0.10 s to connect+subscribe, 0.78-0.88 s to
+        a card/start ack). A verified play cost ~12 s of which ~11.5 s was this sleep. A fixed sleep
+        is also the LESS reliable choice, because it cannot tell "no reply yet" from "no reply
+        coming" -- it just hopes the budget was generous enough.
+
+        `until` is a predicate over the messages that arrived since publishing; the default waits
+        for anything on /response. Messages are appended, never cleared, so a caller that wants a
+        clean slate still clears first.
+        """
+        base = len(self.msgs)
+        if until is None:
+            until = lambda new: any(kind == "response" for kind, _ in new)
         self.c.publish(f"device/{self.dev}/command/{action}", json.dumps(payload) if payload else "", 0)
-        time.sleep(wait)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            new = self.msgs[base:]
+            if new and until(new):
+                break
+            time.sleep(0.01)
         return self.msgs
 
     def state(self, wait=8):
