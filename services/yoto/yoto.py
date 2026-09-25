@@ -157,12 +157,55 @@ class Link:
         return out
 
 
+# All scopes the estate needs, requested together (trap 3 above). user:content:manage is what creating
+# and updating MYO playlists requires (yoto.dev/authentication/scopes); it was not in the first grant.
+SCOPES = ("family:devices:control family:devices:view family:library:view "
+          "user:content:manage offline_access")
+AUTH_URL = "https://login.yotoplay.com/authorize"
+REDIRECT = "http://localhost:8765/callback"
+
+
+def auth(pasted=None):
+    """Re-consent with the full scope set. Two calls: `auth` prints the link and stashes the PKCE
+    verifier; `auth <callback url>` exchanges the single-use code and persists BOTH tokens.
+
+    Headless auth is not available for a dashboard client (trap 2), so a person opens the link,
+    approves, and pastes back the localhost URL the browser lands on -- the page will not load,
+    the URL bar is what matters."""
+    import hashlib, secrets
+    e = env()
+    if not pasted:
+        ver = base64.urlsafe_b64encode(secrets.token_bytes(48)).decode().rstrip("=")
+        chal = base64.urlsafe_b64encode(hashlib.sha256(ver.encode()).digest()).decode().rstrip("=")
+        _put("YOTO_PKCE_VERIFIER", ver)
+        q = urllib.parse.urlencode({"audience": "https://api.yotoplay.com", "scope": SCOPES,
+                                    "response_type": "code", "client_id": e["YOTO_CLIENT_ID"],
+                                    "code_challenge": chal, "code_challenge_method": "S256",
+                                    "redirect_uri": REDIRECT})
+        print(AUTH_URL + "?" + q)
+        return
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(pasted).query).get("code", [None])[0]
+    if not code:
+        sys.exit("no ?code= in that URL")
+    body = urllib.parse.urlencode({"grant_type": "authorization_code", "client_id": e["YOTO_CLIENT_ID"],
+                                   "code_verifier": e["YOTO_PKCE_VERIFIER"], "code": code,
+                                   "redirect_uri": REDIRECT}).encode()
+    r = urllib.request.urlopen(urllib.request.Request(TOKEN_URL, body, {"Content-Type": "application/x-www-form-urlencoded"}), timeout=30)
+    j = json.loads(r.read())
+    _put("YOTO_ACCESS_TOKEN", j["access_token"])
+    _put("YOTO_ACCESS_EXPIRES", str(int(time.time()) + int(j.get("expires_in", 86400)) - 60))
+    _put("YOTO_REFRESH_TOKEN", j["refresh_token"])          # rotates: persist or brick (trap 1)
+    print("ok: tokens stored; scope granted:", j.get("scope"))
+
+
 def main():
     a = sys.argv[1:] or ["status"]
     cmd, rest = a[0], a[1:]
     tok = token()
     dev = env()["YOTO_DEVICE_ID"]
 
+    if cmd == "auth":
+        auth(sys.argv[2] if len(sys.argv) > 2 else None); return
     if cmd == "devices":
         print(json.dumps(get("/device-v2/devices/mine", tok), indent=1)); return
     if cmd == "library":
