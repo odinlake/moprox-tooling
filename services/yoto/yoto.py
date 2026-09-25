@@ -27,7 +27,7 @@ THREE THINGS THAT COST AN EVENING TO LEARN, DO NOT REDISCOVER THEM:
    offline_access`. The API names the missing one in its 403 body, which is the only reason this was
    debuggable.
 """
-import base64, json, math, os, ssl, sys, threading, time, urllib.parse, urllib.request
+import base64, contextlib, fcntl, json, math, os, ssl, sys, threading, time, urllib.parse, urllib.request
 
 ENV = os.path.expanduser("~/.config/claude-dev/yoto.env")
 API = "https://api.yotoplay.com"
@@ -45,11 +45,40 @@ def env():
     return d
 
 
-def _put(key, val):
+# yoto.env is shared by every dev session on this box, so both reads and writes have to be
+# serialised. Without this, two sessions refresh at the same instant, spend the SAME refresh token,
+# and Auth0's rotation reuse-detection revokes the whole token family -- bricking both and forcing a
+# browser re-consent. That is the failure this file kept hitting. The lock is a separate .lock file
+# so the env itself can be replaced atomically underneath it.
+LOCK = ENV + ".lock"
+
+
+@contextlib.contextmanager
+def _locked():
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _write(key, val):
+    """Atomic single-key update. CALLER MUST HOLD THE LOCK -- flock is per-fd, so a nested acquire
+    from the same process would deadlock, which is why this and _put are separate."""
     lines = [l for l in open(ENV).read().splitlines() if not l.startswith(key + "=")]
     lines.append(f"{key}={val}")
-    open(ENV, "w").write("\n".join(lines) + "\n")
-    os.chmod(ENV, 0o600)
+    tmp = ENV + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ENV)          # atomic: a reader never sees a truncated env
+
+
+def _put(key, val):
+    with _locked():
+        _write(key, val)
 
 
 def token():
@@ -60,9 +89,10 @@ def token():
     how this broke an hour after it was written: an ad-hoc calibration script refreshed, kept only the
     access token, and the stored refresh token died with `invalid_grant`. Never refresh outside here.
     """
-    e = env()
-    cur = e.get("YOTO_ACCESS_TOKEN")
-    if cur:
+    def _usable(e):
+        cur = e.get("YOTO_ACCESS_TOKEN")
+        if not cur:
+            return None
         try:
             b = cur.split(".")[1]
             b += "=" * (-len(b) % 4)
@@ -70,15 +100,32 @@ def token():
                 return cur
         except Exception:
             pass
-    body = urllib.parse.urlencode({"grant_type": "refresh_token", "client_id": e["YOTO_CLIENT_ID"],
-                                   "refresh_token": e["YOTO_REFRESH_TOKEN"]}).encode()
-    r = urllib.request.urlopen(urllib.request.Request(
-        TOKEN_URL, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=45)
-    t = json.loads(r.read())
-    if t.get("refresh_token"):
-        _put("YOTO_REFRESH_TOKEN", t["refresh_token"])   # rotation: persist or be locked out
-    _put("YOTO_ACCESS_TOKEN", t["access_token"])
-    return t["access_token"]
+        return None
+
+    hit = _usable(env())
+    if hit:
+        return hit
+    # The whole refresh is one critical section, and the check is REPEATED inside it. Two sessions
+    # arriving together would otherwise both find the token stale and both spend the same refresh
+    # token; the second replay trips Auth0's reuse detection, which revokes the entire family and
+    # forces a browser re-consent. Re-reading under the lock means the loser simply picks up the
+    # token the winner just wrote.
+    with _locked():
+        e = env()
+        hit = _usable(e)
+        if hit:
+            return hit
+        body = urllib.parse.urlencode({"grant_type": "refresh_token", "client_id": e["YOTO_CLIENT_ID"],
+                                       "refresh_token": e["YOTO_REFRESH_TOKEN"]}).encode()
+        r = urllib.request.urlopen(urllib.request.Request(
+            TOKEN_URL, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=45)
+        t = json.loads(r.read())
+        # Persist the ROTATED refresh token FIRST: if the process dies between the two writes, a
+        # stale refresh token on disk is unrecoverable, whereas a stale access token just refreshes.
+        if t.get("refresh_token"):
+            _write("YOTO_REFRESH_TOKEN", t["refresh_token"])   # rotation: persist or be locked out
+        _write("YOTO_ACCESS_TOKEN", t["access_token"])
+        return t["access_token"]
 
 
 def get(path, tok):
