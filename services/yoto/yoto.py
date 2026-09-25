@@ -201,11 +201,11 @@ def auth(pasted=None):
 def main():
     a = sys.argv[1:] or ["status"]
     cmd, rest = a[0], a[1:]
+    if cmd == "auth":                      # before token(): re-consent is what you run when token() cannot
+        auth(sys.argv[2] if len(sys.argv) > 2 else None); return
     tok = token()
     dev = env()["YOTO_DEVICE_ID"]
 
-    if cmd == "auth":
-        auth(sys.argv[2] if len(sys.argv) > 2 else None); return
     if cmd == "devices":
         print(json.dumps(get("/device-v2/devices/mine", tok), indent=1)); return
     if cmd == "library":
