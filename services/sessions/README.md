@@ -9,8 +9,9 @@ Four instances:
 
 | instance | appears as | working directory | what it is |
 |---|---|---|---|
-| `one` `two` `three` | moprox dev one/two/three | `/home/mikael` | the shared-context dev sessions ([`../memory/`](../memory/)) |
-| `coach` | moprox coach | `private-data/agents/coach` | odinlake-ai-coach, on Mikael's health and training |
+| `one` `two` `three` | moprox dev ONE/TWO/THREE | `/home/mikael` | the shared-context dev sessions ([`../memory/`](../memory/)) |
+| `coach` | moprox COACH | `private-data/agents/coach` | odinlake-ai-coach, on Mikael's health and training |
+| `bard` | moprox BARD | `private-data/agents/bard` | the kids' Yoto entertainer |
 
 **Status: LIVE on claude-dev since 2026-06-29** (the dev trio), **coach since 2026-09-08.**
 
@@ -32,7 +33,9 @@ systemctl enable --now moprox-dev-cycle@one.timer moprox-dev-cycle@two.timer \
   moprox-dev-cycle@three.timer moprox-dev-cycle@coach.timer
 systemctl enable --now moprox-creds-warn.timer
 ```
-They'll appear in the Claude app as **moprox dev one/two/three** and **moprox coach**. (Both helpers are required — the
+They'll appear in the Claude app as **moprox dev ONE/TWO/THREE**, **moprox COACH** and **moprox BARD**.
+Naming rule (operator, 2026-09-26): agent names are lowercase everywhere else; the REMOTE name uppercases
+the distinguishing token, so the instance for the dev trio and the role itself for a single-instance agent. (Both helpers are required — the
 unit's `ExecStartPre` calls them; see "Boot & trust robustness" below.)
 
 ## Restart keeps the thread; ask explicitly for a fresh one

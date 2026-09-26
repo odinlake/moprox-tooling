@@ -1,0 +1,13 @@
+# Recycle the moprox BARD session weekly, Saturday 03:00. one=Tue, two=Wed, three=Thu, coach=Fri,
+# bard=Sat, so only one registration rotates per day and no two sessions ever restart together.
+# Activates moprox-dev-cycle@bard.service.
+[Unit]
+Description=Weekly recycle of moprox BARD (Sat 03:00)
+
+[Timer]
+OnCalendar=Sat *-*-* 03:00:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -33,7 +33,7 @@ argv() { tr '\0' '\n' < "$tmp/argv"; }
 
 rc=$(run coach /home/mikael/projects/private-data/agents/coach)
 ok "$([ "$rc" = 0 ] && echo 1 || echo 0)" "coach launches (rc=$rc)"
-ok "$(argv | grep -qx 'moprox coach' && echo 1 || echo 0)" "coach registers as 'moprox coach'"
+ok "$(argv | grep -qx 'moprox COACH' && echo 1 || echo 0)" "coach registers as 'moprox COACH'"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 1 || echo 0)" "coach gets the coach system prompt"
 ok "$(argv | grep -q 'hints.jsonl' && echo 1 || echo 0)" "...including the health-hints directive"
 ok "$(argv | grep -q 'FRESHNESS' && echo 1 || echo 0)" "...and the freshness rule (2026-09-08 stale-lane call)"
@@ -41,8 +41,15 @@ ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "no pointer yet, s
 ok "$(grep -q 'fresh session' "$tmp/out" && echo 1 || echo 0)" "and it says so"
 
 rm -rf "$tmp/state"
+rc=$(run bard /home/mikael/projects/private-data/agents/bard)
+ok "$([ "$rc" = 0 ] && echo 1 || echo 0)" "bard launches (rc=$rc)"
+ok "$(argv | grep -qx 'moprox BARD' && echo 1 || echo 0)" "bard registers as 'moprox BARD'"
+ok "$(argv | grep -q 'yoto nowplaying' && echo 1 || echo 0)" "bard is told to re-check state, never recall it"
+ok "$(argv | grep -q 'odinlake-ai-coach' && echo 0 || echo 1)" "and does not get the coach prompt"
+
+rm -rf "$tmp/state"
 rc=$(run one /home/mikael)
-ok "$(argv | grep -qx 'moprox dev one' && echo 1 || echo 0)" "dev one is unchanged: 'moprox dev one'"
+ok "$(argv | grep -qx 'moprox dev ONE' && echo 1 || echo 0)" "dev one registers as 'moprox dev ONE'"
 ok "$(argv | grep -q 'AGENT_ID=one' && echo 1 || echo 0)" "dev one still gets the memory protocol"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 0 || echo 1)" "and not the coach prompt"
 
