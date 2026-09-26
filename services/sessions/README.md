@@ -20,6 +20,7 @@ Four instances:
 install -m 0755 services/sessions/ensure-folder-trust.py /usr/local/bin/moprox-ensure-folder-trust
 install -m 0755 services/sessions/creds-check.py         /usr/local/bin/moprox-creds-check
 install -m 0755 services/sessions/dev-launch.sh           /usr/local/bin/moprox-dev-launch
+install -m 0755 services/sessions/dev-handoff.py          /usr/local/bin/moprox-dev-handoff
 install -m 0755 services/sessions/dev-cycle.sh           /usr/local/bin/moprox-dev-cycle
 cp services/sessions/moprox-dev@.service services/sessions/moprox-dev-cycle@* \
    services/sessions/moprox-creds-warn.* /etc/systemd/system/

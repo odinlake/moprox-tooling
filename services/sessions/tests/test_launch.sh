@@ -79,6 +79,13 @@ if [ -n "$real" ]; then
     ok "$(argv | grep -qx -- '--fork-session' && echo 1 || echo 0)" "a changed remote name FORKS instead of resuming"
     ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "under a new session id"
     ok "$([ "$(cat "$tmp/state/coach.rcname")" = "moprox COACH" ] && echo 1 || echo 0)" "and the stamp is updated to the new name"
+    # A fresh start after a rollover carries a HANDOFF distilled from the old transcript (2026-09-26).
+    printf '%s\n' "$sid" > "$tmp/state/coach.session"
+    printf '#!/bin/sh\necho "HANDOFF-STUB read $(basename "$1")" > "$2"\n' > "$tmp/handoff"; chmod +x "$tmp/handoff"
+    rc=$(MOPROX_DEV_MAX_TRANSCRIPT_BYTES=1 MOPROX_DEV_HANDOFF_BIN="$tmp/handoff" run coach /home/mikael/projects/private-data/agents/coach)
+    ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "over the cap: starts FRESH"
+    ok "$(argv | grep -q 'HANDOFF-STUB read' && echo 1 || echo 0)" "and submits the distilled handoff as its first prompt"
+    ok "$(argv | grep -q 'rolled over: transcript' && echo 1 || echo 0)" "naming why the thread rolled over"
   else
     echo "SKIP  resume case: newest coach transcript is $((size/1024)) KiB, over the 5 MiB cap"
   fi

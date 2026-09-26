@@ -77,6 +77,12 @@ MCP_ARGS=()
 # nothing to recap). Set MOPROX_DEV_SUMMARY_PROMPT='' to turn it off.
 SUMMARY_PROMPT="${MOPROX_DEV_SUMMARY_PROMPT-This session just reconnected after a restart. Without running any tools, give a 3-6 bullet recap of what we were working on and exactly where we left off, ending with the single most useful next step. Be terse. If the thread has no substantive history, reply only: (reconnected, no prior work in this thread).}"
 SUMMARY_MIN_GAP="${MOPROX_DEV_SUMMARY_MIN_GAP:-1800}"   # seconds; suppresses recaps during a restart loop
+# A FRESH start after a rollover (transcript over the cap, or idle too long) gets the same courtesy as a
+# resume: the old transcript is distilled into a handoff by dev-handoff.py and submitted as the first
+# prompt, so the new session begins where the old one stopped instead of with nothing (operator, 2026-09-26).
+HANDOFF="${MOPROX_DEV_HANDOFF:-1}"
+HANDOFF_BIN="${MOPROX_DEV_HANDOFF_BIN:-/usr/local/bin/moprox-dev-handoff}"
+HANDOFF_FILE="$STATE_DIR/$ID.handoff.md"
 
 # Resume caps. THE SIZE CAP IS A HARD PROTOCOL LIMIT, NOT A COST TUNABLE — do not raise it.
 # Remote-control session creation POSTs the ENTIRE transcript in the request body (`events:`), so large
@@ -198,8 +204,26 @@ if [ "$resume" = 1 ]; then
   exit "$rc"
 fi
 
+old_sid="$sid"; old_tx="${tx:-}"
 sid=$(uuidgen)
 say "fresh session $sid ($reason)"
 printf '%s\n' "$sid" > "$STATE"
 printf '%s\n' "$RC_NAME" > "$RCNAME_STAMP"
-exec "$CLAUDE" --remote-control "$RC_NAME" "${MCP_ARGS[@]}" --session-id "$sid" --append-system-prompt "$PROMPT"
+set --
+if [ "$HANDOFF" = 1 ] && [ -n "$old_tx" ] && [ -s "$old_tx" ] && [ -x "$HANDOFF_BIN" ]; then
+  # Same stamp as the resume recap: a crash loop must not pay for a summariser run every few seconds.
+  if [ -z "$(find "$SUMMARY_STAMP" -newermt "-$SUMMARY_MIN_GAP seconds" -print -quit 2>/dev/null)" ]; then
+    touch "$SUMMARY_STAMP"
+    say "distilling the rolled-over transcript ($old_sid) into $HANDOFF_FILE"
+    CLAUDE_BIN="$CLAUDE" "$HANDOFF_BIN" "$old_tx" "$HANDOFF_FILE" || say "handoff distiller failed; starting without one"
+  else
+    say "reusing the existing handoff (a recap or handoff was issued less than $SUMMARY_MIN_GAP s ago)"
+  fi
+  if [ -s "$HANDOFF_FILE" ]; then
+    set -- "Your previous thread ($old_sid) rolled over: $reason. This is a fresh session, and the HANDOFF below was distilled from that thread's transcript. Read it, give the operator a 3-6 bullet recap of where things stand ending with the single most useful next step, then continue from there. Do not treat it as complete: verify anything you act on.
+
+---- HANDOFF ----
+$(cat "$HANDOFF_FILE")"
+  fi
+fi
+exec "$CLAUDE" --remote-control "$RC_NAME" "${MCP_ARGS[@]}" --session-id "$sid" --append-system-prompt "$PROMPT" "$@"
