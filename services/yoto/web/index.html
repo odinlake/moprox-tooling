@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fff7ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1712" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Yoto">
+<link rel="icon" href="icon.svg">
+<title>Yoto</title>
+<style>
+:root {
+  --bg: #fff7ec; --surface: #ffffff; --ink: #2a2118; --muted: #7a6c5d; --line: #eadcc8;
+  --accent: #1f7aff; --accent-ink: #ffffff; --play: #ff5a36; --play-ink: #ffffff;
+  --tile: #f3e6d3; --shadow: 0 1px 2px rgba(60,40,10,.08), 0 6px 18px rgba(60,40,10,.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
+    --accent: #4d95ff; --accent-ink: #ffffff; --play: #ff6a48; --play-ink: #ffffff;
+    --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
+  --accent: #4d95ff; --accent-ink: #ffffff; --play: #ff6a48; --play-ink: #ffffff;
+  --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body {
+  font: 16px/1.35 ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-height: 100dvh; overscroll-behavior-y: contain;
+}
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+
+header {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 4px) 8px 4px; background: var(--bg);
+  border-bottom: 1px solid transparent; transition: border-color .2s;
+}
+header.scrolled { border-bottom-color: var(--line); }
+header h1 { flex: 1; margin: 0; font-size: 19px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iconbtn { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; }
+.iconbtn:active { background: var(--tile); }
+.textbtn { padding: 8px 12px; border-radius: 10px; color: var(--accent); font-weight: 700; }
+.textbtn[hidden] { display: none; }
+
+main { padding: 2px 10px calc(env(safe-area-inset-bottom) + 140px); }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 600px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 900px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } main { max-width: 1100px; margin: 0 auto; } }
+
+.tile {
+  position: relative; display: block; width: 100%; aspect-ratio: 5 / 6; padding: 0;
+  border-radius: 16px; overflow: hidden; background: var(--tile); box-shadow: var(--shadow);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.tile:active { transform: scale(.97); }
+.tile img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.tile img.icon { object-fit: contain; image-rendering: pixelated; padding: 22% 22% 30%; }
+.tile .cap {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 8px; text-align: left;
+  font-size: 13px; font-weight: 700; color: #fff; line-height: 1.2;
+  background: linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0));
+}
+.tile .ph { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; font-weight: 800; font-size: 18px; text-align: center; color: var(--muted); }
+.tile.sel { box-shadow: 0 0 0 4px var(--accent), var(--shadow); }
+.tile.sel img { filter: brightness(.82); }
+.badge {
+  position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 800; font-size: 18px;
+  border: 3px solid rgba(255,255,255,.95); background: rgba(0,0,0,.18);
+  transition: transform .15s cubic-bezier(.3,1.6,.5,1), background .15s;
+}
+.tile.sel .badge { background: var(--accent); color: var(--accent-ink); transform: scale(1.08); }
+
+.list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (min-width: 600px) { .list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.list .tile { aspect-ratio: 1; }
+
+.bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--surface);
+  border-top: 1px solid var(--line); box-shadow: 0 -8px 24px rgba(0,0,0,.06);
+  padding: 8px 12px calc(env(safe-area-inset-bottom) + 8px);
+}
+.bar[hidden] { display: none; }
+.bar .inner { max-width: 1100px; margin: 0 auto; display: grid; gap: 8px; }
+.ctrls { display: flex; gap: 8px; align-items: stretch; }
+.ctrl { flex: 1 1 0; display: flex; align-items: center; justify-content: space-between; gap: 4px; background: var(--tile); border-radius: 14px; padding: 4px; min-width: 0; }
+.ctrl .lab { font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.ctrl .val { font-weight: 800; font-size: 17px; font-variant-numeric: tabular-nums; }
+.ctrl .mid { text-align: center; line-height: 1.1; min-width: 0; }
+.step { width: 38px; height: 38px; border-radius: 10px; font-size: 22px; font-weight: 800; background: var(--surface); flex: none; }
+.step:active { transform: scale(.94); }
+.rest { flex: 0 0 96px; padding: 0 8px; border-radius: 16px; background: var(--tile); font-size: 12px; font-weight: 700; line-height: 1.2; text-align: center; }
+.go { display: flex; gap: 8px; }
+.play {
+  flex: 1; height: 52px; border-radius: 16px; background: var(--play); color: var(--play-ink);
+  font-size: 19px; font-weight: 800; display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.play:disabled { opacity: .6; }
+.play:active:not(:disabled) { transform: scale(.98); }
+.stop { width: 52px; height: 52px; border-radius: 16px; background: var(--tile); font-size: 20px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 140px); transform: translate(-50%, 20px);
+  max-width: calc(100% - 32px); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 14px;
+  font-weight: 700; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 9;
+}
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+.msg { padding: 40px 8px; text-align: center; color: var(--muted); }
+.spin { width: 20px; height: 20px; border-radius: 50%; border: 3px solid rgba(255,255,255,.4); border-top-color: #fff; animation: r .8s linear infinite; }
+@keyframes r { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<header id="hdr">
+  <button class="iconbtn" id="back" aria-label="Back" hidden>‹</button>
+  <h1 id="title">Yoto</h1>
+  <button class="textbtn" id="clear" hidden>Clear</button>
+</header>
+<main id="main"><div class="msg">Loading…</div></main>
+
+<div class="bar" id="bar" hidden>
+  <div class="inner">
+    <div class="ctrls">
+      <div class="ctrl">
+        <button class="step" data-k="vol" data-d="-1" aria-label="Quieter">−</button>
+        <div class="mid"><div class="lab">Volume</div><div class="val" id="vol">6</div></div>
+        <button class="step" data-k="vol" data-d="1" aria-label="Louder">+</button>
+      </div>
+      <div class="ctrl">
+        <button class="step" data-k="sleep" data-d="-1" aria-label="Shorter sleep timer">−</button>
+        <div class="mid"><div class="lab">Sleep</div><div class="val" id="sleep">45m</div></div>
+        <button class="step" data-k="sleep" data-d="1" aria-label="Longer sleep timer">+</button>
+      </div>
+    </div>
+    <div class="go">
+      <button class="stop" id="stop" aria-label="Stop">■</button>
+      <button class="rest" id="rest" aria-label="What plays after the chosen stories"></button>
+      <button class="play" id="play">▶ Play</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var SLEEPS = [0, 15, 30, 45, 60, 90, 120];                // minutes; 0 = off
+  var RESTS = [["shuffle", "+ the rest<br>shuffled"], ["order", "+ the rest<br>in order"], ["none", "only<br>these"]];
+  var st = { list: null, pl: null, sel: [], vol: 6, sleepIx: 3, restIx: 0, busy: false };
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return "&#" + c.charCodeAt(0) + ";"; }); }
+  function short(t) { return t.replace(/^Här kommer\s+/i, "").replace(/^./, function (c) { return c.toUpperCase(); }); }
+  function api(path, body) {
+    return fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" }
+                            : { credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; }); });
+  }
+  var tt;
+  function toast(msg, ms) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(tt); tt = setTimeout(function () { t.classList.remove("on"); }, ms || 3500); }
+  function buzz() { try { navigator.vibrate && navigator.vibrate(8); } catch (e) {} }
+
+  function tileImg(c) {
+    if (!c.img) return '<div class="ph">' + esc(short(c.title)) + '</div>';
+    return '<img loading="lazy" alt="" src="' + esc(c.img) + '"' + (c.kind === "icon" ? ' class="icon"' : "") + '>';
+  }
+
+  // ---- playlists --------------------------------------------------------------------------------
+  function showList() {
+    st.pl = null; st.sel = [];
+    $("title").textContent = "Yoto"; $("back").hidden = true; $("clear").hidden = true; $("bar").hidden = true;
+    var m = $("main");
+    if (!st.list) { m.innerHTML = '<div class="msg">Loading…</div>'; }
+    (st.list ? Promise.resolve(st.list) : api("api/playlists")).then(function (list) {
+      st.list = list;
+      if (!list.length) { m.innerHTML = '<div class="msg">No playlists yet.</div>'; return; }
+      m.innerHTML = '<div class="list">' + list.map(function (p) {
+        return '<button class="tile" data-card="' + esc(p.cardId) + '"><div class="ph" data-cover="' + esc(p.cardId) + '">' + esc(p.title) + '</div><div class="cap">' + esc(p.title) + '</div></button>';
+      }).join("") + '</div>';
+      list.forEach(function (p) {                            // borrow the first chapter's picture
+        api("api/playlist/" + encodeURIComponent(p.cardId)).then(function (pl) {
+          var c = pl.chapters.filter(function (x) { return x.img; })[0];
+          var ph = m.querySelector('[data-cover="' + p.cardId + '"]');
+          if (c && ph) ph.outerHTML = tileImg(c);
+        }).catch(function () {});
+      });
+    }).catch(function (e) { m.innerHTML = '<div class="msg">Could not load playlists: ' + esc(e.message) + '</div>'; });
+  }
+
+  // ---- one playlist -----------------------------------------------------------------------------
+  function showPlaylist(cid) {
+    $("back").hidden = false; $("bar").hidden = false; st.sel = [];
+    var m = $("main"); m.innerHTML = '<div class="msg">Loading…</div>';
+    api("api/playlist/" + encodeURIComponent(cid)).then(function (pl) {
+      st.pl = pl; $("title").textContent = pl.title;
+      m.innerHTML = '<div class="grid">' + pl.chapters.map(function (c) {
+        return '<button class="tile" data-key="' + esc(c.key) + '" aria-pressed="false" aria-label="' + esc(c.title) + '">' +
+               tileImg(c) + '<span class="badge"></span><div class="cap">' + esc(short(c.title)) + '</div></button>';
+      }).join("") + '</div>';
+      paint();
+    }).catch(function (e) { m.innerHTML = '<div class="msg">Could not load: ' + esc(e.message) + '</div>'; });
+  }
+
+  function paint() {
+    document.querySelectorAll(".grid .tile").forEach(function (t) {
+      var i = st.sel.indexOf(t.getAttribute("data-key"));
+      t.classList.toggle("sel", i >= 0);
+      t.setAttribute("aria-pressed", i >= 0 ? "true" : "false");
+      t.querySelector(".badge").textContent = i >= 0 ? i + 1 : "";
+    });
+    var n = st.sel.length;
+    $("clear").hidden = !n;
+    $("vol").textContent = st.vol;
+    var s = SLEEPS[st.sleepIx]; $("sleep").textContent = s ? (s >= 60 && s % 60 === 0 ? s / 60 + "h" : s + "m") : "Off";
+    $("rest").innerHTML = RESTS[st.restIx][1];
+    $("rest").hidden = !n;
+    if (!st.busy) $("play").innerHTML = n ? "▶ Play " + n : "▶ Play all, shuffled";
+  }
+
+  $("main").addEventListener("click", function (e) {
+    var t = e.target.closest(".tile"); if (!t) return;
+    var card = t.getAttribute("data-card");
+    if (card) { location.hash = "#/" + card; return; }
+    var k = t.getAttribute("data-key"), i = st.sel.indexOf(k);
+    if (i >= 0) st.sel.splice(i, 1); else st.sel.push(k);    // untapping renumbers the rest, like Messenger
+    buzz(); paint();
+  });
+  $("clear").onclick = function () { st.sel = []; paint(); };
+  $("back").onclick = function () { location.hash = ""; };
+  document.querySelectorAll(".step").forEach(function (b) {
+    b.onclick = function () {
+      var d = +b.getAttribute("data-d");
+      if (b.getAttribute("data-k") === "vol") st.vol = Math.max(0, Math.min(8, st.vol + d));
+      else st.sleepIx = Math.max(0, Math.min(SLEEPS.length - 1, st.sleepIx + d));
+      buzz(); paint();
+    };
+  });
+  $("rest").onclick = function () { st.restIx = (st.restIx + 1) % RESTS.length; paint(); };
+
+  $("play").onclick = function () {
+    if (st.busy || !st.pl) return;
+    st.busy = true; $("play").disabled = true; $("play").innerHTML = '<span class="spin"></span> Starting…';
+    api("api/play", { card: st.pl.cardId, keys: st.sel, volume: st.vol, sleep: SLEEPS[st.sleepIx] * 60,
+                      rest: st.sel.length ? RESTS[st.restIx][0] : "shuffle" })
+      .then(function (r) {
+        var now = r.now || {};
+        if (now.playbackStatus === "playing" && now.chapterTitle) toast("Playing " + short(now.chapterTitle), 5000);
+        else toast("Sent. The player reports: " + (now.playbackStatus || "unknown"), 6000);
+        st.sel = [];
+      })
+      .catch(function (e) { toast("Did not start: " + e.message, 7000); })
+      .then(function () { st.busy = false; $("play").disabled = false; paint(); });
+  };
+  $("stop").onclick = function () {
+    buzz(); api("api/stop", {}).then(function () { toast("Stopped"); }).catch(function (e) { toast("Stop failed: " + e.message); });
+  };
+
+  window.addEventListener("scroll", function () { $("hdr").classList.toggle("scrolled", scrollY > 4); }, { passive: true });
+  function route() { var m = location.hash.match(/^#\/(.+)$/); if (m) showPlaylist(decodeURIComponent(m[1])); else showList(); scrollTo(0, 0); }
+  window.addEventListener("hashchange", route);
+  route();
+})();
+</script>
+</body>
+</html>

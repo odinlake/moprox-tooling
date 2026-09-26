@@ -6,6 +6,8 @@
     myo.py reorder <card> <title> [title ...]           named first, rest as-is
     myo.py shuffle <card> [title ...]                   named first, rest shuffled
     myo.py copy <card> <new title>                      a second card over the same audio (~1 s)
+    myo.py queue <card> [title ...] [--volume N] [--sleep S] [--rest shuffle|order|none]
+                                                        bard's play routine, on the card's twin
 
 One chapter per file, in the order given, titled from the file's ID3 title (falling back to the
 filename). Idempotent: the card id is remembered in yoto.env under YOTO_CARD_<slug>, and a later run
@@ -111,7 +113,10 @@ def set_order(card_id, chapters, tok, title=None):
 
 
 def chapters_of(card_id, tok):
-    d = req("GET", "/card/" + card_id, tok)
+    # /content, not /card: /card signs every trackUrl into a secure-media URL that expires within a
+    # day, whereas /content returns the stored yoto:#<sha> form. Anything read here gets POSTed back
+    # (copy, reorder), so it must be the permanent form.
+    d = req("GET", "/content/" + card_id, tok)
     return ((d.get("card") or d).get("content") or {}).get("chapters") or []
 
 
@@ -123,7 +128,13 @@ def pick(chapters, wanted):
     rest, first, missed = list(chapters), [], []
     for w in wanted:
         q = (w or "").strip().lower()
-        hit = next((c for c in rest if q and q in (c.get("title") or "").lower()), None)
+        # Exact title or chapter key, then whole word, THEN substring: "flygplanet" is a substring of
+        # "Här kommer brandflygplanet", which sits earlier on the card, so substring-first played
+        # the wrong book.
+        word = re.compile(r"(?<!\w)" + re.escape(q) + r"(?!\w)") if q else None
+        hit = next((c for c in rest if q and q in ((c.get("title") or "").lower(), c.get("key"))), None) \
+            or next((c for c in rest if word and word.search((c.get("title") or "").lower())), None) \
+            or next((c for c in rest if q and q in (c.get("title") or "").lower()), None)
         if hit is None:
             missed.append(w)
         else:
@@ -156,7 +167,72 @@ def copy(src, title, tok):
     return new, len(chapters)
 
 
+def twin_of(cid, tok):
+    """The card that playback is reordered on, never the card itself.
+
+    Reordering renumbers every chapter, and a physical MYO card linked to a playlist shows those
+    numbers, so a playlist a child knows is never reordered. Its twin "<title> (shuffle)" is, and
+    the twin is REWRITTEN from the source's chapters on every queue, so books added to the source
+    appear in the twin without anyone running copy. The mapping lives in yoto.env as
+    YOTO_TWIN_<cid>; a card that is itself a twin plays as itself."""
+    e = yoto.env()
+    if cid in {v for k, v in e.items() if k.startswith("YOTO_TWIN_")}:
+        return cid, cid
+    twin = e.get("YOTO_TWIN_" + cid)
+    if not twin:
+        d = req("GET", "/content/" + cid, tok)
+        twin, _ = copy(cid, (d.get("card") or d).get("title", cid).rstrip() + " (shuffle)", tok)
+        yoto._put("YOTO_TWIN_" + cid, twin)
+    return cid, twin
+
+
+def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
+    """Bard's play routine, once, for bard and the web picker alike.
+
+    `wanted` (titles or chapter keys) play first in the order given; `rest` is "shuffle", "order"
+    or "none" for what follows them. Order is set on the twin (0.5 s, no audio moves), then one
+    MQTT session sets volume BEFORE starting (a quiet request must never start loud), starts at
+    chapter 01 with secondsIn so it is a start and not a resume, sets the sleep timer AFTER the
+    start so it never delays the sound, and returns what the device says is actually playing.
+    volume=None leaves the volume alone; sleep=0 disables the timer. dry=True resolves and orders
+    but neither writes the card nor touches the player."""
+    tok = yoto.token()
+    src, twin = twin_of(card_of(ident, tok), tok)
+    chapters = chapters_of(src, tok)
+    first, others, missed = pick(chapters, list(wanted))
+    if rest == "shuffle":
+        random.shuffle(others)
+    elif rest == "none":
+        others = []
+    if not first and not others:
+        sys.exit("nothing to play: no chapter matched %r" % (list(wanted),))
+    if dry:
+        return {"source": src, "cardId": twin, "order": [c.get("title") for c in first + others],
+                "not_found": missed, "volume": volume, "sleep": sleep, "dry": True}
+    ordered = set_order(twin, first + others, tok)
+    with yoto.Link(tok, yoto.env()["YOTO_DEVICE_ID"]) as link:
+        if volume is not None:
+            link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
+        link.send("card/start", {"uri": "https://yoto.io/" + twin, "chapterKey": "01",
+                                 "trackKey": "01", "secondsIn": 0}, wait=6)
+        if sleep is not None:
+            link.send("sleep-timer/set", {"seconds": int(sleep)})
+        now = yoto.now_playing(link)
+    return {"source": src, "cardId": twin, "order": [c.get("title") for c in ordered],
+            "not_found": missed, "volume": volume, "sleep": sleep, "now": now}
+
+
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "queue":
+        import argparse
+        ap = argparse.ArgumentParser(prog="yoto queue")
+        ap.add_argument("card"); ap.add_argument("titles", nargs="*")
+        ap.add_argument("--volume", type=int); ap.add_argument("--sleep", type=int, default=2700)
+        ap.add_argument("--rest", choices=("shuffle", "order", "none"), default="shuffle")
+        ap.add_argument("--dry", action="store_true", help="resolve and order only; touch nothing")
+        a = ap.parse_args(sys.argv[2:])
+        print(json.dumps(queue(a.card, a.titles, a.volume, a.sleep, a.rest, a.dry), ensure_ascii=False))
+        return
     # Fast paths that touch no audio. These exist because rebuilding a card from local files costs
     # ~115 s for 21 chapters while reordering the same card costs 0.45 s, and a kids-facing agent
     # asking for "shuffle but start with X" must not wait two minutes to make a sound.

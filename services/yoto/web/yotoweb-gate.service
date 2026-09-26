@@ -1,0 +1,15 @@
+# Re-apply the yoto-web ingress gate at boot. yoto-web.service Requires= this.
+# Source of truth: moprox-tooling/services/yoto/web.
+[Unit]
+Description=yoto-web ingress gate (nftables) -- web box only
+After=nftables.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/nftables-yotoweb.conf
+ExecReload=/usr/sbin/nft -f /etc/nftables-yotoweb.conf
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

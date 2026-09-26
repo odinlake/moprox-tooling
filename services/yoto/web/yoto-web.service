@@ -1,0 +1,25 @@
+# mo.lan/yoto -- the tap-to-queue Yoto picker. Source of truth: moprox-tooling/services/yoto/web
+# (install.sh). Runs from the production clone, as mikael, because yoto.env (the rotating Yoto
+# credential, serialised by tokenlock) and the covers live in mikael's home.
+[Unit]
+Description=yoto-web -- Yoto playlist picker (mo.lan/yoto)
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/yoto/web
+# Requires, not just After: the gate must be up before the port listens, or every host on the agent
+# subnet could start the children's speaker.
+Requires=yotoweb-gate.service
+After=yotoweb-gate.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=YOTO_WEB_PORT=8030
+Environment=PYTHONUNBUFFERED=1
+# The docindex venv is the one interpreter here with paho-mqtt, mutagen and Pillow (see the yoto verb).
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/yoto/web/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
