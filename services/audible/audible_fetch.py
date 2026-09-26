@@ -30,6 +30,9 @@ from datetime import datetime, timezone
 
 import audible
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+from tokenlock import token_lock
+
 AUTH_FILE = pathlib.Path(os.environ.get(
     "AUDIBLE_DIR", pathlib.Path.home() / ".config/claude-dev/audible")) / "auth.json"
 OUT = pathlib.Path.home() / "projects/private-data/audible"
@@ -136,14 +139,17 @@ def main():
     if not AUTH_FILE.exists():
         sys.exit(f"no device registration at {AUTH_FILE} — run audible_bootstrap.py once, interactively")
 
-    auth = audible.Authenticator.from_file(AUTH_FILE)
     # Cheap and idempotent: the library refreshes only when the 60-minute access token has expired.
-    try:
-        auth.refresh_access_token()
-        auth.to_file(AUTH_FILE, encryption=False)     # persist the rotated token
-    except Exception as exc:                          # noqa: BLE001
-        print(f"  ! token refresh failed ({type(exc).__name__}: {exc}) — trying the stored token",
-              flush=True)
+    # Under tokenlock and re-read inside it, so an interactive run racing the timer cannot replay a
+    # refresh token the other one just spent.
+    with token_lock(AUTH_FILE):
+        auth = audible.Authenticator.from_file(AUTH_FILE)
+        try:
+            auth.refresh_access_token()
+            auth.to_file(AUTH_FILE, encryption=False)     # persist the rotated token
+        except Exception as exc:                          # noqa: BLE001
+            print(f"  ! token refresh failed ({type(exc).__name__}: {exc}) — trying the stored token",
+                  flush=True)
 
     # The client defaults to a 10s timeout, which a metadata-heavy page blows straight through —
     # the first live run died on exactly that, and the error ("API request timed out, please be

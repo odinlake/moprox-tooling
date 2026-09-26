@@ -42,6 +42,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import errlog
+from tokenlock import token_lock, write_atomic
 
 ENV    = Path.home() / ".config/claude-dev/ultrahuman.env"
 TOKEN  = Path.home() / ".config/claude-dev/ultrahuman-partner-token.json"
@@ -76,17 +77,25 @@ def access_token():
     every refresh, so a stale copy is worthless. Write it back before returning, and 0600 it —
     it is a bearer credential for health data.
     """
+    def fresh(tok):
+        return time.time() < tok["created_at"] + tok["expires_in"] - SKEW_S
+
     tok = json.loads(TOKEN.read_text())
-    expires_at = tok["created_at"] + tok["expires_in"]
-    if time.time() < expires_at - SKEW_S:
+    if fresh(tok):
         return tok["access_token"]
-    e = env()
-    r = requests.post(TOKEN_URL, timeout=30, data={
-        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"],
-        "client_id": e["UH_CLIENT_ID"], "client_secret": e["UH_CLIENT_SECRET"]})
-    r.raise_for_status()
-    tok = r.json()
-    TOKEN.write_text(json.dumps(tok)); TOKEN.chmod(0o600)
+    # Rotation makes a concurrent refresh fatal (the second one replays a spent token), so the
+    # refresh is one critical section with the staleness check repeated inside it -- see tokenlock.
+    with token_lock(TOKEN):
+        tok = json.loads(TOKEN.read_text())
+        if fresh(tok):
+            return tok["access_token"]
+        e = env()
+        r = requests.post(TOKEN_URL, timeout=30, data={
+            "grant_type": "refresh_token", "refresh_token": tok["refresh_token"],
+            "client_id": e["UH_CLIENT_ID"], "client_secret": e["UH_CLIENT_SECRET"]})
+        r.raise_for_status()
+        tok = r.json()
+        write_atomic(TOKEN, json.dumps(tok))
     print("refreshed access token", file=sys.stderr)
     return tok["access_token"]
 

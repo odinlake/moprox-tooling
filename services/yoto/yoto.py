@@ -27,7 +27,10 @@ THREE THINGS THAT COST AN EVENING TO LEARN, DO NOT REDISCOVER THEM:
    offline_access`. The API names the missing one in its 403 body, which is the only reason this was
    debuggable.
 """
-import base64, contextlib, fcntl, json, math, os, ssl, sys, threading, time, urllib.parse, urllib.request
+import base64, json, math, os, ssl, sys, threading, time, urllib.parse, urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+from tokenlock import token_lock, write_atomic
 
 ENV = os.path.expanduser("~/.config/claude-dev/yoto.env")
 API = "https://api.yotoplay.com"
@@ -45,23 +48,11 @@ def env():
     return d
 
 
-# yoto.env is shared by every dev session on this box, so both reads and writes have to be
-# serialised. Without this, two sessions refresh at the same instant, spend the SAME refresh token,
-# and Auth0's rotation reuse-detection revokes the whole token family -- bricking both and forcing a
-# browser re-consent. That is the failure this file kept hitting. The lock is a separate .lock file
-# so the env itself can be replaced atomically underneath it.
-LOCK = ENV + ".lock"
-
-
-@contextlib.contextmanager
+# yoto.env is shared by every dev session on this box, so the token refresh is serialised through
+# tokenlock (services/lib) -- see its docstring for the failure it prevents. The lock is a separate
+# yoto.env.lock so the env itself can be replaced atomically underneath it.
 def _locked():
-    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+    return token_lock(ENV)
 
 
 def _write(key, val):
@@ -69,11 +60,7 @@ def _write(key, val):
     from the same process would deadlock, which is why this and _put are separate."""
     lines = [l for l in open(ENV).read().splitlines() if not l.startswith(key + "=")]
     lines.append(f"{key}={val}")
-    tmp = ENV + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, ENV)          # atomic: a reader never sees a truncated env
+    write_atomic(ENV, "\n".join(lines) + "\n")     # a reader never sees a truncated env
 
 
 def _put(key, val):
