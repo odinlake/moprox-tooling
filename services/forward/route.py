@@ -14,7 +14,7 @@ directly about routing / the agent setup.
 """
 import json, re, sys, time
 from pathlib import Path
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents"))
 from run import run_agent
 import tg, convo, tg_files
 

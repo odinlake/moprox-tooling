@@ -15,10 +15,14 @@ FRESH_WINDOW_H are actually posted — so today's workout posts while 90 days do
 """
 import calendar, json, re, sys, time, urllib.error, urllib.request
 from pathlib import Path
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/training"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/lib"))
+# Import from the tree THIS file runs from. These lines used to name ~/projects/moprox-tooling, the
+# shared DEVELOPMENT checkout, so production ran /opt's polar_fetch against month-old dev copies of
+# tg/run/convo/analysis. When 0815073 added `import wattbike` the dev tree did not have it yet, and
+# every run failed for four hours (2026-09-25 15:20-19:30 BST) until someone happened to pull there.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "training"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import errlog
 from run import run_agent
 import strap_health              # is the chest-strap battery going? (see its docstring)

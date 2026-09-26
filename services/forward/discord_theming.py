@@ -25,8 +25,8 @@ Creds/config from ~/.config/claude-dev/discord.env:
 import asyncio, os, re, sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/agents"))
-sys.path.insert(0, str(Path.home() / "projects/moprox-tooling/services/forward"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))   # errlog: beside this file
 from run import run_agent
 import convo
@@ -53,7 +53,7 @@ CONTEXT_N = int(os.environ.get("DISCORD_CONTEXT_MSGS", "30"))
 # "@M4", "M4!", "(M4)" match; "M40", "xM4", "HM4" do not). Case-insensitive.
 TRIG_RX = re.compile(r"(?i)(?<!\w)@?" + re.escape(TRIGGER) + r"(?!\w)")
 
-FWD = "/home/mikael/projects/moprox-tooling/services/forward"
+FWD = str(Path(__file__).resolve().parent)   # the tree this bridge runs from, never ~/projects
 
 def _theming_out_count():
     return sum(1 for r in convo._load(convo.LOG) if r.get("dir") == "out" and r.get("from") == AGENT)
