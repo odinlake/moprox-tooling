@@ -184,6 +184,18 @@ def sync_pr(branch):
     head = "ai-feature-sync-%s" % branch
     rc, sha, _ = gh_raw(["api", "repos/%s/git/ref/heads/%s" % (REPO, head), "--jq", ".object.sha"])
     if rc != 0:
+        # Ask GitHub, live, before creating anything. `behind` comes from the last workflow report,
+        # which can be a day old: after the previous sync PR merged, that stale "behind" made this
+        # create a head identical to its target, the merge was a no-op, no PR was opened, and the
+        # empty branch sat there until branch_housekeeping deleted it -- announcing the OLD merged
+        # PR again. Every sync pair was posted twice (2026-09-23/24, 09-25/26).
+        rc, ahead, err = gh_raw(["api", "repos/%s/compare/%s...master" % (REPO, branch),
+                                 "--jq", ".ahead_by"])
+        if rc != 0:
+            errlog.err("branch_sync_watch: comparing %s with master: %s" % (branch, err[:200]))
+            return None
+        if ahead.strip() == "0":
+            return None                         # already current: nothing to propose, no branch
         rc, base_sha, err = gh_raw(["api", "repos/%s/git/ref/heads/%s" % (REPO, branch),
                                     "--jq", ".object.sha"])
         if rc != 0:

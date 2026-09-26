@@ -111,7 +111,7 @@ def ai_branches():
 def prs_for(branch):
     """Every PR ever raised from this branch, newest first. None means the lookup failed."""
     prs = gh_json(["pr", "list", "--repo", bsw.REPO, "--head", branch, "--state", "all",
-                   "--limit", "20", "--json", "number,state,mergedAt,closedAt,url,baseRefName"],
+                   "--limit", "20", "--json", "number,state,mergedAt,closedAt,url,baseRefName,headRefOid"],
                   "listing PRs for %s" % branch)
     if prs is None:
         return None
@@ -131,6 +131,16 @@ def verdict(prs):
         return "no-pr", None
     top = prs[0]
     return ("taken" if top.get("mergedAt") else "rejected"), top
+
+
+def adds_nothing(base, sha):
+    """True if commit `sha` carries nothing that is not already on `base`. None if unknown."""
+    rc, out, err = bsw.gh_raw(["api", "repos/%s/compare/%s...%s" % (bsw.REPO, base, sha),
+                               "--jq", ".ahead_by"])
+    if rc != 0 or not out.strip().isdigit():
+        errlog.warn("branch_housekeeping: cannot compare %s with %s: %s" % (sha[:10], base, err[:200]))
+        return None
+    return out.strip() == "0"
 
 
 def delete(branch):
@@ -208,6 +218,22 @@ def main():
                 # had been announced, and even then "never mind" is not worth a message.
                 pending.pop(branch, None)
             continue
+
+        if state_ == "taken" and pr.get("headRefOid") and pr["headRefOid"] != sha:
+            # The branch NAME outlived its merged PR and was reused: sync heads are recreated under
+            # the same name. The merged PR says nothing about what is on the branch now, and saying
+            # "deleted -- PR #n merged" again repeats yesterday's news. If the new tip adds nothing
+            # to the base, deleting it loses nothing and is not worth a word; if it carries work,
+            # it is judged like any branch without a PR, by how long it has been quiet.
+            empty = adds_nothing(pr.get("baseRefName") or "master", sha)
+            if empty is None:
+                seen_now.add(branch)
+                continue
+            if empty:
+                if not delete(branch):
+                    seen_now.add(branch)
+                continue
+            state_ = "no-pr"
 
         if state_ == "taken":
             if delete(branch):
