@@ -50,6 +50,11 @@ STATE_DIR="${MOPROX_DEV_STATE_DIR:-/home/mikael/.local/state/moprox-dev}"
 PROJECT_DIR="/home/mikael/.claude/projects/$(printf %s "$PWD" | sed 's#[/.]#-#g')"
 STATE="$STATE_DIR/$ID.session"
 FORK_FLAG="$STATE_DIR/$ID.fork"   # dropped by dev-cycle.sh; see "THE FORK FLAG" above
+# The remote-control name the CURRENT bridge registration was made under. `--remote-control <name>`
+# is read only when a registration is created; a plain --resume reattaches to the old one, so a
+# renamed RC_NAME never reaches a resumed session. On 2026-09-26 the rename to "moprox dev THREE"
+# reached one and two only because their transcripts were over the size cap and they started fresh.
+RCNAME_STAMP="$STATE_DIR/$ID.rcname"
 SUMMARY_STAMP="$STATE_DIR/$ID.recap"
 
 # Estate MCP servers (google / agent-write / webscout). Passed WITHOUT --strict-mcp-config, so these
@@ -150,11 +155,22 @@ if [ "$resume" = 1 ]; then
   kib=$(( $(stat -c%s "$PROJECT_DIR/$sid.jsonl") / 1024 ))
   # Consume the recycle's fork flag (one-shot: removed whether or not the launch succeeds, so a crash
   # loop can't fork on every retry and spray session ids).
+  why="weekly recycle"
+  if [ ! -e "$RCNAME_STAMP" ]; then
+    # No record of the name this registration was made under: adopt the current one rather than
+    # guess, or every instance would rotate once for nothing the first time after this was added.
+    printf '%s\n' "$RC_NAME" > "$RCNAME_STAMP"
+  elif [ ! -e "$FORK_FLAG" ] && [ "$(cat "$RCNAME_STAMP")" != "$RC_NAME" ]; then
+    # A rename is a registration change. Fork rather than resume, so the new name is what the app shows.
+    why="remote name changed from '$(cat "$RCNAME_STAMP")' to '$RC_NAME'"
+    touch "$FORK_FLAG"
+  fi
   if [ -e "$FORK_FLAG" ]; then
     rm -f "$FORK_FLAG"
     new=$(uuidgen)
-    say "forking $sid -> $new (weekly recycle: carries history into a new bridge registration, ${kib} KiB)"
+    say "forking $sid -> $new ($why: carries history into a new bridge registration, ${kib} KiB)"
     printf '%s\n' "$new" > "$STATE"
+    printf '%s\n' "$RC_NAME" > "$RCNAME_STAMP"
     set -- --resume "$sid" --fork-session --session-id "$new"
     sid="$new"
   else
@@ -185,4 +201,5 @@ fi
 sid=$(uuidgen)
 say "fresh session $sid ($reason)"
 printf '%s\n' "$sid" > "$STATE"
+printf '%s\n' "$RC_NAME" > "$RCNAME_STAMP"
 exec "$CLAUDE" --remote-control "$RC_NAME" "${MCP_ARGS[@]}" --session-id "$sid" --append-system-prompt "$PROMPT"

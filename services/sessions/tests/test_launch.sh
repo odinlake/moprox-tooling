@@ -70,6 +70,15 @@ if [ -n "$real" ]; then
     rc=$(run coach /home/mikael/projects/private-data/agents/coach)
     ok "$(argv | grep -qx -- '--resume' && echo 1 || echo 0)" "an existing transcript RESUMES (project dir resolved)"
     ok "$(argv | grep -qx "$sid" && echo 1 || echo 0)" "and resumes the recorded id, not the latest"
+    # A rename is a registration change (2026-09-26). First resume with no stamp ADOPTS the name;
+    # a resume whose stamp names something else FORKS so the app shows the new name.
+    ok "$(argv | grep -qx -- '--fork-session' && echo 0 || echo 1)" "no name stamp: plain resume, no fork"
+    ok "$([ "$(cat "$tmp/state/coach.rcname" 2>/dev/null)" = "moprox COACH" ] && echo 1 || echo 0)" "and the current name is stamped"
+    printf 'moprox coach\n' > "$tmp/state/coach.rcname"; printf '%s\n' "$sid" > "$tmp/state/coach.session"
+    rc=$(run coach /home/mikael/projects/private-data/agents/coach)
+    ok "$(argv | grep -qx -- '--fork-session' && echo 1 || echo 0)" "a changed remote name FORKS instead of resuming"
+    ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "under a new session id"
+    ok "$([ "$(cat "$tmp/state/coach.rcname")" = "moprox COACH" ] && echo 1 || echo 0)" "and the stamp is updated to the new name"
   else
     echo "SKIP  resume case: newest coach transcript is $((size/1024)) KiB, over the 5 MiB cap"
   fi
