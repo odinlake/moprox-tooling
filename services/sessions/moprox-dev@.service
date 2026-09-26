@@ -37,7 +37,11 @@
 #   systemctl daemon-reload
 #   systemctl enable --now moprox-dev@one moprox-dev@two moprox-dev@three moprox-dev@coach
 [Unit]
-Description=Claude Code remote dev session "moprox dev %i"
+# systemd has no uppercasing specifier, so this cannot spell the remote name ("moprox dev ONE").
+# Rather than assert a name that is now wrong, it names the INSTANCE, which is lowercase by the
+# operator's rule anyway. The authoritative display name is RC_NAME in dev-launch.sh; check it with
+#   ps -eo args= | grep -o -- "--remote-control .*"
+Description=Claude Code remote dev session (instance %i)
 After=network-online.target
 Wants=network-online.target
 
