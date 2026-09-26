@@ -9,7 +9,9 @@ Wants=network-online.target
 Type=simple
 User=mikael
 Environment=HOME=/home/mikael
-Environment=PYTHONUNBUFFERED=1   # else stdout is block-buffered and the journal lags/loses lines
+# PYTHONUNBUFFERED: else stdout is block-buffered and the journal lags/loses lines.
+# (systemd has no inline comments: a trailing "# ..." here was parsed as nine bogus assignments.)
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/forward/telegram_poll.py
 Restart=always
 RestartSec=10
