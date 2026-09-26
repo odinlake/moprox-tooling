@@ -9,4 +9,4 @@ Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/technogym/technogym_fetch.py
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/technogym/technogym_fetch.py

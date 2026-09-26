@@ -8,4 +8,4 @@ Description=moprox agent-memory reconcile (deterministic index rebuild + houseke
 Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
-ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/memory/reconcile.py
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/memory/reconcile.py

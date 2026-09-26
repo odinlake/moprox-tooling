@@ -11,7 +11,7 @@ Type=simple
 User=mikael
 Environment=HOME=/home/mikael
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/mikael/.local/share/moprox/discord-venv/bin/python /home/mikael/projects/moprox-tooling/services/forward/discord_theming.py
+ExecStart=/home/mikael/.local/share/moprox/discord-venv/bin/python /opt/moprox-tooling/services/forward/discord_theming.py
 Restart=always
 RestartSec=5
 [Install]

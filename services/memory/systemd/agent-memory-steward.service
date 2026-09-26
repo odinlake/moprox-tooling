@@ -9,5 +9,5 @@ Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
 Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/mikael/projects/moprox-tooling/services/memory/steward.sh
+ExecStart=/opt/moprox-tooling/services/memory/steward.sh
 TimeoutStartSec=900
