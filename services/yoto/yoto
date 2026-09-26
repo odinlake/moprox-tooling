@@ -9,7 +9,7 @@ DIR=/home/mikael/projects/moprox-tooling/services/yoto
 for py in "$HOME/docindex/venv/bin/python" /usr/bin/python3; do
   if [ -x "$py" ] && "$py" -c 'import paho.mqtt.client, mutagen' 2>/dev/null; then
     case "${1:-}" in
-      reorder|shuffle|build) exec "$py" "$DIR/myo.py" "$@" ;;
+      reorder|shuffle|copy|build) exec "$py" "$DIR/myo.py" "$@" ;;
       *)                     exec "$py" "$DIR/yoto.py" "$@" ;;
     esac
   fi

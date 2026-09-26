@@ -5,6 +5,7 @@
     myo.py reorder <card> reverse                       reverse (no audio moves, ~0.5 s)
     myo.py reorder <card> <title> [title ...]           named first, rest as-is
     myo.py shuffle <card> [title ...]                   named first, rest shuffled
+    myo.py copy <card> <new title>                      a second card over the same audio (~1 s)
 
 One chapter per file, in the order given, titled from the file's ID3 title (falling back to the
 filename). Idempotent: the card id is remembered in yoto.env under YOTO_CARD_<slug>, and a later run
@@ -130,6 +131,31 @@ def pick(chapters, wanted):
     return first, rest, missed
 
 
+def copy(src, title, tok):
+    """Create (or refresh) a second card whose chapters are the source card's, verbatim.
+
+    NO AUDIO MOVES: chapters reference their audio by trackUrl (yoto:#<sha>), so a copy is one POST.
+    Idempotent on title like a build: the new card id is remembered under YOTO_CARD_<slug>, and a
+    re-run overwrites that card with the source's current chapters -- which is how the copy picks up
+    books added to the source later. Exists so a card an agent reorders freely can be separate from
+    one a child knows by its numbers (reordering renumbers every chapter)."""
+    key = "YOTO_CARD_" + re.sub(r"[^A-Za-z0-9]+", "_", title).upper().strip("_")
+    cid = yoto.env().get(key)
+    chapters = renumber(json.loads(json.dumps(chapters_of(src, tok))))
+    tot_d = sum(c.get("duration") or 0 for c in chapters)
+    tot_s = sum(c.get("fileSize") or 0 for c in chapters)
+    content = {"title": title, "content": {"chapters": chapters},
+               "metadata": {"media": {"duration": tot_d, "fileSize": tot_s,
+                                      "readableFileSize": round(tot_s / 1024 / 1024, 1)}}}
+    if cid:
+        content["cardId"] = cid
+    out = req("POST", "/content", tok, content)
+    new = (out.get("card") or out).get("cardId") or cid
+    if new and new != cid:
+        yoto._put(key, new)
+    return new, len(chapters)
+
+
 def main():
     # Fast paths that touch no audio. These exist because rebuilding a card from local files costs
     # ~115 s for 21 chapters while reordering the same card costs 0.45 s, and a kids-facing agent
@@ -153,6 +179,13 @@ def main():
         print(json.dumps({"cardId": cid, "mode": mode, "chapters": len(ordered),
                           "order": [c.get("title") for c in ordered],
                           "not_found": missed}, ensure_ascii=False))
+        return
+
+    if len(sys.argv) == 4 and sys.argv[1] == "copy":
+        tok = yoto.token()
+        src = card_of(sys.argv[2], tok)
+        cid, n = copy(src, sys.argv[3], tok)
+        print(json.dumps({"from": src, "cardId": cid, "title": sys.argv[3], "chapters": n}, ensure_ascii=False))
         return
 
     if len(sys.argv) < 3:
