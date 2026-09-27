@@ -26,6 +26,9 @@ import yoto, myo, errlog
 PORT = int(os.environ.get("YOTO_WEB_PORT", "8030"))
 COVERS = Path(os.environ.get("YOTO_COVERS", str(Path.home() / ".local/share/moprox/yoto/covers")))
 THUMBS = COVERS / ".thumbs"
+# The icon set (same mo "M" + corner glyph as mo/search and mo/mail, here a Y) and the PWA manifest.
+STATIC = {"/icon.svg": "image/svg+xml", "/icon-yoto-180.png": "image/png", "/icon-yoto-512.png": "image/png",
+          "/apple-touch-icon.png": "image/png", "/mo-yoto.webmanifest": "application/manifest+json"}
 ORIGINS = {"https://mo.lan", "http://127.0.0.1:%d" % PORT, "http://localhost:%d" % PORT}
 PLAY_LOCK = threading.Lock()          # one play at a time: two taps racing would interleave orders
 _cache = {}                           # small TTL cache: the library barely changes
@@ -122,8 +125,8 @@ class H(BaseHTTPRequestHandler):
         try:
             if path in ("/", "/index.html"):
                 return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
-            if path in ("/icon.svg",):
-                return self.send(200, (HERE / "icon.svg").read_bytes(), "image/svg+xml", "max-age=86400")
+            if path in STATIC:
+                return self.send(200, (HERE / path[1:]).read_bytes(), STATIC[path], "max-age=86400")
             if path == "/api/playlists":
                 return self.send(200, cached("lib", 60, library))
             if path.startswith("/api/playlist/"):

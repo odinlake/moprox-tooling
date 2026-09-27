@@ -1,0 +1,13 @@
+{
+  "name": "mo/yoto",
+  "short_name": "Yoto",
+  "start_url": "/yoto/",
+  "scope": "/yoto/",
+  "display": "standalone",
+  "background_color": "#fff7ec",
+  "theme_color": "#fff7ec",
+  "icons": [
+    {"src": "icon-yoto-180.png", "sizes": "180x180", "type": "image/png"},
+    {"src": "icon-yoto-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
