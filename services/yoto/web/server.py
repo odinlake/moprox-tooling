@@ -53,7 +53,9 @@ def library():
         # implementation detail -- the child picks the playlist she knows.
         if r.get("cardId") in twins or r.get("userId") == "yoto" or (me and r.get("userId") != me):
             continue
-        out.append({"cardId": r["cardId"], "title": (r.get("title") or "").strip()})
+        cover = ((r.get("metadata") or {}).get("cover") or {}).get("imageL")
+        out.append({"cardId": r["cardId"], "title": (r.get("title") or "").strip(),
+                    "cover": cover if cover and cover.startswith("https://") else None})
     return out
 
 

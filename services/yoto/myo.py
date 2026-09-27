@@ -6,6 +6,7 @@
     myo.py reorder <card> <title> [title ...]           named first, rest as-is
     myo.py shuffle <card> [title ...]                   named first, rest shuffled
     myo.py copy <card> <new title>                      a second card over the same audio (~1 s)
+    myo.py cover <card> <image.jpg|png>                 cover art on the card and its (shuffle) twin
     myo.py queue <card> [title ...] [--volume N] [--sleep S] [--rest shuffle|order|none]
                                                         bard's play routine, on the card's twin
 
@@ -95,21 +96,65 @@ def renumber(chapters):
     return chapters
 
 
-def set_order(card_id, chapters, tok, title=None):
-    """POST a new chapter order. NO AUDIO MOVES: every track already carries its own
-    `trackUrl` (yoto:#<sha>), so the card is self-describing and this is pure metadata. Measured at
-    0.45 s for 21 chapters, against ~115 s to rebuild the same card from local files."""
-    d = req("GET", "/card/" + card_id, tok)
-    card = d.get("card") or d
-    chapters = renumber(chapters)
+def meta_of(card_id, tok):
+    """The card's stored metadata (cover, authors, ...), from /content like chapters_of."""
+    d = req("GET", "/content/" + card_id, tok)
+    return dict((d.get("card") or d).get("metadata") or {})
+
+
+def _media(chapters):
     tot_d = sum(c.get("duration") or 0 for c in chapters)
     tot_s = sum(c.get("fileSize") or 0 for c in chapters)
-    req("POST", "/content", tok, {
-        "cardId": card_id, "title": title or card.get("title"),
-        "content": {"chapters": chapters},
-        "metadata": {"media": {"duration": tot_d, "fileSize": tot_s,
-                               "readableFileSize": round(tot_s / 1024 / 1024, 1)}}})
+    return {"duration": tot_d, "fileSize": tot_s, "readableFileSize": round(tot_s / 1024 / 1024, 1)}
+
+
+def set_order(card_id, chapters, tok, title=None, cover=None):
+    """POST a new chapter order. NO AUDIO MOVES: every track already carries its own
+    `trackUrl` (yoto:#<sha>), so the card is self-describing and this is pure metadata. Measured at
+    0.45 s for 21 chapters, against ~115 s to rebuild the same card from local files.
+
+    POST /content REPLACES metadata, so the card's own metadata is carried over and only `media`
+    recomputed -- otherwise every reorder silently erased the cover art. `cover` overrides it
+    (queue passes the source's, so a twin always wears its playlist's cover)."""
+    d = req("GET", "/content/" + card_id, tok)
+    card = d.get("card") or d
+    chapters = renumber(chapters)
+    meta = dict(card.get("metadata") or {})
+    meta["media"] = _media(chapters)
+    if cover:
+        meta["cover"] = cover
+    req("POST", "/content", tok, {"cardId": card_id, "title": title or card.get("title"),
+                                  "content": {"chapters": chapters}, "metadata": meta})
     return chapters
+
+
+def upload_cover(path, tok):
+    """Upload a cover image; Yoto resizes it (autoconvert) to the card shape, 638x1011 portrait.
+    Returns the metadata.cover dict to attach. yoto.dev/myo/uploading-cover-images."""
+    ctype = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    out = req("POST", "/media/coverImage/user/me/upload?autoconvert=true&coverType=default", tok,
+              open(path, "rb").read(), ctype=ctype, raw=True)
+    j = json.loads(out)
+    return {"imageL": (j.get("coverImage") or j)["mediaUrl"]}
+
+
+def set_cover(ident, path, tok):
+    """Put `path` on a playlist AND its (shuffle) twin, keeping everything else on both cards."""
+    cid = card_of(ident, tok)
+    cover = upload_cover(path, tok)
+    done = []
+    for c in dict.fromkeys([cid, yoto.env().get("YOTO_TWIN_" + cid)]):
+        if not c:
+            continue
+        d = req("GET", "/content/" + c, tok)
+        card = d.get("card") or d
+        meta = dict(card.get("metadata") or {})
+        meta["cover"] = cover
+        req("POST", "/content", tok, {"cardId": c, "title": card.get("title"),
+                                      "content": {"chapters": (card.get("content") or {}).get("chapters") or []},
+                                      "metadata": meta})
+        done.append(c)
+    return {"cards": done, "cover": cover}
 
 
 def chapters_of(card_id, tok):
@@ -153,11 +198,9 @@ def copy(src, title, tok):
     key = "YOTO_CARD_" + re.sub(r"[^A-Za-z0-9]+", "_", title).upper().strip("_")
     cid = yoto.env().get(key)
     chapters = renumber(json.loads(json.dumps(chapters_of(src, tok))))
-    tot_d = sum(c.get("duration") or 0 for c in chapters)
-    tot_s = sum(c.get("fileSize") or 0 for c in chapters)
-    content = {"title": title, "content": {"chapters": chapters},
-               "metadata": {"media": {"duration": tot_d, "fileSize": tot_s,
-                                      "readableFileSize": round(tot_s / 1024 / 1024, 1)}}}
+    meta = meta_of(src, tok)                  # the copy wears the source's cover
+    meta["media"] = _media(chapters)
+    content = {"title": title, "content": {"chapters": chapters}, "metadata": meta}
     if cid:
         content["cardId"] = cid
     out = req("POST", "/content", tok, content)
@@ -211,7 +254,7 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     if dry:
         return {"source": src, "cardId": twin, "order": [c.get("title") for c in first + others],
                 "not_found": missed, "volume": volume, "sleep": sleep, "dry": True}
-    ordered = set_order(twin, first + others, tok)
+    ordered = set_order(twin, first + others, tok, cover=meta_of(src, tok).get("cover"))
     with yoto.Link(tok, yoto.env()["YOTO_DEVICE_ID"]) as link:
         if volume is not None:
             link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
@@ -225,6 +268,10 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "cover":
+        print(json.dumps(set_cover(sys.argv[2], sys.argv[3], yoto.token()), ensure_ascii=False))
+        return
+
     if len(sys.argv) >= 3 and sys.argv[1] == "queue":
         import argparse
         ap = argparse.ArgumentParser(prog="yoto queue")
@@ -288,6 +335,9 @@ def main():
                                       "readableFileSize": round(total_s / 1024 / 1024, 1)}}}
     if card_id:
         content["cardId"] = card_id
+        keep = meta_of(card_id, tok)          # a rebuild must not erase the cover art
+        keep.update(content["metadata"])
+        content["metadata"] = keep
     out = req("POST", "/content", tok, content)
     cid = (out.get("card") or out).get("cardId") or card_id
     if cid and cid != card_id:

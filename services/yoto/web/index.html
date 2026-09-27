@@ -79,7 +79,7 @@ main { padding: 2px 10px calc(env(safe-area-inset-bottom) + 140px); }
 
 .list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (min-width: 600px) { .list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.list .tile { aspect-ratio: 1; }
+.list .tile { aspect-ratio: 638 / 1011; }
 
 .bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--surface);
@@ -181,9 +181,12 @@ main { padding: 2px 10px calc(env(safe-area-inset-bottom) + 140px); }
       st.list = list;
       if (!list.length) { m.innerHTML = '<div class="msg">No playlists yet.</div>'; return; }
       m.innerHTML = '<div class="list">' + list.map(function (p) {
-        return '<button class="tile" data-card="' + esc(p.cardId) + '"><div class="ph" data-cover="' + esc(p.cardId) + '">' + esc(p.title) + '</div><div class="cap">' + esc(p.title) + '</div></button>';
+        var pic = p.cover ? '<img alt="" src="' + esc(p.cover) + '">'
+                          : '<div class="ph" data-cover="' + esc(p.cardId) + '">' + esc(p.title) + '</div>';
+        return '<button class="tile" data-card="' + esc(p.cardId) + '">' + pic + '<div class="cap">' + esc(p.title) + '</div></button>';
       }).join("") + '</div>';
-      list.forEach(function (p) {                            // borrow the first chapter's picture
+      list.forEach(function (p) {                            // no cover art: borrow the first chapter's picture
+        if (p.cover) return;
         api("api/playlist/" + encodeURIComponent(p.cardId)).then(function (pl) {
           var c = pl.chapters.filter(function (x) { return x.img; })[0];
           var ph = m.querySelector('[data-cover="' + p.cardId + '"]');
