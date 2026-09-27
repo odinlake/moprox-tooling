@@ -167,7 +167,7 @@ def copy(src, title, tok):
     return new, len(chapters)
 
 
-def twin_of(cid, tok):
+def twin_of(cid, tok, create=True):
     """The card that playback is reordered on, never the card itself.
 
     Reordering renumbers every chapter, and a physical MYO card linked to a playlist shows those
@@ -179,6 +179,8 @@ def twin_of(cid, tok):
     if cid in {v for k, v in e.items() if k.startswith("YOTO_TWIN_")}:
         return cid, cid
     twin = e.get("YOTO_TWIN_" + cid)
+    if not twin and not create:
+        return cid, None                  # a dry run must not create a card to report on
     if not twin:
         d = req("GET", "/content/" + cid, tok)
         twin, _ = copy(cid, (d.get("card") or d).get("title", cid).rstrip() + " (shuffle)", tok)
@@ -197,7 +199,7 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     volume=None leaves the volume alone; sleep=0 disables the timer. dry=True resolves and orders
     but neither writes the card nor touches the player."""
     tok = yoto.token()
-    src, twin = twin_of(card_of(ident, tok), tok)
+    src, twin = twin_of(card_of(ident, tok), tok, create=not dry)
     chapters = chapters_of(src, tok)
     first, others, missed = pick(chapters, list(wanted))
     if rest == "shuffle":
