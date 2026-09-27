@@ -129,32 +129,55 @@ def set_order(card_id, chapters, tok, title=None, cover=None):
 
 
 def upload_cover(path, tok):
-    """Upload a cover image; Yoto resizes it (autoconvert) to the card shape, 638x1011 portrait.
-    Returns the metadata.cover dict to attach. yoto.dev/myo/uploading-cover-images."""
-    ctype = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    """Upload a cover image (a path, or JPEG bytes); Yoto resizes it (autoconvert) to the card
+    shape, 638x1011 portrait. Returns the metadata.cover dict to attach.
+    yoto.dev/myo/uploading-cover-images."""
+    if isinstance(path, bytes):
+        data, ctype = path, "image/jpeg"
+    else:
+        data = open(path, "rb").read()
+        ctype = "image/png" if path.lower().endswith(".png") else "image/jpeg"
     out = req("POST", "/media/coverImage/user/me/upload?autoconvert=true&coverType=default", tok,
-              open(path, "rb").read(), ctype=ctype, raw=True)
+              data, ctype=ctype, raw=True)
     j = json.loads(out)
     return {"imageL": (j.get("coverImage") or j)["mediaUrl"]}
 
 
+def _put_cover(c, cover, tok):
+    """Set metadata.cover on one card, carrying everything else over (POST /content replaces)."""
+    d = req("GET", "/content/" + c, tok)
+    card = d.get("card") or d
+    meta = dict(card.get("metadata") or {})
+    meta["cover"] = cover
+    req("POST", "/content", tok, {"cardId": c, "title": card.get("title"),
+                                  "content": {"chapters": (card.get("content") or {}).get("chapters") or []},
+                                  "metadata": meta})
+
+
+def twin_cover(src_cover, tok):
+    """The source's cover with the shuffle disc on it, uploaded. None when there is nothing to mark:
+    no cover, or one of Yoto's stock /myo-cover/ images."""
+    url = (src_cover or {}).get("imageL")
+    if not url or not url.startswith("https://") or "/myo-cover/" in url:
+        return None
+    import covers
+    return upload_cover(covers.jpeg(covers.shuffle_badge(covers.fetch(url))), tok)
+
+
 def set_cover(ident, path, tok):
-    """Put `path` on a playlist AND its (shuffle) twin, keeping everything else on both cards."""
+    """Put `path` on a playlist, and the same art with the shuffle mark on its (shuffle) twin, so
+    the two can be told apart in the Yoto app at a glance."""
     cid = card_of(ident, tok)
     cover = upload_cover(path, tok)
-    done = []
-    for c in dict.fromkeys([cid, yoto.env().get("YOTO_TWIN_" + cid)]):
-        if not c:
-            continue
-        d = req("GET", "/content/" + c, tok)
-        card = d.get("card") or d
-        meta = dict(card.get("metadata") or {})
-        meta["cover"] = cover
-        req("POST", "/content", tok, {"cardId": c, "title": card.get("title"),
-                                      "content": {"chapters": (card.get("content") or {}).get("chapters") or []},
-                                      "metadata": meta})
-        done.append(c)
-    return {"cards": done, "cover": cover}
+    _put_cover(cid, cover, tok)
+    out = {"card": cid, "cover": cover}
+    twin = yoto.env().get("YOTO_TWIN_" + cid)
+    if twin and twin != cid:
+        tc = twin_cover(cover, tok)
+        if tc:
+            _put_cover(twin, tc, tok)
+            out.update(twin=twin, twin_cover=tc)
+    return out
 
 
 def chapters_of(card_id, tok):
@@ -228,6 +251,9 @@ def twin_of(cid, tok, create=True):
         d = req("GET", "/content/" + cid, tok)
         twin, _ = copy(cid, (d.get("card") or d).get("title", cid).rstrip() + " (shuffle)", tok)
         yoto._put("YOTO_TWIN_" + cid, twin)
+        tc = twin_cover(((d.get("card") or d).get("metadata") or {}).get("cover"), tok)
+        if tc:
+            _put_cover(twin, tc, tok)
     return cid, twin
 
 
@@ -254,7 +280,7 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     if dry:
         return {"source": src, "cardId": twin, "order": [c.get("title") for c in first + others],
                 "not_found": missed, "volume": volume, "sleep": sleep, "dry": True}
-    ordered = set_order(twin, first + others, tok, cover=meta_of(src, tok).get("cover"))
+    ordered = set_order(twin, first + others, tok)     # keeps the twin's own (shuffle-marked) cover
     with yoto.Link(tok, yoto.env()["YOTO_DEVICE_ID"]) as link:
         if volume is not None:
             link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
