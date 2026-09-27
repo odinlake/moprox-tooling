@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# M4's one way to publish to the theme-ontology/theming WIKI. A GitHub wiki is a separate repo with a
+# single `master` branch and no PRs, so the agent's `git push * master` deny rule and its "never push
+# to master" policy (both meant for the MAIN repo) made wiki edits impossible (2026-09-27, operator:
+# "M4 should be allowed to push to it"). This verb is the scoped exception: it refuses anything that
+# is not a clone of theming.wiki, never forces, and replays local commits onto a wiki master that
+# moved (test_with_totolo.yaml commits warnings.md to it on every master push) instead of clobbering.
+#
+# usage: wiki-push [dir]      (default: the current directory)
+set -euo pipefail
+cd "${1:-.}"
+url=$(git remote get-url origin 2>/dev/null || true)
+case "$url" in
+  *github.com[:/]theme-ontology/theming.wiki|*github.com[:/]theme-ontology/theming.wiki.git) ;;
+  *) echo "wiki-push: origin is '${url:-none}', not theme-ontology/theming.wiki -- refusing." >&2; exit 2 ;;
+esac
+[ -z "$(git status --porcelain)" ] || { echo "wiki-push: uncommitted changes -- commit them first." >&2; exit 2; }
+[ "$(git rev-parse --abbrev-ref HEAD)" = master ] || { echo "wiki-push: not on master (the wiki's only branch)." >&2; exit 2; }
+git fetch -q origin master
+if ! git merge-base --is-ancestor origin/master HEAD; then
+  if ! git rebase -q origin/master; then
+    git rebase --abort
+    echo "wiki-push: the wiki moved and your commits conflict with it -- resolve by hand, nothing pushed." >&2
+    exit 1
+  fi
+fi
+new=$(git log --oneline origin/master..HEAD)
+[ -n "$new" ] || { echo "wiki-push: nothing to push."; exit 0; }
+echo "$new"; git diff --stat origin/master HEAD | tail -1
+git push -q origin HEAD:refs/heads/master
+echo "wiki-push: pushed. Live at https://github.com/theme-ontology/theming/wiki"
