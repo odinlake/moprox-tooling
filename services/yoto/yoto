@@ -9,7 +9,10 @@ DIR=/home/mikael/projects/moprox-tooling/services/yoto
 for py in "$HOME/docindex/venv/bin/python" /usr/bin/python3; do
   if [ -x "$py" ] && "$py" -c 'import paho.mqtt.client, mutagen' 2>/dev/null; then
     case "${1:-}" in
-      reorder|shuffle|copy|queue|build) exec "$py" "$DIR/myo.py" "$@" ;;
+      reorder|shuffle|copy|queue) exec "$py" "$DIR/myo.py" "$@" ;;
+      # myo.py's build form has no verb (`myo.py <title> <files>`), so the word must not reach it:
+      # passed through, "build" became the playlist title and the title became the first file.
+      build)                      shift; exec "$py" "$DIR/myo.py" "$@" ;;
       *)                     exec "$py" "$DIR/yoto.py" "$@" ;;
     esac
   fi
