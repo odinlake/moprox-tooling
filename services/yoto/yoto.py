@@ -120,6 +120,24 @@ def get(path, tok):
         API + path, headers={"Authorization": "Bearer " + tok}), timeout=45).read())
 
 
+def online(tok, device):
+    """Yoto's own presence flag for the player, from REST -- no MQTT, nothing reaches the device.
+
+    Needed because a player that has switched itself off (shutdownTimeout, 60 min idle) is simply
+    absent from the broker: every command still "succeeds" (the broker accepted the publish, the
+    tool prints OK) and every query just times out into `playbackStatus: unknown`. Neither says
+    "off". No command in the API wakes it either; only a button press does. None = could not tell.
+    """
+    try:
+        d = get("/device-v2/devices/mine", tok)
+    except Exception:
+        return None
+    for x in d.get("devices") or []:
+        if x.get("deviceId") == device:
+            return x.get("online")
+    return None
+
+
 def now_playing(link, wait=6):
     """What the device says it is doing, from data/events -- the only honest answer.
 
@@ -150,7 +168,7 @@ class Link:
 
     def __init__(self, tok, device):
         import paho.mqtt.client as mqtt
-        self.dev, self.msgs, self.ready = device, [], threading.Event()
+        self.dev, self.tok, self.msgs, self.ready = device, tok, [], threading.Event()
         try:
             self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="DASH" + device,
                                  transport="websockets")
@@ -175,6 +193,10 @@ class Link:
             pass
 
     def __enter__(self):
+        # Refuse up front rather than print OK for a command nobody will receive. Every device verb,
+        # myo.queue() and yoto-web go through here; the web page shows this message as its toast.
+        if online(self.tok, self.dev) is False:
+            raise SystemExit("the Yoto player is off -- press a button on it, then try again")
         self.c.connect(BROKER, 443, keepalive=300)
         self.c.loop_start()
         if not self.ready.wait(25):

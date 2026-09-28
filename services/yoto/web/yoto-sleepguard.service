@@ -1,0 +1,16 @@
+# One pass of the night-time sleep-timer guard (services/yoto/sleepguard.py); fired by the timer.
+# Same user/interpreter/clone as yoto-web, for the same reason: yoto.env lives in mikael's home.
+[Unit]
+Description=yoto-sleepguard -- set a sleep timer on the Yoto at night if none is running
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/yoto
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/yoto/sleepguard.py
+TimeoutStartSec=90

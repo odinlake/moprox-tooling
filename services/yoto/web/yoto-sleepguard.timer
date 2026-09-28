@@ -1,0 +1,10 @@
+# Every 10 minutes; sleepguard.py itself returns at once outside 20:30-08:00.
+[Unit]
+Description=yoto-sleepguard every 10 min
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=false
+
+[Install]
+WantedBy=timers.target
