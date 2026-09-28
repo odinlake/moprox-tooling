@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Night-time sleep-timer guard for the children's Yoto. Run every 10 min by yoto-sleepguard.timer.
 
-    20:30-08:00  if the player is on and has no sleep timer running, set one:
+    20:30-08:00  if the player is playing and has no sleep timer running, set one:
                  22:00-05:00 -> 20 min, otherwise 45 min.
 
 Anything started from a physical card, the player's buttons or Yoto's own app runs with no timer at
 all (there is no default; a stream such as Sleep Radio plays forever), which is the gap this closes.
-A running timer is never touched, so a longer one set by hand is left alone.
+A running timer is never touched, so a longer one set by hand is left alone. An idle or paused
+player is left alone too: a timer there would only tick down before anyone pressed play.
 
 Order of checks matters: REST presence first (costs nothing on the device), then one events report
 over MQTT, then at most one sleep-timer/set. Assumed, not measured: a report request does not reset
@@ -60,6 +61,9 @@ def main():
             print("player online but sent no events report; leaving it alone")
             return
         what = "%s / %s" % (ev.get("playbackStatus"), ev.get("chapterTitle") or ev.get("cardId") or "no card")
+        if ev.get("playbackStatus") != "playing":
+            print("not playing (%s); nothing to do" % what)
+            return
         if ev.get("sleepTimerActive"):
             print("timer already running (%ss left), %s" % (ev.get("sleepTimerSeconds"), what))
             return
