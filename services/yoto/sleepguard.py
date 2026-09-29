@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Night-time sleep-timer guard for the children's Yoto, and its Home Assistant feed. Run every 10 min
-by yoto-sleepguard.timer.
+"""Night-time sleep-timer guard for the children's Yoto. Run every 10 min by yoto-sleepguard.timer.
 
     20:30-08:00  if the player is playing and has no sleep timer running, set one:
                  22:00-05:00 -> 20 min, otherwise 45 min.
@@ -14,25 +13,10 @@ Order of checks matters: REST presence first (costs nothing on the device), then
 over MQTT, then at most one sleep-timer/set. Assumed, not measured: a report request does not reset
 the player's idle-shutdown clock, so polling does not keep it awake.
 
-HOME ASSISTANT: every pass, at any hour, the player's state is read, and POSTed to the webhook named
-by YOTO_HA_WEBHOOK in yoto.env ONLY WHEN IT DIFFERS from the last successful post (kept in HA_LAST),
-so HA records changes, not a heartbeat. HA side: private-config-ha packages/yoto.yaml, which turns it
-into sensor.yoto_now_playing, sensor.yoto_volume and binary_sensor.yoto_playing. A switched-off player
-is posted as status "off" (once) so HA never shows a stale "playing". Presence unknown, or an online
-player that sends no report, posts nothing: HA keeps the last known state rather than a guess. The
-payload deliberately leaves out position and timer seconds, which change every pass. Volume is the
-raw step the player reports; its max is left out because the operator sets different day and night
-limits, so any ratio to it would be meaningless.
-
-WHY 10 MIN, NOT FASTER: Yoto publishes no rate limit or polling guidance (yoto.dev, checked
-2026-09-29). The Home Assistant integration (cdnninja/yoto_ha) polls REST every 5 min, and Yoto's
-MQTT docs only say idle connections close after ~5 min. So 10 min stays inside what is known to be
-tolerated. Anything faster should be a long-lived MQTT subscription, not faster polling.
-
     sleepguard.py            one pass (what the timer runs)
-    sleepguard.py --dry      decide and log, send nothing (the HA payload is printed instead)
+    sleepguard.py --dry      decide and log, send nothing
 """
-import datetime, json, os, sys, time, urllib.request
+import datetime, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yoto
 
@@ -60,78 +44,15 @@ def report(link, wait=8):
     return ev
 
 
-TITLES = os.path.expanduser("~/.local/share/moprox/yoto/card-titles.json")
-
-
-def card_title(tok, card_id):
-    """A card's title, cached on disk: the events report carries only the id. None if unknown."""
-    if not card_id:
-        return None
-    try:
-        cache = json.load(open(TITLES))
-    except Exception:
-        cache = {}
-    if card_id not in cache:
-        try:
-            cache[card_id] = yoto.get("/card/%s" % card_id, tok)["card"]["title"].strip()
-        except Exception:
-            return None                             # not cached, so the next pass retries
-        os.makedirs(os.path.dirname(TITLES), exist_ok=True)
-        json.dump(cache, open(TITLES + ".tmp", "w"), ensure_ascii=False, indent=1)
-        os.replace(TITLES + ".tmp", TITLES)
-    return cache[card_id]
-
-
-def to_ha(ev, tok):
-    """The events report reshaped into the webhook payload packages/yoto.yaml expects."""
-    card = ev.get("cardId") if ev.get("cardId") not in (None, "", "none") else None
-    return {"status": ev.get("playbackStatus") or "unknown",
-            "card": card_title(tok, card), "card_id": card,
-            "chapter": ev.get("chapterTitle"), "track": ev.get("trackTitle"),
-            "source": ev.get("source"), "sleep_timer": bool(ev.get("sleepTimerActive")),
-            "volume": ev.get("volume")}
-
-
-HA_LAST = os.path.expanduser("~/.local/share/moprox/yoto/ha-last.json")
-
-
-def publish(payload, dry):
-    """POST to HA. Never raises: a down HA must not cost the children their sleep timer."""
-    e = yoto.env()
-    hook = e.get("YOTO_HA_WEBHOOK")
-    if not hook:
-        return
-    try:
-        if json.load(open(HA_LAST)) == payload:
-            return                                  # unchanged: HA already has it
-    except Exception:
-        pass
-    if dry:
-        print("DRY: would post to HA %s" % json.dumps(payload, ensure_ascii=False))
-        return
-    url = "%s/api/webhook/%s" % (e.get("YOTO_HA_URL", "http://ha.lan:8123").rstrip("/"), hook)
-    try:
-        urllib.request.urlopen(urllib.request.Request(
-            url, data=json.dumps(payload).encode(), method="POST",
-            headers={"Content-Type": "application/json"}), timeout=10).read()
-    except Exception as x:
-        print("HA publish failed: %s" % x)          # HA_LAST untouched, so the next pass retries
-        return
-    os.makedirs(os.path.dirname(HA_LAST), exist_ok=True)
-    json.dump(payload, open(HA_LAST + ".tmp", "w"), ensure_ascii=False)
-    os.replace(HA_LAST + ".tmp", HA_LAST)
-    print("HA: %s" % json.dumps(payload, ensure_ascii=False))
-
-
 def main():
     dry = "--dry" in sys.argv
     secs = wanted(datetime.datetime.now())
+    if secs is None:
+        return
     tok = yoto.token()
     dev = yoto.env()["YOTO_DEVICE_ID"]
     on = yoto.online(tok, dev)
     if on is not True:
-        if on is False:
-            publish({"status": "off"}, dry)
         print("player %s: nothing to do" % ("off" if on is False else "presence unknown"))
         return
     with yoto.Link(tok, dev) as link:
@@ -139,10 +60,7 @@ def main():
         if "sleepTimerActive" not in ev:
             print("player online but sent no events report; leaving it alone")
             return
-        publish(to_ha(ev, tok), dry)
         what = "%s / %s" % (ev.get("playbackStatus"), ev.get("chapterTitle") or ev.get("cardId") or "no card")
-        if secs is None:
-            return
         if ev.get("playbackStatus") != "playing":
             print("not playing (%s); nothing to do" % what)
             return
@@ -156,8 +74,6 @@ def main():
         time.sleep(1)
         after = report(link)
         ok = after.get("sleepTimerActive") is True
-        if "sleepTimerActive" in after:
-            publish(to_ha(after, tok), dry)
         print("set %d min sleep timer, %s -> %s (%ss left)"
               % (secs // 60, what, "confirmed" if ok else "NOT confirmed", after.get("sleepTimerSeconds")))
 

@@ -1,0 +1,21 @@
+# Long-running Home Assistant feed for the Yoto (services/yoto/hafeed.py). STOPGAP until HA runs its own
+# core Yoto integration. tooling-pull does NOT restart this: after changing hafeed.py or yoto.py,
+# sudo systemctl restart yoto-hafeed.service
+[Unit]
+Description=yoto-hafeed -- push the Yoto's now-playing and volume to Home Assistant on change
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/yoto
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/yoto/hafeed.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

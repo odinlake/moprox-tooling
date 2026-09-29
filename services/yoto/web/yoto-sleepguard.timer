@@ -1,5 +1,4 @@
-# Every 10 minutes, all day: each pass may update Home Assistant; only 20:30-08:00 passes set a timer.
-# Not faster: see WHY 10 MIN in sleepguard.py.
+# Every 10 minutes; sleepguard.py itself returns at once outside 20:30-08:00.
 [Unit]
 Description=yoto-sleepguard every 10 min
 
