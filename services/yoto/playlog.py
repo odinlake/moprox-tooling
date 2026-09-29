@@ -90,7 +90,8 @@ def record(p):
     """One pushed change from HA: {ts, state, title, album, artist, volume_level}. Returns True if
     stored, False if it repeats the row before it (HA sends one per attribute update)."""
     lvl = p.get("volume_level")
-    r = (float(p["ts"]), str(p["state"]), p.get("title"), p.get("album"), p.get("artist"),
+    txt = lambda k: (p.get(k) or "").strip() or None       # Yoto card titles carry trailing spaces
+    r = (float(p["ts"]), str(p["state"]), txt("title"), txt("album"), txt("artist"),
          None if lvl in (None, "") else round(float(lvl) * HW_VOLUME_MAX))
     with _lock:
         c = db()
@@ -190,10 +191,14 @@ def stats(days=30):
         dur = e - s
         album = album or "(unknown card)"
         title = title or "(unknown)"
-        new = not (last_play and last_play[:2] == (title, album) and s - last_play[2] <= PLAY_GAP)
+        # the first second of a start arrives before the metadata: time counts, a play does not
+        known = title != "(unknown)" or album != "(unknown card)"
+        new = known and not (last_play and last_play[:2] == (title, album) and s - last_play[2] <= PLAY_GAP)
         plays += new
         sessions += (last_end is None or s - last_end > SESSION_GAP)
-        last_play, last_end = (title, album, e), e
+        if known:
+            last_play = (title, album, e)
+        last_end = e
         k = cards.setdefault(album, {"album": album, "listen_s": 0, "plays": 0, "last": 0})
         k["listen_s"] += dur; k["plays"] += new; k["last"] = max(k["last"], e)
         ch = chapters.setdefault((album, title), {"album": album, "title": title, "listen_s": 0, "plays": 0, "last": 0})
