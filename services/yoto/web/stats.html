@@ -311,7 +311,7 @@ td .al { color: var(--muted); font-size: 12px; }
     var h = "";
     if (D.sync_error) h += '<div class="warn">Could not sync from Home Assistant: ' + esc(D.sync_error) + '. Showing what was recorded before.</div>';
     if (!D.first_ts) {
-      m.innerHTML = h + '<div class="msg">No play history recorded yet. It starts from when Home Assistant\'s Yoto integration was added.</div>';
+      m.innerHTML = h + '<div class="msg">No play history recorded yet. Home Assistant sends each play here as it happens, so the first one will appear as soon as something plays.</div>';
       return;
     }
     var vol = Object.keys(D.volume).map(function (k) { return { k: k, v: D.volume[k] }; }).sort(function (a, b) { return a.k - b.k; });

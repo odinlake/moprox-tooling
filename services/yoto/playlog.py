@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """The Yoto's play history, for mo.lan/yoto/stats. Yoto itself keeps none (its API has no history
-endpoint), so the record is Home Assistant's: the core Yoto integration's media_player, whose state
-and attributes HA's recorder logs. HA purges its recorder after ~10 days, so sync() copies the
-history into our own SQLite and it is kept here for good.
+endpoint), so the record comes from Home Assistant's core Yoto integration media_player, and is kept
+here in our own SQLite for good (HA purges its recorder after ~10 days).
 
-    playlog.py sync         pull new history from HA (yoto-web also does this itself)
+HOW IT ARRIVES: HA PUSHES it. private-config-ha packages/yoto_playlog.yaml posts every change of
+state / title / card / volume to yoto-web's POST /api/playlog, which calls record(). No HA token is
+needed on this side; the operator asked not to be asked for one.
+
+sync() is an optional backfill that PULLS the same history over HA's REST API. It only runs when a
+token happens to exist in ~/.config/claude-dev/ha.env (HA_TOKEN, optional HA_URL / HA_YOTO_ENTITY);
+without one it does nothing. Rows from either path land in the same table and dedupe on timestamp.
+
+    playlog.py sync         backfill from HA, if a token exists
     playlog.py stats [days] print the stats JSON the page renders
-
-HA access: ~/.config/claude-dev/ha.env, HA_TOKEN (a long-lived token the operator created) and
-optional HA_URL (default http://ha.lan:8123) and HA_YOTO_ENTITY (default: the only media_player
-whose entity id contains "yoto", else it must be set).
 
 What is stored: one row per CHANGE of (state, title, card, volume). HA writes a row for every
 attribute update, position included, so consecutive identical tuples are collapsed on the way in.
@@ -83,12 +86,34 @@ def _row(s):
             None if lvl is None else round(lvl * HW_VOLUME_MAX))
 
 
+def record(p):
+    """One pushed change from HA: {ts, state, title, album, artist, volume_level}. Returns True if
+    stored, False if it repeats the row before it (HA sends one per attribute update)."""
+    lvl = p.get("volume_level")
+    r = (float(p["ts"]), str(p["state"]), p.get("title"), p.get("album"), p.get("artist"),
+         None if lvl in (None, "") else round(float(lvl) * HW_VOLUME_MAX))
+    with _lock:
+        c = db()
+        try:
+            prev = c.execute("select state, title, album, artist, volume from rows where ts < ?"
+                             " order by ts desc limit 1", (r[0],)).fetchone()
+            if prev == r[1:]:
+                return False
+            c.execute("insert or ignore into rows values (?,?,?,?,?,?)", r)
+            meta(c, "synced_to", time.time())
+            c.commit()
+            return True
+        finally:
+            c.close()
+
+
 def sync():
-    """Pull every state/attribute change since the last sync. Returns rows added."""
+    """Optional backfill: pull every change since the last sync over HA's REST API. Returns rows
+    added, or None when no token is configured (the normal case: HA pushes instead)."""
     with _lock:
         e = ha_env()
         if not e.get("HA_TOKEN"):
-            raise RuntimeError("no HA_TOKEN in %s" % HA_ENV)
+            return None
         c = db()
         ent = entity(e)
         now = time.time()
@@ -146,7 +171,8 @@ def stats(days=30):
     c = db()
     synced = float(meta(c, "synced_to") or 0)
     first = c.execute("select min(ts) from rows").fetchone()[0]
-    t1 = min(time.time(), synced) if synced else time.time()
+    # pushed data is current to now: the last row stays in force until the next push changes it
+    t1 = time.time()
     if days:
         t0 = t1 - days * 86400
     else:

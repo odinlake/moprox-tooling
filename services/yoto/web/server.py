@@ -6,7 +6,8 @@
     GET  /api/playlist/<cardId>  its chapters, each with an image url
     GET  /api/img/<name>         a cover, downscaled once and cached
     GET  /stats                  what has been played, when, how often (stats.html)
-    GET  /api/stats?days=N       its data (playlog.stats; N=0 is everything), synced from HA first
+    GET  /api/stats?days=N       its data (playlog.stats; N=0 is everything)
+    POST /api/playlog            one play-state change, pushed by Home Assistant (10.10.10.7 only)
     POST /api/play               {card, keys[], volume, sleep, rest}  -> myo.queue(), bard's routine
     POST /api/stop               stop the player
 
@@ -31,6 +32,7 @@ THUMBS = COVERS / ".thumbs"
 # The icon set (same mo "M" + corner glyph as mo/search and mo/mail, here a Y) and the PWA manifest.
 STATIC = {"/icon.svg": "image/svg+xml", "/icon-yoto-180.png": "image/png", "/icon-yoto-512.png": "image/png",
           "/apple-touch-icon.png": "image/png", "/mo-yoto.webmanifest": "application/manifest+json"}
+HA_ADDRS = {"10.10.10.7", "127.0.0.1"}   # Home Assistant's agent-subnet leg; loopback for tests
 ORIGINS = {"https://mo.lan", "http://127.0.0.1:%d" % PORT, "http://localhost:%d" % PORT}
 SYNC_EVERY = 15 * 60                  # background pull from HA; HA's own recorder keeps only ~10 days
 SYNC_FRESH = 60                       # a page load re-syncs if the last pull is older than this
@@ -96,7 +98,8 @@ def playlist(cid):
 
 
 def sync_playlog():
-    """Pull HA's Yoto history into playlog. Never raises; the page shows the error instead."""
+    """Optional backfill from HA's REST history (only with a token; HA normally pushes). Never
+    raises; the page shows the error instead."""
     try:
         playlog.sync()
         _sync["error"] = None
@@ -182,6 +185,18 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/playlog":
+            # Pushed by HA (private-config-ha packages/yoto_playlog.yaml), which sends no Origin. The
+            # source address is the credential: the nftables gate admits HA only for this, and
+            # this refuses anyone else who got past it.
+            if self.client_address[0] not in HA_ADDRS:
+                return self.send(403, {"error": "not Home Assistant"})
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                return self.send(200, {"stored": playlog.record(json.loads(self.rfile.read(n)))})
+            except Exception as e:
+                errlog.err("yoto-web POST /api/playlog", e)
+                return self.send(400, {"error": "%s: %s" % (type(e).__name__, e)})
         # A write from another origin is refused: Authelia's cookie would otherwise ride along on a
         # cross-site form post and start the children's speaker.
         if self.headers.get("Origin") not in ORIGINS:
