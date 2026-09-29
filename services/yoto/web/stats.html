@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fff7ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1712" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Yoto stats</title>
+<style>
+/* Page tokens are the picker's (index.html). Chart tokens are the dataviz reference palette:
+   categorical slots for card identity in the 24 h timeline, one blue ramp for magnitude. */
+:root {
+  --bg: #fff7ec; --surface: #ffffff; --ink: #2a2118; --muted: #7a6c5d; --line: #eadcc8;
+  --accent: #1f7aff; --tile: #f3e6d3; --shadow: 0 1px 2px rgba(60,40,10,.08), 0 6px 18px rgba(60,40,10,.08);
+  --grid: #efe4d4; --bar: #2a78d6; --empty: #f5ede1; --warn-bg: #fff1d6; --warn-ink: #7a4b00;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --other: #a39a8e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
+    --accent: #4d95ff; --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+    --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --other: #7d7466;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
+  --accent: #4d95ff; --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+  --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --other: #7d7466;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font: 15px/1.4 ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100dvh; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+header {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 4px) 8px 4px; background: var(--bg); border-bottom: 1px solid var(--line);
+}
+header h1 { flex: 1; margin: 0; font-size: 19px; font-weight: 800; }
+.iconbtn { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; text-decoration: none; color: inherit; }
+.iconbtn:active { background: var(--tile); }
+.ranges { display: flex; gap: 4px; background: var(--tile); border-radius: 12px; padding: 3px; }
+.ranges button { padding: 6px 10px; border-radius: 9px; font-weight: 700; font-size: 13px; color: var(--muted); }
+.ranges button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+main { padding: 10px 12px calc(env(safe-area-inset-bottom) + 40px); max-width: 980px; margin: 0 auto; display: grid; gap: 14px; }
+.card { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px 14px 12px; min-width: 0; }
+.card h2 { margin: 0 0 2px; font-size: 16px; font-weight: 800; }
+.card .sub { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 640px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.tile { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 12px 14px; }
+.tile .k { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.tile .v { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.tile .n { font-size: 12px; color: var(--muted); }
+.two { display: grid; gap: 14px; }
+@media (min-width: 820px) { .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+svg { display: block; width: 100%; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.axis { position: relative; height: 16px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.axis span { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12.5px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.acts { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 1px; max-height: 360px; overflow: auto; }
+.acts li { display: grid; grid-template-columns: 94px 12px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 6px 2px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.acts li:first-child { border-top: 0; }
+.acts .t { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; }
+.acts .dot { width: 10px; height: 10px; border-radius: 3px; align-self: center; }
+.acts .w { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acts .m { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hbars { display: grid; gap: 8px; }
+.hbar { display: grid; gap: 3px; }
+.hbar .row { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; }
+.hbar .row b { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar .row span { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 12.5px; }
+.hbar .track { height: 8px; }
+.hbar .fill { height: 8px; border-radius: 0 4px 4px 0; background: var(--bar); min-width: 2px; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 4px 6px; }
+td { padding: 6px; border-top: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .al { color: var(--muted); font-size: 12px; }
+.lastm { display: none; }
+@media (max-width: 560px) {
+  .acts li { grid-template-columns: 12px minmax(0, 1fr) auto; grid-template-areas: "dot t m" ". w w"; row-gap: 1px; }
+  .acts .dot { grid-area: dot; } .acts .t { grid-area: t; } .acts .m { grid-area: m; }
+  .acts .w { grid-area: w; white-space: normal; }
+  .col-last { display: none; }
+  .lastm { display: inline; }
+}
+.tablewrap { overflow-x: auto; }
+.msg { padding: 30px 8px; text-align: center; color: var(--muted); }
+.warn { background: var(--warn-bg); color: var(--warn-ink); border-radius: 12px; padding: 10px 12px; font-size: 13.5px; }
+.foot { text-align: center; font-size: 12px; color: var(--muted); }
+#tip {
+  position: fixed; z-index: 20; pointer-events: none; background: var(--ink); color: var(--bg);
+  padding: 7px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.35; max-width: 260px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.2); opacity: 0; transition: opacity .1s;
+}
+#tip.on { opacity: 1; }
+#tip b { font-weight: 800; }
+.hit { cursor: pointer; }
+.hit:hover, .hit.on { stroke: var(--ink); stroke-width: 1.5; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="iconbtn" href="./" aria-label="Back to the picker">‹</a>
+  <h1>Listening</h1>
+  <div class="ranges" id="ranges" role="group" aria-label="Period">
+    <button data-d="7">7d</button><button data-d="30">30d</button><button data-d="90">90d</button><button data-d="0">All</button>
+  </div>
+</header>
+<main id="main"><div class="msg">Loading…</div></main>
+<div id="tip" role="tooltip"></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  var SLOTS = 7;
+  // one-hue blue ramp, light -> dark on the light surface; dark mode runs it the other way so
+  // "more" is always "more contrast against the surface"
+  var RAMP_L = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+  var RAMP_D = ["#0d366b", "#104281", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef", "#b7d3f6"];
+  var st = { days: 30, data: null };
+  try { var d0 = localStorage.getItem("yoto-stats-days"); if (d0 !== null) st.days = +d0; } catch (e) {}
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return "&#" + c.charCodeAt(0) + ";"; }); }
+  function dark() {
+    var t = document.documentElement.getAttribute("data-theme");
+    return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  function dur(s) {
+    s = Math.round(s || 0);
+    if (s < 60) return s + "s";
+    var m = Math.round(s / 60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m / 60), r = m % 60;
+    return h + "h" + (r ? " " + r + "m" : "");
+  }
+  function hm(ts) { var d = new Date(ts * 1000); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+  function when(ts) {
+    var d = new Date(ts * 1000), now = new Date();
+    var days = Math.floor((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
+    var day = days === 0 ? "today" : days === 1 ? "yesterday" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return day + " " + hm(ts);
+  }
+  function what(x) { return x.title && x.album && x.title !== x.album ? x.album + " — " + x.title : (x.title || x.album || "unknown"); }
+
+  // ---- tooltip (hover on desktop, tap on touch) ---------------------------------------------------
+  var tip = $("tip"), tipOwner = null;
+  function showTip(el, html, ev) {
+    tip.innerHTML = html; tip.classList.add("on");
+    if (tipOwner && tipOwner !== el) tipOwner.classList.remove("on");
+    tipOwner = el; el.classList.add("on");
+    var r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    var x = ev && ev.clientX != null ? ev.clientX : r.left + r.width / 2;
+    var left = Math.max(8, Math.min(innerWidth - tw - 8, x - tw / 2));
+    var top = r.top - th - 8; if (top < 8) top = r.bottom + 8;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  }
+  function hideTip() { tip.classList.remove("on"); if (tipOwner) tipOwner.classList.remove("on"); tipOwner = null; }
+  document.addEventListener("pointerover", function (e) { var h = e.target.closest("[data-tip]"); if (h && e.pointerType === "mouse") showTip(h, h.getAttribute("data-tip"), e); });
+  document.addEventListener("pointerout", function (e) { var h = e.target.closest("[data-tip]"); if (h && e.pointerType === "mouse") hideTip(); });
+  document.addEventListener("click", function (e) { var h = e.target.closest("[data-tip]"); if (h) showTip(h, h.getAttribute("data-tip"), e); else hideTip(); });
+  addEventListener("scroll", hideTip, { passive: true });
+
+  // ---- sections -------------------------------------------------------------------------------------
+  function tiles(t, days) {
+    var per = t.active_days ? t.listen_s / t.active_days : 0;
+    return '<div class="tiles">' +
+      '<div class="tile"><div class="k">Listening</div><div class="v">' + dur(t.listen_s) + '</div><div class="n">' + (days ? "last " + days + " days" : "all recorded") + '</div></div>' +
+      '<div class="tile"><div class="k">Plays</div><div class="v">' + t.plays + '</div><div class="n">chapters started</div></div>' +
+      '<div class="tile"><div class="k">Sessions</div><div class="v">' + t.sessions + '</div><div class="n">gaps under 15m join</div></div>' +
+      '<div class="tile"><div class="k">Active days</div><div class="v">' + t.active_days + '<span style="font-size:15px;color:var(--muted)"> / ' + t.days + '</span></div><div class="n">' + dur(per) + ' per active day</div></div>' +
+      '</div>';
+  }
+
+  function last24(L) {
+    var segs = L.segments.filter(function (s) { return s.state === "playing" || s.state === "paused"; });
+    // card colour by order of first appearance in these 24 h: stable whatever period is picked
+    var order = [];
+    segs.forEach(function (s) { var a = s.album || s.title || "?"; if (order.indexOf(a) < 0) order.push(a); });
+    function col(s) { var i = order.indexOf(s.album || s.title || "?"); return i < SLOTS ? "var(--s" + (i + 1) + ")" : "var(--other)"; }
+    var W = 1000, H = 36, top = 2, bh = 30, span = L.end - L.start, ax = "";
+    var x = function (t) { return (t - L.start) / span * W; };
+    var g = "";
+    // hour grid every 3 h on local clock
+    var d = new Date(L.start * 1000); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
+    for (var t = d.getTime() / 1000; t < L.end; t += 3600) {
+      var hr = new Date(t * 1000).getHours();
+      if (hr % 3) continue;
+      ax += '<span style="left:' + (x(t) / W * 100).toFixed(2) + '%">' + String(hr).padStart(2, "0") + '</span>';
+    }
+    g = '<rect x="0" y="' + top + '" width="' + W + '" height="' + bh + '" rx="4" fill="var(--empty)"/>' + g;
+    d = new Date(L.start * 1000); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
+    for (t = d.getTime() / 1000; t < L.end; t += 3600) {
+      if (new Date(t * 1000).getHours() % 3) continue;
+      g += '<line x1="' + x(t) + '" x2="' + x(t) + '" y1="' + top + '" y2="' + (top + bh) + '" stroke="var(--surface)" stroke-opacity=".7" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+    }
+    segs.forEach(function (s) {
+      var x0 = x(s.s), w = Math.max(2, x(s.e) - x0);
+      var tipTxt = "<b>" + esc(hm(s.s)) + "–" + esc(hm(s.e)) + "</b> · " + dur(s.e - s.s) + (s.state === "paused" ? " · paused" : "") +
+                   "<br>" + esc(what(s)) + (s.volume != null ? "<br>volume " + s.volume : "");
+      var paused = s.state === "paused";
+      g += '<rect class="hit" x="' + x0 + '" y="' + (top + (paused ? bh * 0.3 : 0)) + '" width="' + w + '" height="' + (paused ? bh * 0.4 : bh) +
+           '" fill="' + col(s) + '"' + (paused ? ' fill-opacity=".45"' : "") + ' vector-effect="non-scaling-stroke" data-tip="' + esc(tipTxt) + '"/>';
+    });
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="height:' + H + 'px" role="img" aria-label="Timeline of the last 24 hours">' + g + '</svg><div class="axis">' + ax + '</div>';
+    var legend = order.length ? '<div class="legend">' + order.map(function (a, i) {
+      return '<span><i style="background:' + (i < SLOTS ? "var(--s" + (i + 1) + ")" : "var(--other)") + '"></i>' + esc(a) + '</span>';
+    }).join("") + '<span style="color:var(--muted)">thin bar = paused</span></div>' : "";
+    var acts = segs.slice().reverse().map(function (s) {
+      return '<li><span class="t">' + hm(s.s) + "–" + hm(s.e) + '</span><i class="dot" style="background:' + col(s) + (s.state === "paused" ? ';opacity:.45' : "") + '"></i>' +
+             '<span class="w">' + (s.state === "paused" ? '<span style="color:var(--muted)">paused · </span>' : "") + esc(what(s)) + '</span>' +
+             '<span class="m">' + dur(s.e - s.s) + (s.volume != null ? " · vol " + s.volume : "") + '</span></li>';
+    }).join("");
+    return '<section class="card"><h2>Last 24 hours</h2><p class="sub">Every play and pause, to the minute. Tap a bar for details.</p>' +
+      (segs.length ? svg + legend + '<ul class="acts">' + acts + '</ul>' : '<div class="msg">Nothing played in the last 24 hours.</div>') + '</section>';
+  }
+
+  function heatmap(heat) {
+    var max = 0; heat.forEach(function (r) { r.forEach(function (v) { if (v > max) max = v; }); });
+    var ramp = dark() ? RAMP_D : RAMP_L;
+    // wide: weekdays down, hours across. Narrow (phone): hours down, weekdays across, so it fits
+    // without shrinking the labels to nothing. The SVG scales uniformly, so text stays undistorted.
+    var tall = $("main").clientWidth < 620;
+    var cw = tall ? 40 : 36, ch = tall ? 18 : 22, gap = 2, lx = tall ? 26 : 34, ty = 16;
+    var W = lx + (tall ? 7 : 24) * cw, H = ty + (tall ? 24 : 7) * ch;
+    var g = "";
+    if (tall) {
+      DAYS.forEach(function (dn, di) { g += '<text x="' + (lx + di * cw + cw / 2) + '" y="11" text-anchor="middle">' + dn + '</text>'; });
+      for (var hh = 0; hh < 24; hh += 3) g += '<text x="0" y="' + (ty + hh * ch + ch / 2 + 4) + '">' + String(hh).padStart(2, "0") + '</text>';
+    } else {
+      for (var h = 0; h < 24; h += 3) g += '<text x="' + (lx + h * cw + cw / 2) + '" y="11" text-anchor="middle">' + String(h).padStart(2, "0") + '</text>';
+      DAYS.forEach(function (dn, di) { g += '<text x="0" y="' + (ty + di * ch + ch / 2 + 4) + '">' + dn + '</text>'; });
+    }
+    heat.forEach(function (row, di) {
+      row.forEach(function (v, h) {
+        var fill = v > 0 ? ramp[Math.min(ramp.length - 1, Math.floor(Math.sqrt(v / max) * ramp.length))] : "var(--empty)";
+        var t = "<b>" + DAYS[di] + " " + String(h).padStart(2, "0") + ":00–" + String((h + 1) % 24).padStart(2, "0") + ":00</b><br>" + (v ? dur(v) + " listened" : "nothing");
+        var cx = tall ? di : h, cy = tall ? h : di;
+        g += '<rect class="hit" x="' + (lx + cx * cw + gap / 2) + '" y="' + (ty + cy * ch + gap / 2) + '" width="' + (cw - gap) + '" height="' + (ch - gap) + '" rx="3" fill="' + fill + '" data-tip="' + esc(t) + '"/>';
+      });
+    });
+    // hour-of-day totals as one row under the grid, same ramp
+    var hours = []; for (var i = 0; i < 24; i++) hours.push(heat.reduce(function (a, r) { return a + r[i]; }, 0));
+    var peak = hours.indexOf(Math.max.apply(null, hours));
+    var sub = max ? "Darker = more listening. Peak hour: " + String(peak).padStart(2, "0") + ":00." : "No listening in this period.";
+    return '<section class="card"><h2>Time of day</h2><p class="sub">' + sub + '</p>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Listening by weekday and hour">' + g + '</svg></section>';
+  }
+
+  function daily(days) {
+    var n = days.length, max = Math.max.apply(null, days.map(function (d) { return d.listen_s; }).concat([60]));
+    var W = 1000, H = 130, lb = 0, top = 8, ph = H - lb - top, bw = W / n, gap = Math.min(2, bw * 0.25);
+    var g = "", ax = "";
+    // two recessive gridlines: half and full scale
+    [0.5, 1].forEach(function (f) {
+      var y = top + ph - ph * f;
+      g += '<line x1="0" x2="' + W + '" y1="' + y + '" y2="' + y + '" stroke="var(--grid)" vector-effect="non-scaling-stroke"/>';
+    });
+    days.forEach(function (d, i) {
+      var h = d.listen_s / max * ph, x = i * bw + gap / 2, w = Math.max(1, bw - gap), y = top + ph - h;
+      var dt = new Date(d.date + "T12:00:00");
+      var lab = dt.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+      if (h > 0) {
+        var r = Math.min(4, w / 2, h);
+        g += '<path d="M' + x + ',' + (top + ph) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y + 'H' + (x + w - r) + 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'V' + (top + ph) + 'Z" fill="var(--bar)"/>';
+      }
+      g += '<rect class="hit" x="' + (i * bw) + '" y="' + top + '" width="' + bw + '" height="' + ph + '" fill="transparent" data-tip="<b>' + esc(lab) + '</b><br>' + (d.listen_s ? dur(d.listen_s) : "nothing") + '"/>';
+    });
+    var every = Math.ceil(n / 7);
+    days.forEach(function (d, i) {
+      if ((n - 1 - i) % every) return;
+      var dt = new Date(d.date + "T12:00:00");
+      ax += '<span style="left:' + ((i + 0.5) / n * 100).toFixed(2) + '%">' + dt.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + '</span>';
+    });
+    return '<section class="card"><h2>Listening per day</h2><p class="sub">Top line = ' + dur(max) + '.</p>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="height:' + H + 'px" role="img" aria-label="Listening time per day">' + g + '</svg><div class="axis" style="margin:0 18px">' + ax + '</div></section>';
+  }
+
+  function hbars(title, sub, rows, label, note) {
+    if (!rows.length) return '<section class="card"><h2>' + title + '</h2><div class="msg">Nothing yet.</div></section>';
+    var max = Math.max.apply(null, rows.map(function (r) { return r.v; }));
+    return '<section class="card"><h2>' + title + '</h2><p class="sub">' + sub + '</p><div class="hbars">' + rows.map(function (r) {
+      return '<div class="hbar"><div class="row"><b>' + esc(label(r)) + '</b><span>' + note(r) + '</span></div>' +
+             '<div class="track"><div class="fill" style="width:' + (r.v / max * 100).toFixed(1) + '%"></div></div></div>';
+    }).join("") + '</div></section>';
+  }
+
+  function chapters(rows) {
+    if (!rows.length) return "";
+    return '<section class="card"><h2>Most played chapters</h2><p class="sub">By time listened. A chapter resumed within 30 minutes counts as one play.</p><div class="tablewrap"><table>' +
+      '<thead><tr><th>Chapter</th><th class="num">Plays</th><th class="num">Time</th><th class="num col-last">Last</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        return '<tr><td>' + esc(r.title) + 
+               '<div class="al">' + (r.album && r.album !== r.title ? esc(r.album) : "") + '<span class="lastm">' + (r.album && r.album !== r.title ? " · " : "") + 'last ' + esc(when(r.last)) + '</span></div></td>' +
+               '<td class="num">' + r.plays + '</td><td class="num">' + dur(r.listen_s) + '</td><td class="num col-last">' + esc(when(r.last)) + '</td></tr>';
+      }).join("") + '</tbody></table></div></section>';
+  }
+
+  function render() {
+    var D = st.data, m = $("main");
+    var h = "";
+    if (D.sync_error) h += '<div class="warn">Could not sync from Home Assistant: ' + esc(D.sync_error) + '. Showing what was recorded before.</div>';
+    if (!D.first_ts) {
+      m.innerHTML = h + '<div class="msg">No play history recorded yet. It starts from when Home Assistant\'s Yoto integration was added.</div>';
+      return;
+    }
+    var vol = Object.keys(D.volume).map(function (k) { return { k: k, v: D.volume[k] }; }).sort(function (a, b) { return a.k - b.k; });
+    h += tiles(D.totals, D.range.days) + last24(D.last24) + heatmap(D.heat) + daily(D.daily) +
+      '<div class="two">' +
+      hbars("Most played cards", "By time listened.", D.cards.map(function (c) { return { v: c.listen_s, c: c }; }),
+            function (r) { return r.c.album; }, function (r) { return dur(r.c.listen_s) + " · " + r.c.plays + " plays"; }) +
+      hbars("Volume", "Time listened at each volume step (raw, out of the player's 16).", vol,
+            function (r) { return "Volume " + r.k; }, function (r) { return dur(r.v); }) +
+      '</div>' + chapters(D.chapters) +
+      '<div class="foot">History since ' + esc(new Date(D.first_ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })) +
+      (D.synced_to ? " · synced " + esc(when(D.synced_to)) : "") + '</div>';
+    m.innerHTML = h;
+  }
+
+  function load() {
+    document.querySelectorAll("#ranges button").forEach(function (b) { b.setAttribute("aria-pressed", +b.getAttribute("data-d") === st.days ? "true" : "false"); });
+    fetch("api/stats?days=" + st.days, { credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; }); })
+      .then(function (j) { st.data = j; render(); })
+      .catch(function (e) { $("main").innerHTML = '<div class="msg">Could not load stats: ' + esc(e.message) + '</div>'; });
+  }
+  $("ranges").addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b) return;
+    st.days = +b.getAttribute("data-d");
+    try { localStorage.setItem("yoto-stats-days", st.days); } catch (x) {}
+    load();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () { if (st.data) render(); });
+  var rz; addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { if (st.data) render(); }, 150); });
+  load();
+})();
+</script>
+</body>
+</html>

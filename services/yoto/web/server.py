@@ -5,6 +5,8 @@
     GET  /api/playlists          the family's own MYO playlists (store cards and twins left out)
     GET  /api/playlist/<cardId>  its chapters, each with an image url
     GET  /api/img/<name>         a cover, downscaled once and cached
+    GET  /stats                  what has been played, when, how often (stats.html)
+    GET  /api/stats?days=N       its data (playlog.stats; N=0 is everything), synced from HA first
     POST /api/play               {card, keys[], volume, sleep, rest}  -> myo.queue(), bard's routine
     POST /api/stop               stop the player
 
@@ -21,7 +23,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parents[1] / "lib"))
-import yoto, myo, errlog
+import yoto, myo, errlog, playlog
 
 PORT = int(os.environ.get("YOTO_WEB_PORT", "8030"))
 COVERS = Path(os.environ.get("YOTO_COVERS", str(Path.home() / ".local/share/moprox/yoto/covers")))
@@ -30,6 +32,9 @@ THUMBS = COVERS / ".thumbs"
 STATIC = {"/icon.svg": "image/svg+xml", "/icon-yoto-180.png": "image/png", "/icon-yoto-512.png": "image/png",
           "/apple-touch-icon.png": "image/png", "/mo-yoto.webmanifest": "application/manifest+json"}
 ORIGINS = {"https://mo.lan", "http://127.0.0.1:%d" % PORT, "http://localhost:%d" % PORT}
+SYNC_EVERY = 15 * 60                  # background pull from HA; HA's own recorder keeps only ~10 days
+SYNC_FRESH = 60                       # a page load re-syncs if the last pull is older than this
+_sync = {"at": 0, "error": None}
 PLAY_LOCK = threading.Lock()          # one play at a time: two taps racing would interleave orders
 _cache = {}                           # small TTL cache: the library barely changes
 
@@ -90,6 +95,32 @@ def playlist(cid):
     return {"cardId": cid, "title": (card.get("title") or "").strip(), "chapters": chs}
 
 
+def sync_playlog():
+    """Pull HA's Yoto history into playlog. Never raises; the page shows the error instead."""
+    try:
+        playlog.sync()
+        _sync["error"] = None
+    except Exception as e:
+        if str(e) != _sync["error"]:                 # once per distinct error, not every 15 min
+            errlog.err("yoto-web playlog sync", e)
+        _sync["error"] = str(e)
+    _sync["at"] = time.time()
+
+
+def sync_loop():
+    while True:
+        sync_playlog()
+        time.sleep(SYNC_EVERY)
+
+
+def stats(days):
+    if time.time() - _sync["at"] > SYNC_FRESH:
+        sync_playlog()
+    out = playlog.stats(days)
+    out["sync_error"] = _sync["error"]
+    return out
+
+
 def thumb(name):
     src = COVERS / name
     if src.parent != COVERS or not src.exists():
@@ -125,6 +156,12 @@ class H(BaseHTTPRequestHandler):
         try:
             if path in ("/", "/index.html"):
                 return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if path in ("/stats", "/stats.html"):
+                return self.send(200, (HERE / "stats.html").read_bytes(), "text/html; charset=utf-8")
+            if path == "/api/stats":
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                days = max(0, min(3650, int((q.get("days") or ["30"])[0])))
+                return self.send(200, stats(days))
             if path in STATIC:
                 return self.send(200, (HERE / path[1:]).read_bytes(), STATIC[path], "max-age=86400")
             if path == "/api/playlists":
@@ -181,6 +218,7 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=sync_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), H)
     print("yoto-web on :%d, covers from %s" % (PORT, COVERS), flush=True)
     srv.serve_forever()
