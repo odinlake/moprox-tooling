@@ -236,8 +236,26 @@ def entries():
                         ValueError(json.dumps(r, ensure_ascii=False)[:200]))
             skipped += 1
             continue
-        out.append(r)
+        out.append(per_set(r))
     return sorted(out, key=lambda r: (r["date"], r.get("ts", ""))), skipped, notes, retracted
+
+
+def per_set(r):
+    """A row whose `reps` is a LIST, one count per set, as coach logs an uneven session: 3 sets of
+    10, 10, 8 is `"sets": 3, "reps": [10, 10, 8]`. Everything downstream (volume, "best", the panel)
+    reads `reps` as one number, and `float([10, 10, 8])` killed the whole feed from 2026-09-21 until
+    this (26 failed runs by 2026-09-30, panel frozen). So the list is kept as `reps_sets`, `reps`
+    becomes the TOP set (what "best" compares) and `sets` the list length if it was absent. Applied
+    after supersession, which names rows by their raw content, so no row's id changes."""
+    reps = r.get("reps")
+    if not isinstance(reps, list):
+        return r
+    counts = [float(x) for x in reps if x is not None]
+    if not counts:
+        return dict(r, reps=None)
+    return dict(r, reps_sets=[int(x) if x == int(x) else x for x in counts],
+                reps=int(max(counts)) if max(counts) == int(max(counts)) else max(counts),
+                sets=r.get("sets") or len(counts))
 
 
 # Where a load CAME FROM, alongside the load itself. The log is a number plus prose, and the prose
@@ -305,6 +323,8 @@ def volume(r):
     kg = load(r)
     if kg is None or r.get("reps") is None or r.get("sets") is None:
         return None
+    if r.get("reps_sets"):                  # uneven sets: the reps actually done, not sets x top set
+        return round(sum(r["reps_sets"]) * float(kg), 1)
     return round(float(r["sets"]) * float(r["reps"]) * float(kg), 1)
 
 
@@ -324,7 +344,7 @@ def build():
         v = volume(r)
         src = kg_src(r)
         e = {"ex": r["ex"]}
-        for k in ("sets", "reps", "kg", "secs", "rir", "note"):
+        for k in ("sets", "reps", "reps_sets", "kg", "secs", "rir", "note"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 e[k] = val
@@ -342,7 +362,7 @@ def build():
             s["sets"] += int(r["sets"])
 
         m = {"date": d}
-        for k in ("sets", "reps", "kg", "secs", "rir"):
+        for k in ("sets", "reps", "reps_sets", "kg", "secs", "rir"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 m[k] = val
