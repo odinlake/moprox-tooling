@@ -45,19 +45,12 @@ def has_running_index(d):
     if d.get("runningIndex") is not None: return True
     return any((ex or {}).get("runningIndex") is not None for ex in (d.get("exercises") or []))
 
-# Matched on NAME, not Polar's numeric sport id: no ride has ever arrived here, so the cycling ids
-# are unverified and guessing one would silently mis-route the first real session. Anything matching
-# neither is still INGESTED (cat "other") and its sport is logged, so the first unrecognised session
-# tells us what it was instead of vanishing — operator instruction 2026-08-27, capture everything
-# now and revise the analysis backwards later.
-RIDE_WORDS = ("CYCLING", "BIKING", "BIKE", "SPINNING", "HANDCYCLING")
-RUN_WORDS = ("RUN", "JOG")
-
-def sport_kind(label):
-    u = str(label or "").upper()
-    if any(w in u for w in RUN_WORDS):  return "run"
-    if any(w in u for w in RIDE_WORDS): return "ride"
-    return "other"
+# Run / ride / strength / other is decided in ONE place for every stage: services/training/sport.py.
+# Anything matching none is still INGESTED (cat "other") and its sport is logged, so the first
+# unrecognised session tells us what it was instead of vanishing — operator instruction 2026-08-27,
+# capture everything now and revise the analysis backwards later.
+import sport as _sport
+sport_kind = _sport.kind
 ATHLETE_JSON = os.path.expanduser("~/projects/private-data/agents/coach/athlete.json")
 ATH = Athlete.load(ATHLETE_JSON)   # canonical physiology the coach owns (falls back to defaults)
 TRACE_POINTS = 120               # classified sessions (detail chart; the rich chart is the Telegram one)
@@ -365,7 +358,9 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
     # be reviewed by hand — the physiological types (easy/tempo/…) are not trusted pre-2026.
     for s in sessions:
         if s.get("cat") == "unknown": s["cat"] = "other"     # fold the classifier's catch-all into 'other'
-        if s["date"][:4].isdigit() and int(s["date"][:4]) < 2026:
+        # Only the RUN classifier's labels are untrusted pre-2026; ride and strength come from the
+        # sport name (sport.py), which is as good in 2019 as today, so they keep their category.
+        if s["date"][:4].isdigit() and int(s["date"][:4]) < 2026 and s.get("cat") not in ("ride", "strength"):
             s["cat"] = "other"; s["reps"] = []
     if not sessions: sys.exit(f"no sessions from export ({raw_dir}) or incoming ({in_dir})")
     attach_speeds(sessions)

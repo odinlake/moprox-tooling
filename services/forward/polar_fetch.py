@@ -27,6 +27,7 @@ import errlog
 from run import run_agent
 import strap_health              # is the chest-strap battery going? (see its docstring)
 import wattbike                  # ride data pull, started early and joined before coach
+import sport                     # run | ride | strength | other: one classifier for every stage
 import tg
 import convo
 from analysis import Athlete, analyse_safe
@@ -109,24 +110,16 @@ def upload_age_h(ex):
     try: return (time.time() - calendar.timegm(time.strptime(up, "%Y-%m-%dT%H:%M:%S"))) / 3600.0
     except Exception: return 0.0
 
-# What kind of session is this? Matched on the NAME, not Polar's numeric sport id: the ids for
-# cycling are unverified here (no ride has ever arrived) and guessing one would silently mis-route
-# the first real one. The names come straight from AccessLink's `sport` / `detailed_sport_info`.
-RUN_WORDS  = ("RUN", "JOG")
-RIDE_WORDS = ("CYCLING", "BIKING", "BIKE", "SPINNING", "HANDCYCLING")
-
+# What kind of session is this? Decided in ONE place for every stage: services/training/sport.py.
 def sport_kind(ex):
-    """'run' | 'ride' | 'other' — 'other' is ingested too, never dropped."""
-    label = ("%s %s" % (ex.get("sport") or "", ex.get("detailed_sport_info") or "")).upper()
-    if any(w in label for w in RUN_WORDS):  return "run"
-    if any(w in label for w in RIDE_WORDS): return "ride"
-    return "other"
+    """'run' | 'ride' | 'strength' | 'other' — 'other' is ingested too, never dropped."""
+    return sport.kind(sport.ex_label(ex))
 
 # What coach must be told when the session is not a run. athlete.json's LT1 155 / LT2 180 / max 202
 # are RUNNING numbers; cycling HR runs roughly 5-10 bpm lower for the same relative effort, so
 # applying them to a ride under-reads every intensity. We do not have cycling thresholds yet and are
 # not inventing them — coach is told to report what is measurable and to name what it would need.
-NON_RUN_CAVEAT = """
+RIDE_CAVEAT = """
 
 THIS IS NOT A RUN — sport is %s.
 - athlete.json (LT1 155, LT2 180, max 202) is RUNNING physiology. Cycling HR runs ~5-10 bpm LOWER at
@@ -141,6 +134,35 @@ THIS IS NOT A RUN — sport is %s.
 - No cycling baseline exists yet, so early rides are a baseline being built, not a performance to
   judge. Say so rather than filling the gap with running-shaped conclusions.
 """
+
+# Strength arrives from Polar as sport OTHER / detailed STRENGTH_TRAINING. Its HR is set-and-rest,
+# not a steady effort, so running zones and the run classifier say nothing about it. The movements
+# themselves live in the resistance log (private-data/training/strength.jsonl, via strength_note.py),
+# which has the sets and loads the HR trace cannot show.
+STRENGTH_CAVEAT = """
+
+THIS IS A STRENGTH SESSION — Polar sport %s.
+- Do NOT apply running thresholds as zones or report a running session type; the computed
+  classification above is the RUN classifier's output, shown only for completeness. Ignore it.
+- The HR trace is intervals of sets and rests. Read it as cardiovascular load only: duration, HR range,
+  how high the set peaks went and how fast HR fell between sets.
+- The actual work (exercises, sets, reps, kg) is in the resistance log,
+  ~/projects/private-data/training/strength.jsonl (logged with strength_note.py). Use today's rows if
+  there are any; if there are none, say so and ask Mikael what he did, rather than guessing from HR.
+- Chart it with your block chart (lib/fits.py plot_blocks), not an endurance chart.
+- Compare with his OTHER strength sessions, not with runs.
+"""
+
+# Anything the estate does not recognise yet: say what Polar called it and stay sport-neutral.
+OTHER_CAVEAT = """
+
+THIS IS NOT A RUN, and the estate does not recognise the sport — Polar calls it %s.
+- Running thresholds and the run classifier do not apply; the computed classification above is shown
+  only for completeness. Report what is sport-neutral: duration, HR range, 5-min max, recovery shape.
+- Name the sport as Polar did, and say if this sport needs its own handling in the estate.
+"""
+
+CAVEAT = {"ride": RIDE_CAVEAT, "strength": STRENGTH_CAVEAT, "other": OTHER_CAVEAT}
 
 def post_session(ex, hr, wb=None):
     """A new workout came in. Coach OWNS the post: it builds its OWN light-mode chart and sends ONE
@@ -161,12 +183,14 @@ def post_session(ex, hr, wb=None):
     # than no handle did, since an untagged message is the one nobody can attribute at all.
     # Best-effort: a Telegram failure here must never stop the handoff to coach.
     try:
-        sport = (ex.get("sport") or "session").replace("_", " ").lower()
+        # The estate's own word when it knows the sport, else what Polar called it: "strength
+        # training", never the bare "other" (operator, 2026-09-30).
+        name = sport.display(ex)
         if clean:
             tg.send("Got %.0f min %s session, HR %d to %d. Pinging coach…"
-                    % (dur_min, sport, min(clean), max(clean)), agent="polar")
+                    % (dur_min, name, min(clean), max(clean)), agent="polar")
         else:
-            tg.send("Got %.0f min %s session. Pinging coach…" % (dur_min, sport), agent="polar")
+            tg.send("Got %.0f min %s session. Pinging coach…" % (dur_min, name), agent="polar")
     except Exception as e:
         print("polar: receipt failed (continuing to coach): %s" % e)
     # Strap health before the read: a dropout second is not physiology, and coach must not fit a
@@ -186,7 +210,7 @@ def post_session(ex, hr, wb=None):
     fid = re.sub(r"[^A-Za-z0-9_-]", "_", str(ex.get("id") or ex.get("start_time", "ex"))[:40])
     kind = sport_kind(ex)
     summary = {"exercise_id": ex.get("id"), "raw_file": str(INCOMING / ("exercise_%s.json" % fid)),
-               "sport": ex.get("sport") or "", "sport_kind": kind,
+               "sport": ex.get("sport") or "", "polar_sport": sport.polar_label(ex), "sport_kind": kind,
                # For a non-run the run classifier's label is not a finding, so it is reported as
                # what it is rather than promoted into the `cat` field readers trust.
                "cat": cls.session_type if kind == "run" else kind,
@@ -211,7 +235,7 @@ def post_session(ex, hr, wb=None):
         "charting library (see your CLAUDE.md), not throwaway /tmp scripts. Apply anything relevant "
         "from the recent conversation below.%s%s\n\nRecent conversation:\n%s"
         % (json.dumps(summary), strap_line + wb_line,
-           "" if kind == "run" else NON_RUN_CAVEAT % (ex.get("sport") or "unknown"),
+           "" if kind == "run" else CAVEAT[kind] % sport.polar_label(ex),
            convo.transcript(16)))
     run_agent("coach", prompt, timeout=600)   # coach sends its own single post; nothing else is sent
     return cls.session_type if kind == "run" else kind

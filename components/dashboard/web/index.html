@@ -125,7 +125,7 @@
   <p class="muted" id="foot" style="margin-top:2rem"></p>
 </main>
 <script>
-const CAT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",unknown:"#6e7781",other:"#57606a"};
+const CAT = {easy:"#1a7f37",tempo:"#9a6700",vo2max:"#cf222e",speed:"#8250df",trail_easy:"#0969da",ride:"#bf3989",strength:"#953800",unknown:"#6e7781",other:"#57606a"};
 // Display-only shortening. The stored category stays `vo2max` everywhere — this is the badge text.
 const CATL = {vo2max:"vo2m"}, catl = c => CATL[c]||c;  // ~3:1 on white (GitHub Primer)
 // Session provenance (polar/fitbit/apple_health) is carried in the row + badge `title`
@@ -455,7 +455,7 @@ async function loadStrength(){
 async function loadTraining(){
   const data = await JD("training/sessions.json");
   const all = data.sessions;
-  const order=["easy","tempo","trail_easy","vo2max","speed","other"];
+  const order=["easy","tempo","trail_easy","vo2max","speed","ride","strength","other"];
   const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const WINS=[[90,"3m"],[365,"1y"],[1095,"3y"],[1e12,"all"]], WIN_DEFAULT=0;
   // Fixed-scale HR sparkline so rows are comparable: x = elapsed minutes 0..50 (left-aligned, so
