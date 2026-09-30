@@ -5,6 +5,8 @@ valet agent to compose a terse Telegram brief, and sends it.
 Inputs: the operator's location (home unless the 3am fix says otherwise) -> weather + 07:30-09:00
 rain (Open-Meteo); overnight world + business headlines and serious local news (Google News RSS);
 overnight commits to the operator's repos/orgs by anyone who isn't the operator or an agent (gh).
+Both runs (this and the 16:15 review) append any MCAS school announcement/message not yet reported
+(services/mcas/mcas.py), after the agent's text, so the agent's layout rules never eat it.
 """
 import datetime, email.utils, json, subprocess, sys, time, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
@@ -13,8 +15,10 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "services/agents"))
 sys.path.insert(0, str(_ROOT / "services/forward"))
+sys.path.insert(0, str(_ROOT / "services/mcas"))
 from run import run_agent
 import tg, location, location_pull
+import mcas   # Pelham's MCAS announcements + messages: each new one reported once, in whichever run is first
 import sys as _sys, pathlib as _pl
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
@@ -160,8 +164,12 @@ def morning():
         "send/adjust.\n\nDATA (news/weather/local/repos):\n%s"
         % json.dumps(bundle, ensure_ascii=False))
     brief = tidy(run_agent("valet", prompt, timeout=480))
+    school, items = mcas.block()
+    if school:
+        brief = brief + "\n" + school
     tg.send(brief, agent="valet")              # tg logs it to the shared conversation
-    print("valet: brief sent (%d chars)" % len(brief))
+    mcas.mark_sent(items)                      # only once Telegram has taken it
+    print("valet: brief sent (%d chars, mcas=%d)" % (len(brief), len(items)))
 
 def review():
     """Afternoon catch-up (16:15): scan ~2 weeks of mail for neglected items; stay SILENT if nothing."""
@@ -188,13 +196,17 @@ def review():
     out = (run_agent("valet", prompt, timeout=600) or "").strip()
     core = re.sub(r"(?i)^#valet[:\s]*", "", out).strip().rstrip(".")
     ln = localnews_para()
-    if (not core or core.upper() == "NONE") and not ln:
+    school, items = mcas.block()
+    if (not core or core.upper() == "NONE") and not ln and not school:
         print("valet review: nothing significant — staying quiet"); return
     msg = out if core and core.upper() != "NONE" else "#valet"
     if ln:
         msg = msg + "\n\n" + ln
+    if school:
+        msg = msg + "\n\n" + school
     tg.send(tidy(msg), agent="valet")
-    print("valet review: sent (%d chars, localnews=%s)" % (len(msg), bool(ln)))
+    mcas.mark_sent(items)
+    print("valet review: sent (%d chars, localnews=%s, mcas=%d)" % (len(msg), bool(ln), len(items)))
 
 LN_STATE = Path.home() / ".local/state/valet-localnews-sent.json"
 
