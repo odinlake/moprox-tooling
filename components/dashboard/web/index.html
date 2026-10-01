@@ -382,13 +382,25 @@ async function loadStrength(){
   // session, or a movement named after the fact. strength.py carries that through as an absent
   // `sets` rather than dropping the row (and its load) whole, so this has to render the gap
   // instead of interpolating `undefined` into the dose.
-  const nx = e => e.sets!=null ? `${e.sets}×`
+  // Not every gap is an absence: the log also spells an UNEVEN session per set — `"sets": 3,
+  // "reps": [10, 10, 8]`, the third set broken — and strength.py keeps the list as `reps_sets` with
+  // `reps` set to the TOP set. Rendering `sets × reps` then asserts that every set held the best
+  // one. Measured on the log today, 5 of its 125 rows are written that way: 30 Sep db-chest-press
+  // [10, 10, 8] read `3×10 @ 22 kg` — 30 reps claimed for 28 done — and 21 Sep leg-curl is
+  // ASCENDING, [10, 12, 15], so it read `3×15 @ 15 kg` and a movement best of `15 kg × 15`: 45 reps
+  // claimed for 37, and the single hardest set published as the athlete's repeatable best, in the
+  // column he reads to pick the next session's load. The list is the measurement and it says how
+  // many sets there were by its own length, so it replaces both halves of the dose rather than being
+  // prefixed by a set count. A timed row keeps its `sets×` — `secs` wins the dose and carries no list.
+  const nx = e => e.reps_sets && e.secs==null ? ``
+    : e.sets!=null ? `${e.sets}×`
     : `<span class="est" title="set count not recorded in the log">?×</span>`;
   // Same gap, the other axis, and it is the one actually on disk: the 12-13 Sep at-home calf rows
   // carry a load (~6 kg, a bike held in hand) and no rep count at all — the burn point lives in
   // their prose. `${e.reps}` on an absent rep count is the string "undefined", so once a row can
   // reach the panel without `sets` it can reach it without `reps`, and the dose has to say so.
-  const nr = e => e.reps!=null ? `${e.reps}`
+  const nr = e => e.reps_sets ? e.reps_sets.join("+")
+    : e.reps!=null ? `${e.reps}`
     : `<span class="est" title="rep count not recorded in the log">?</span>`;
   const dose = e => e.secs!=null ? `${nx(e)}${e.secs}s`
                   : (e.kg!=null ? `${nx(e)}${nr(e)} @ ${asm(`${e.kg} kg`,e)}` : `${nx(e)}${nr(e)}`);
