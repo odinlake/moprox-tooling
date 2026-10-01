@@ -1,0 +1,11 @@
+# Five minutes: the alert lands between 2h00 and 1h55 before the appointment. An idle run is one
+# events.list call over a 2 h window; the claude -p classifier only runs for a new event.
+[Unit]
+Description=calalert — check for important appointments starting within 2 h
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

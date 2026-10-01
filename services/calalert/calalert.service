@@ -1,0 +1,17 @@
+# 2 h Telegram alert before each important one-off appointment in the operator's calendar.
+# Source of truth: moprox-tooling/services/calalert. Oneshot, driven by calalert.timer.
+[Unit]
+Description=calalert — 2 h Telegram alert for important calendar appointments
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+WorkingDirectory=/home/mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+# The docindex venv has google-api-python-client (the system python does not), as for docwatch.
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/calalert/calalert.py
+TimeoutStartSec=10min
