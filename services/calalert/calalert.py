@@ -48,8 +48,6 @@ LEAD = datetime.timedelta(hours=2)
 KEEP = datetime.timedelta(days=30)           # forget sent/verdict entries for events older than this
 AGENT = "reminder"                           # same handle as remind.py: one voice for appointments
 SKIP_TYPES = {"focusTime", "outOfOffice", "workingLocation", "birthday", "fromGmail"}
-ICON = {"medical": "🩺", "dental": "🦷", "school": "🏫", "legal": "⚖️", "finance": "💷",
-        "government": "🏛️", "meeting": "🤝", "booking": "📋", "travel": "✈️", "child": "🧒"}
 
 
 def service():
@@ -159,20 +157,18 @@ def judge(ev):
 
 
 def fmt(ev, verdict, now):
+    """Two quiet lines: one bell, the title and time in bold. The first version was a row of sirens
+    in capitals, which the operator found spammy; what catches the eye is the bold title, not noise."""
     st = start_of(ev).astimezone()
     now = now.astimezone()
     mins = max(0, round((st - now).total_seconds() / 60))
-    left = "%dh %02dm" % divmod(mins, 60) if mins >= 60 else "%d min" % mins
-    day = "today" if st.date() == now.date() else st.strftime("%a %-d %b")
-    icon = ICON.get(verdict.get("kind"), "📌")
-    lines = ["🚨🚨🚨 *APPOINTMENT IN %s* 🚨🚨🚨" % left.upper(),
-             "",
-             "%s *%s*" % (icon, ev.get("summary", "(no title)").strip()),
-             "🕐 *%s* %s" % (st.strftime("%H:%M"), day)]
-    if ev.get("location"):
-        lines.append("📍 %s" % ev["location"].strip())
+    h, m = divmod(mins, 60)
+    left = ("%d h %d min" % (h, m) if m else "%d hour%s" % (h, "s" * (h != 1))) if h else "%d min" % m
+    day = "" if st.date() == now.date() else " %s" % st.strftime("%a %-d %b")
+    lines = ["🔔 *%s* at *%s*%s" % (ev.get("summary", "(no title)").strip(), st.strftime("%H:%M"), day),
+             "In %s" % left + (" · %s" % ev["location"].strip() if ev.get("location") else "")]
     if verdict.get("failed"):
-        lines.append("_(couldn't check whether this matters; alerting to be safe)_")
+        lines.append("_Not sure this one matters; sent to be safe._")
     return "\n".join(lines)
 
 

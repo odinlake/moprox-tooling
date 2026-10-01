@@ -60,7 +60,7 @@ check("important due event alerted", any("GP appointment" in t for t in titles))
 check("alerts use #reminder handle", all(a == "reminder" for a, _ in sent))
 check("unimportant not alerted", not any("Buy: milk" in t for t in titles))
 check("event beyond 2 h not yet alerted", len([t for t in titles if "GP appointment" in t]) == 1)
-check("classifier failure still alerts", any("???" in t and "alerting to be safe" in t for t in titles))
+check("classifier failure still alerts", any("???" in t and "sent to be safe" in t for t in titles))
 n = len(sent)
 c.run_once()
 check("no repeat alert on next run", len(sent) == n)
@@ -73,8 +73,8 @@ check("rescheduled event alerts again", len(sent) == n + 1 and judged.count("GP 
 
 # 3. formatting
 t = c.fmt(ev("x", 120, location="The Shard"), {"kind": "medical"}, NOW)
-check("headline is loud", t.startswith("🚨🚨🚨 *APPOINTMENT IN 2H 00M*"))
-check("location shown", "📍 The Shard" in t)
+check("one quiet headline", t.startswith("🔔 *GP appointment* at *") and t.count("🔔") == 1)
+check("countdown and location on line 2", t.splitlines()[1] == "In 2 hours · The Shard")
 
 # 4. prune
 s = {"sent": {"old|2020-01-01T10:00:00+00:00": "x", ev("n", 60)["id"] + "|" + ev("n", 60)["start"]["dateTime"]: "y"},
