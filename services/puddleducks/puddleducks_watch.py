@@ -69,6 +69,7 @@ CHILD = os.environ.get("PD_CHILD", "Akiko")
 DAY = os.environ.get("PD_DAY", "Sunday")
 LEVEL = os.environ.get("PD_LEVEL", "Level 1 & 2 Swim Academy")
 TIME = os.environ.get("PD_TIME", "15:15")
+POOL = os.environ.get("PD_POOL", "Aspire Centre")
 STATE = Path.home() / ".local/share/moprox/puddleducks-watch.json"
 # How often to say "that place is STILL open" while nothing has changed. See main().
 REMIND_EVERY_S = float(os.environ.get("PD_REMIND_EVERY_H", "48")) * 3600.0
@@ -103,7 +104,7 @@ OFFERS_JS = r"""
     const f = {}, dts = dl.querySelectorAll('dt'), dds = dl.querySelectorAll('dd');
     for (let i = 0; i < dts.length && i < dds.length; i++)
       f[(dts[i].innerText||'').trim().toLowerCase()] = (dds[i].innerText||'').replace(/\s+/g,' ').trim();
-    if (f.date && f.time) rows.push({date: f.date, pool: f.pool||'', time: f.time, cls: f['class']||''});
+    if (f.date && f.time) rows.push({date: f.date, day: f.day||'', pool: f.pool||'', time: f.time, cls: f['class']||''});
   });
   return JSON.stringify({
     signedIn: !!Array.from(document.querySelectorAll('a')).find(a => /sign out/i.test(a.innerText||'')),
@@ -278,9 +279,19 @@ def target_sunday(now):
 
 
 def matches(offer):
-    """Is this offered courtesy class the one being watched for?"""
-    return (norm(LEVEL) in norm(offer.get("cls"))
-            and norm(offer.get("time")).startswith(norm(TIME)))
+    """Is this offered courtesy class the one being watched for?
+
+    Pool and start time, plus the level when the page names one. The courtesy page lost its Class
+    column at some point after the 2026-09-19 rewrite (rows are now Day, Pool, Town, Time, Date) and
+    this used to REQUIRE the level in that column, so on 2026-10-02 the exact target (Sunday 4 Oct,
+    Aspire Centre 15:15, a date Akiko was down for) was offered and silently matched nothing. The
+    page already lists only classes this child may join, so pool + time is the identity; the level
+    check stays for if the column ever comes back.
+    """
+    cls = norm(offer.get("cls"))
+    return (norm(POOL) in norm(offer.get("pool"))
+            and norm(offer.get("time")).startswith(norm(TIME))
+            and (not cls or norm(LEVEL) in cls))
 
 
 def usable(offers, attending, now):
@@ -345,8 +356,8 @@ def one_hour_before(hhmm):
 
 def courtesy_lines(keep, repeat):
     o = keep[0]
-    lines = ["**Courtesy class free on %s at %s** — %s, %s."
-             % (o.get("date"), o.get("time"), o.get("cls"), o.get("pool"))]
+    lines = ["**Courtesy class free on %s at %s** — %s."
+             % (o.get("date"), o.get("time"), ", ".join(x for x in (o.get("cls"), o.get("pool")) if x))]
     if len(keep) > 1:
         lines.append("%d slots offered." % len(keep))
     lines.append("Book it from My Puddle Ducks, Book a Courtesy Class. Closes at %s."
