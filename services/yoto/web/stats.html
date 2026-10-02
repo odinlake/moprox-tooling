@@ -14,21 +14,21 @@
 :root {
   --bg: #fff7ec; --surface: #ffffff; --ink: #2a2118; --muted: #7a6c5d; --line: #eadcc8;
   --accent: #1f7aff; --tile: #f3e6d3; --shadow: 0 1px 2px rgba(60,40,10,.08), 0 6px 18px rgba(60,40,10,.08);
-  --grid: #efe4d4; --bar: #2a78d6; --empty: #f5ede1; --nightcell: #e2d8ca; --daycell: #faf5ee; --warn-bg: #fff1d6; --warn-ink: #7a4b00;
+  --grid: #efe4d4; --bar: #2a78d6; --empty: #f5ede1; --nightcell: #e2d8ca; --daycell: #faf5ee; --nightguard: #d3d0cb; --dayguard: #ebeae7; --warn-bg: #fff1d6; --warn-ink: #7a4b00;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --other: #a39a8e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
     --accent: #4d95ff; --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
-    --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --nightcell: #100d0a; --daycell: #3b3328; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
+    --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --nightcell: #100d0a; --daycell: #3b3328; --nightguard: #1d1d1e; --dayguard: #3a3a3b; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --other: #7d7466;
   }
 }
 :root[data-theme="dark"] {
   --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
   --accent: #4d95ff; --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
-  --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --nightcell: #100d0a; --daycell: #3b3328; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
+  --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --nightcell: #100d0a; --daycell: #3b3328; --nightguard: #1d1d1e; --dayguard: #3a3a3b; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --other: #7d7466;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -236,6 +236,17 @@ td .al { color: var(--muted); font-size: 12px; }
     var c = (720 + k * 10) % 1440;
     return N > Dt ? (c >= N || c < Dt) : (c >= N && c < Dt);
   }
+  // The sleep-timer guard's own window (services/yoto/sleepguard.py), deliberately NOT the Yoto's
+  // night mode; shaded a greyer variant of whichever mode the slot is in.
+  function inWindow(start, end, k) {
+    var S = mins(start), E = mins(end); if (S == null || E == null) return false;
+    var c = (720 + k * 10) % 1440;
+    return S > E ? (c >= S || c < E) : (c >= S && c < E);
+  }
+  function isGuard(n, k) { return inWindow(n.guard_start, n.guard_end, k); }
+  var SHADE = ["--daycell", "--dayguard", "--nightcell", "--nightguard"];
+  var SHADE_NAME = ["day mode", "day mode, sleep-timer guard on", "night mode", "night mode, sleep-timer guard on"];
+  function shadeOf(n, k) { return (isNight(n, k) ? 2 : 0) + (isGuard(n, k) ? 1 : 0); }
   function heatmap(nights) {
     // Seven columns, today's weekday on the RIGHT (operator, 2026-10-02). For the 7-day window each
     // column is one real night; for longer windows each is the AVERAGE of that weekday's recorded
@@ -277,14 +288,15 @@ td .al { color: var(--muted); font-size: 12px; }
            '<text x="' + (x + colW / 2) + '" y="27" text-anchor="middle">' + esc(subtxt) + '</text>';
       var k = 0;
       while (k < 144) {
-        var night = isNight(nt, k), j = k;
-        while (j < 144 && isNight(nt, j) === night) j++;
-        var t = "<b>" + esc(c.name) + "</b><br>" + clockOf(k) + "–" + clockOf(j) + " · " + (night ? "night" : "day") + " mode" +
-                (nt.night_time ? " (" + esc(nt.night_time) + "–" + esc(nt.day_time) + (nt.assumed ? ", assumed" : "") + ")" : "") +
+        var sh = shadeOf(nt, k), j = k;
+        while (j < 144 && shadeOf(nt, j) === sh) j++;
+        var t = "<b>" + esc(c.name) + "</b><br>" + clockOf(k) + "–" + clockOf(j) + " · " + SHADE_NAME[sh] +
+                (nt.night_time ? "<br>Yoto night mode " + esc(nt.night_time) + "–" + esc(nt.day_time) + (nt.assumed ? " (assumed)" : "") : "") +
+                (nt.guard_start ? "<br>sleep-timer guard " + esc(nt.guard_start) + "–" + esc(nt.guard_end) : "<br>no sleep-timer guard yet") +
                 (c.changed ? "<br>the Yoto setting changed during this period" : "") +
                 (c.slots ? "" : (c.avg ? "<br>no recorded nights yet" : "<br>not recorded (before recording began)"));
         g += '<rect x="' + (x + 1) + '" y="' + (top + k * rowH) + '" width="' + (colW - 2) + '" height="' + ((j - k) * rowH) +
-             '" fill="var(' + (night ? "--nightcell" : "--daycell") + ')" data-tip="' + esc(t) + '"/>';
+             '" fill="var(' + SHADE[sh] + ')" data-tip="' + esc(t) + '"/>';
         k = j;
       }
       (c.slots || []).forEach(function (v, k) {
@@ -309,8 +321,10 @@ td .al { color: var(--muted); font-size: 12px; }
     var sub = (cols.length && cols[0].avg ? "Each column is the average night for that weekday" : "Each column is one night") +
               ", noon to noon; each row is 10 minutes. " +
               (peak[pk] ? "Busiest slot: " + clockOf(pk) + "–" + clockOf(pk + 1) + "." : "Nothing played in this period.");
-    var legend = '<div class="legend"><span><i style="background:var(--nightcell)"></i>night mode, silent</span>' +
-      '<span><i style="background:var(--daycell)"></i>day mode, silent</span>' +
+    var legend = '<div class="legend"><span><i style="background:var(--daycell)"></i>day mode</span>' +
+      '<span><i style="background:var(--dayguard)"></i>day mode + sleep-timer guard</span>' +
+      '<span><i style="background:var(--nightcell)"></i>night mode</span>' +
+      '<span><i style="background:var(--nightguard)"></i>night mode + guard</span>' +
       '<span><i style="background:' + ramp[1] + '"></i><i style="background:' + ramp[3] + '"></i><i style="background:' + ramp[6] + '"></i>playing: a few min → all 10</span>' +
       (anyAssumed ? '<span style="color:var(--muted)">day/night times before 2 Oct assumed from the first recorded setting</span>' : "") + '</div>';
     return '<section class="card"><h2>Time of day</h2><p class="sub">' + sub + '</p>' +

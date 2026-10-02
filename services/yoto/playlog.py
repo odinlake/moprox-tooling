@@ -72,6 +72,10 @@ def db():
     # nights before the first row are drawn with the earliest known settings and marked assumed.
     c.execute("create table if not exists yoto_config (ts real primary key, day_time text, night_time text,"
               " day_max integer, night_max integer)")
+    # sleepguard.py's own window (it is NOT tied to the Yoto's night mode; operator 2026-10-02), one
+    # row per change, written by sleepguard itself on every run.
+    c.execute("create table if not exists guard_config (ts real primary key, start text, end text,"
+              " deep_start text, deep_end text)")
     return c
 
 
@@ -167,6 +171,41 @@ def record_config(cfg):
             c.close()
 
 
+# The guard went live in moprox-tooling c76fd73 at this instant with 20:30-08:00 (20-min timers
+# 22:00-05:00) and that window did not change before recording began on 2026-10-02, so the first row
+# is back-dated to it: those nights are KNOWN, not assumed. Nights before it had no guard at all.
+GUARD_BORN = datetime.datetime(2026, 9, 28, 20, 56, 33, tzinfo=TZ).timestamp()
+GUARD_FIRST = ("20:30", "08:00", "22:00", "05:00")
+
+
+def record_guard(start, end, deep_start, deep_end):
+    """Store sleepguard's window if it differs from the last stored row. True when stored."""
+    row = tuple(t.strftime("%H:%M") if hasattr(t, "strftime") else str(t)
+                for t in (start, end, deep_start, deep_end))
+    with _lock:
+        c = db()
+        try:
+            last = c.execute("select start, end, deep_start, deep_end from guard_config"
+                             " order by ts desc limit 1").fetchone()
+            if last == row:
+                return False
+            ts = GUARD_BORN if last is None and row == GUARD_FIRST else time.time()
+            c.execute("insert into guard_config values (?,?,?,?,?)", (ts,) + row)
+            c.commit()
+            return True
+        finally:
+            c.close()
+
+
+def _guard_at(guards, t):
+    """(start, end) of the guard in force at t, or (None, None) before it existed."""
+    cur = None
+    for r in guards:
+        if r[0] <= t:
+            cur = r
+    return (cur[1], cur[2]) if cur else (None, None)
+
+
 def _configs(c):
     return c.execute("select ts, day_time, night_time, day_max, night_max from yoto_config order by ts").fetchall()
 
@@ -217,12 +256,15 @@ def _nights(c, segs, t0, t1, first):
                 slots[idx[night]][k] += cut - s
             s = cut
     cfgs = _configs(c)
+    guards = c.execute("select ts, start, end from guard_config order by ts").fetchall()
     out = []
     for d, sl in zip(dates, slots):
         noon = datetime.datetime(d.year, d.month, d.day, 12, tzinfo=TZ).timestamp()
         day_t, night_t, assumed = _config_at(cfgs, noon + 12 * 3600)
+        g_start, g_end = _guard_at(guards, noon + 12 * 3600)
         out.append({"date": d.isoformat(), "slots": [round(x) for x in sl], "recorded": d >= rec_from,
-                    "day_time": day_t, "night_time": night_t, "assumed": assumed})
+                    "day_time": day_t, "night_time": night_t, "assumed": assumed,
+                    "guard_start": g_start, "guard_end": g_end})
     return out
 
 

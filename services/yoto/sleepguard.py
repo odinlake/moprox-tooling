@@ -18,6 +18,7 @@ the player's idle-shutdown clock, so polling does not keep it awake.
 """
 import datetime, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import yoto
 
 START, END = datetime.time(20, 30), datetime.time(8, 0)
@@ -46,6 +47,13 @@ def report(link, wait=8):
 
 def main():
     dry = "--dry" in sys.argv
+    if not dry:
+        try:                       # the stats page shades this window; a failure must never cost a timer
+            import playlog
+            playlog.record_guard(START, END, DEEP_START, DEEP_END)
+        except Exception as e:
+            import errlog
+            errlog.err("sleepguard: recording its window for the stats page", e)
     secs = wanted(datetime.datetime.now())
     if secs is None:
         return
