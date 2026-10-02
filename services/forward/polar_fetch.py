@@ -57,6 +57,18 @@ def api(path, tok):
     except urllib.error.HTTPError as e:
         return e.code, None
 
+def declared_seconds(ex):
+    """How long POLAR says the session was (ISO-8601 `PT#H#M#S`), which is independent of how many
+    HR samples arrived — the only number here that is. Returns None when the field is absent or
+    unparseable, never a guess: its one use is deciding whether a short HR series means a short
+    session or a lost one, and a guessed length would answer that question with nothing behind it."""
+    m = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?",
+                     str(ex.get("duration") or ""))
+    if not m or not any(m.groups()):
+        return None
+    d, h, mi, s = m.groups()
+    return int(d or 0) * 86400 + int(h or 0) * 3600 + int(mi or 0) * 60 + float(s or 0)
+
 def hr_from(ex):
     """Per-second HR from an exercise's inline samples (sample_type 0, recording_rate 1)."""
     for smp in ex.get("samples") or []:
@@ -286,7 +298,30 @@ def main():
         # posted again — a transient Telegram failure turned into permanent, silent loss of the
         # session. Deciding not to post is terminal; failing to post is not.
         if len(hr) < MIN_HR_SECONDS:
-            print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins))
+            # Two different facts used to print the same sentence, at info, and that sentence
+            # describes the HR SERIES ("%.0f min HR") while reading as if it described the session.
+            # Measured on the live raw store 2026-10-01 (69 exercises): 68 carry HR for >=98% of the
+            # duration Polar declares for them, and the one that does not is exercise 5ZMRgqeA — a
+            # RUNNING session declared PT2883S, i.e. 48 min, with ZERO HR samples. It was reported
+            # as "stored, 0 min HR — below coach gate" and added to `seen`, so a 48-minute run left
+            # the pipeline with no post, no receipt, no strap-health record and nothing above info,
+            # looking in the journal exactly like 0KbQm6G1 the next day — a real 463 s session whose
+            # 465 samples are complete and which belongs below the gate. One is a short workout; the
+            # other is a lost one, and the gate is the last place either is mentioned.
+            #
+            # Only for sessions this run was otherwise about to post: the backfill branch below is
+            # info for everything, so erring here on a 90-day cold start would be a burst about
+            # losses nobody could have acted on. Terminal either way, so this is one line per
+            # exercise, ever.
+            declared = declared_seconds(ex)
+            if (declared is not None and declared >= MIN_HR_SECONDS
+                    and upload_age_h(ex) <= FRESH_WINDOW_H):
+                errlog.err("polar: %s is a %.0f min %s session carrying only %d s of HR — nothing "
+                           "to read, so no post and no retry; raw is stored, the samples are not "
+                           "coming (check the strap, and the watch's recording rate)"
+                           % (eid, declared / 60.0, ex.get("sport") or "unknown sport", len(hr)))
+            else:
+                print("polar: %s stored, %.0f min HR — below coach gate" % (eid, mins))
             seen.add(eid); continue
         if upload_age_h(ex) > FRESH_WINDOW_H:
             print("polar: %s stored (backfill) — not posting" % eid)
