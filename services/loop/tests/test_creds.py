@@ -51,6 +51,31 @@ dead, _ = loop.creds_expired()
 ok.append(dead is False)
 print(f"{'PASS' if ok[-1] else 'FAIL'}  a missing creds-check.py fails open too")
 
+
+# --- AUTH_DEAD: the second detector, on the symptom rather than the cause ----
+# creds_expired() only sees `refreshTokenExpiresAt` in the past. On 2026-10-01/02 the shared grant
+# died with that field 27 days in the FUTURE (claude-dev rotated the refresh token out from under
+# this box's copy), every spawn came back "Failed to authenticate", cycles 520-522 each took a
+# strike and the halt latch closed. These cases are that outage's stream lines.
+def phrase(name, line, want):
+    hit = bool(loop.AUTH_DEAD.search(line))
+    good = hit is want
+    print(f"{'PASS' if good else 'FAIL'}  {name}: matched={hit}")
+    ok.append(good)
+
+
+phrase("the 2026-10-01 line, as the CLI emitted it",
+       json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text":
+        "Failed to authenticate: OAuth session expired and could not be refreshed"}]}}), True)
+phrase("the same text in a result event",
+       json.dumps({"type": "result", "is_error": True,
+                   "result": "Failed to authenticate: OAuth session expired"}), True)
+phrase("the moprox-dev wedge's own wording", "Not logged in · Run /login", True)
+phrase("an ordinary tool call does not match",
+       json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use",
+                   "name": "Bash", "input": {"command": "git log --oneline -5"}}]}}), False)
+phrase("a failed HTTP fetch is not a credential death", "urllib HTTPError 403 from logview.lan", False)
+
 print("\n%d/%d passed" % (sum(ok), len(ok)))
 shutil.rmtree(tmp, ignore_errors=True)
 sys.exit(0 if all(ok) else 1)

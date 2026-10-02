@@ -19,7 +19,7 @@ lines on stdout, which systemd puts in the journal and the fleet lane ships to l
 `tool_result` is deliberately DROPPED — it is the only block that reaches megabytes, and the UI
 collapses it too. Full fidelity stays in ~/.claude/projects/<slug>/*.jsonl on the box for 90 days.
 """
-import fcntl, json, os, queue, shutil, signal, subprocess, sys, threading, time
+import fcntl, json, os, queue, re, shutil, signal, subprocess, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +58,16 @@ TOTAL_CAP    = float(os.environ.get("LOOP_TOTAL_CAP_USD", 0))
 # NB: spent_recently() sums EVERY loop-* ledger row, refuters included since 9eddaf9c98. The
 # deployed cap lives in loop@.service (16) — this default is for a hand-run loop, not production.
 MAX_STRIKES  = int(os.environ.get("LOOP_MAX_STRIKES", 3))     # consecutive bad cycles before halting
+# A credential death the CLI reports but creds_expired() cannot see. Its predicate is
+# `refreshTokenExpiresAt` in the PAST, and that is not the only way the grant dies: on
+# 2026-10-01/02 claude-dev rotated the shared refresh token out from under this box's copy, so the
+# field the guard tests sat 27 days in the FUTURE while all three spawns came back
+# "Failed to authenticate". Cycles 520-522 each took a strike, the latch closed at 08:10:50Z and
+# the ledger had to be hand-edited — the outage e845e4584c was written to make impossible. So the
+# symptom is classified too, not only the cause. Matched against the raw stream-json line.
+AUTH_DEAD    = re.compile(r"Failed to authenticate|OAuth (?:session|token) (?:expired|has expired)"
+                          r"|Invalid (?:API key|bearer token)|Please run /login|Not logged in",
+                          re.I)
 VERIFY_MAX_S = int(os.environ.get("LOOP_VERIFY_MAX_S", 300))
 ADVERSARIAL  = os.environ.get("LOOP_ADVERSARIAL", "1") != "0"
 REFUTE_MAX_S = int(os.environ.get("LOOP_REFUTE_MAX_S", 420))
@@ -308,7 +318,11 @@ def emit_event(e, agent, state):
 
 # --- spawning ---------------------------------------------------------------
 def run_cycle_agent(agent, prompt):
-    """Spawn claude, stream it, enforce idle + hard timeouts. -> (result_dict|None, outcome)."""
+    """Spawn claude, stream it, enforce idle + hard timeouts.
+
+    -> (result_dict|None, outcome, auth_dead) where auth_dead is the matched credential-failure
+    phrase from the CLI's own output, or None.
+    """
     cwd = AGENTS / agent
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
@@ -383,6 +397,11 @@ def run_cycle_agent(agent, prompt):
             result = e
         else:
             emit_event(e, agent, state)
+        # Scanned on the RAW event line, not on a parsed field: on 2026-10-01T23:03:18Z the CLI
+        # reported its own credential death as an `assistant`/`text` block, and nothing says the
+        # next shape will be the same. Checked here and acted on in main(), where cost is known.
+        if AUTH_DEAD.search(item):
+            state["auth_dead"] = AUTH_DEAD.search(item).group(0)
 
     stream_skips.report()
     if outcome != "ok":
@@ -394,7 +413,7 @@ def run_cycle_agent(agent, prompt):
         except ProcessLookupError:
             pass          # benign: it already exited between the SIGTERM and the SIGKILL
     p.wait(timeout=30)
-    return result, outcome
+    return result, outcome, state.get("auth_dead")
 
 
 # --- proof ------------------------------------------------------------------
@@ -1113,6 +1132,26 @@ def creds_expired():
     return True, f"refresh token expired {when} ({-days:.1f} days ago)"
 
 
+def creds_skip(led, why, agent):
+    """Report a credential failure as a SKIP and return main()'s exit code (always 0).
+
+    Shared by the two detectors — creds_expired() before the spawn, AUTH_DEAD after it — because
+    they are the same event seen from two sides, and the operator should hear it once either way.
+    """
+    msg = (f"{why} — skipping. No strike taken; cycles resume by themselves once the credentials "
+           f"are refreshed.")
+    say(msg, 4, agent)
+    # Once per 12 h, not once per tick. The analyst wakes hourly, so an unrated notify would have
+    # posted this 38 times during the outage it was written for, and a channel that repeats itself
+    # is a channel nobody reads.
+    last = float(led.get("creds_warned_at") or 0)
+    if time.time() - last > 12 * 3600:
+        led["creds_warned_at"] = time.time()
+        save_ledger(led)
+        notify.send(msg, agent)
+    return 0
+
+
 def preflight():
     """Check declared capabilities against reality. Returns a list of human-readable failures.
 
@@ -1339,18 +1378,7 @@ def main():
     # the work, and it must not be able to put the agent into a state a human has to clear.
     dead, why = creds_expired()
     if dead:
-        msg = (f"credentials are dead ({why}) — skipping. No strike taken; cycles resume by "
-               f"themselves once the credentials are refreshed.")
-        say(msg, 4, agent)
-        # Once per 12 h, not once per tick. The analyst wakes hourly, so an unrated notify would
-        # have posted this 38 times during the outage it was written for, and a channel that
-        # repeats itself is a channel nobody reads.
-        last = float(led.get("creds_warned_at") or 0)
-        if time.time() - last > 12 * 3600:
-            led["creds_warned_at"] = time.time()
-            save_ledger(led)
-            notify.send(msg, agent)
-        return 0
+        return creds_skip(led, f"credentials are dead ({why})", agent)
 
     if led.get("strikes", 0) >= MAX_STRIKES:
         msg = (f"HALTED after {led['strikes']} consecutive bad cycles. Nothing will run until "
@@ -1421,13 +1449,21 @@ def main():
     for f, _ in collect_proposals():      # stale proposals from a killed cycle
         f.unlink(missing_ok=True)
 
-    res, outcome = run_cycle_agent(agent, prompt)
+    res, outcome, auth_dead = run_cycle_agent(agent, prompt)
     # run_cycle_agent only reports what the HARNESS did to the process (hardcap/stuck). A run the
     # CLI itself flags as failed comes back outcome="ok" with is_error set — 2026-08-08T08:32:18 was
     # one: 27.8 min, 1 turn, 0 tokens, $0. That cost nothing, so the budget guard stays quiet too,
     # and it took no strike, so an unbroken run of them would never reach MAX_STRIKES. Count it.
     if outcome == "ok" and (res or {}).get("is_error"):
         outcome = "error"
+    # ... unless it never authenticated, which is a precondition and not a bad cycle: see
+    # AUTH_DEAD. Gated on zero cost as well as on the phrase, because a cycle that INVESTIGATES a
+    # credential outage quotes these same strings — and an agent must not be able to talk its own
+    # strike away. Nothing that reached the model costs $0.
+    if outcome == "error" and auth_dead and not ((res or {}).get("total_cost_usd") or 0):
+        log_usage(agent, res, "nocreds")
+        return creds_skip(led, f"the CLI could not authenticate ({auth_dead}) and the cycle did "
+                               f"not start", agent)
     log_usage(agent, res, outcome)
 
     if outcome != "ok":
