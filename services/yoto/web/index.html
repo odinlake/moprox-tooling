@@ -263,7 +263,7 @@ main { padding: 2px 10px calc(env(safe-area-inset-bottom) + 140px); }
         else toast("Sent. The player reports: " + (now.playbackStatus || "unknown"), 6000);
         st.sel = [];
       })
-      .catch(function (e) { toast("Did not start: " + e.message, 7000); })
+      .catch(function (e) { toast("Did not start: " + e.message, 12000); })
       .then(function () { st.busy = false; $("play").disabled = false; paint(); });
   };
   $("stop").onclick = function () {

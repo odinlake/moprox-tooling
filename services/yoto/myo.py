@@ -280,17 +280,60 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     if dry:
         return {"source": src, "cardId": twin, "order": [c.get("title") for c in first + others],
                 "not_found": missed, "volume": volume, "sleep": sleep, "dry": True}
-    ordered = set_order(twin, first + others, tok)     # keeps the twin's own (shuffle-marked) cover
     with yoto.Link(tok, yoto.env()["YOTO_DEVICE_ID"]) as link:
+        # THE PLAYER KEEPS ITS OWN COPY OF EVERY CARD and maps chapter keys through that copy. A
+        # reorder only reaches it via a "card-update" notice that Yoto's cloud sends after the POST,
+        # and a player that is already playing the card answers FAIL (seen 2026-10-02 20:14:22) and
+        # keeps the old copy. Writing the order and starting at once therefore played the OLD
+        # chapter 01 -- and the Yoto app broke the same way, since it also addresses chapters by key.
+        # So: stop first, write, wait for the player to ack the update, start, then verify that the
+        # chapter playing is the one asked for and that the player's copy is the cloud's version.
+        link.send("card/stop")
+        ordered = set_order(twin, first + others, tok)     # keeps the twin's own (shuffle-marked) cover
+        cloud = (req("GET", "/content/" + twin, tok).get("card") or {}).get("updatedAt")
+        ack = _card_update(link, twin, wait=8)
+        if ack == "FAIL":
+            sys.exit("the player refused to update its copy of the playlist (card-update FAIL); "
+                     "nothing was started")
         if volume is not None:
             link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
         link.send("card/start", {"uri": "https://yoto.io/" + twin, "chapterKey": "01",
                                  "trackKey": "01", "secondsIn": 0}, wait=6)
+        now = yoto.now_playing(link)
+        want = ordered[0].get("title")
+        problem = None
+        if now.get("cardId") != twin or now.get("playbackStatus") != "playing":
+            problem = "the player did not start the playlist (it reports %s / %s)" % (
+                now.get("cardId"), now.get("playbackStatus"))
+        elif now.get("chapterTitle") != want:
+            problem = "the player started %r instead of %r" % (now.get("chapterTitle"), want)
+        elif cloud and now.get("cardUpdatedAt") and now["cardUpdatedAt"] != cloud:
+            problem = "the player is playing an old copy of the playlist (%s, cloud has %s)" % (
+                now["cardUpdatedAt"], cloud)
+        if problem:
+            link.send("card/stop")              # never leave the wrong story playing
+            sys.exit(problem + "; update ack: %s; stopped" % (ack or "none within 8 s"))
         if sleep is not None:
             link.send("sleep-timer/set", {"seconds": int(sleep)})
-        now = yoto.now_playing(link)
     return {"source": src, "cardId": twin, "order": [c.get("title") for c in ordered],
-            "not_found": missed, "volume": volume, "sleep": sleep, "now": now}
+            "not_found": missed, "volume": volume, "sleep": sleep, "now": now, "update_ack": ack}
+
+
+def _card_update(link, card_id, wait=8):
+    """The player's answer to the cloud's card-update notice for `card_id`: "OK", "FAIL" or None
+    if none arrived within `wait`. Messages already received count (the notice can beat us here)."""
+    def find(msgs):
+        for kind, m in msgs:
+            st = (m or {}).get("status") if kind == "response" and isinstance(m, dict) else None
+            if isinstance(st, dict) and "card-update" in st and card_id in str(st.get("req_body")):
+                return st["card-update"]
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        hit = find(list(link.msgs))
+        if hit:
+            return hit
+        time.sleep(0.05)
+    return None
 
 
 def main():

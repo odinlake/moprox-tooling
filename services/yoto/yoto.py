@@ -154,7 +154,7 @@ def now_playing(link, wait=6):
         if kind == "events" and ("chapterTitle" in m or "chapterKey" in m):
             return {k: m.get(k) for k in ("cardId", "chapterKey", "chapterTitle", "trackKey",
                                           "trackTitle", "position", "trackLength",
-                                          "playbackStatus", "source")}
+                                          "playbackStatus", "source", "cardUpdatedAt")}
     return {"playbackStatus": "unknown", "note": "no chapter event returned"}
 
 
