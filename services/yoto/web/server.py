@@ -98,8 +98,15 @@ def playlist(cid):
 
 
 def sync_playlog():
-    """Optional backfill from HA's REST history (only with a token; HA normally pushes). Never
-    raises; the page shows the error instead."""
+    """Optional backfill from HA's REST history (only with a token; HA normally pushes), plus a
+    snapshot of the player's day/night settings for the night map. Never raises; the page shows
+    the error instead."""
+    try:
+        cfg = yoto.get("/device-v2/%s/config" % yoto.env()["YOTO_DEVICE_ID"], yoto.token())
+        if playlog.record_config((cfg.get("device") or cfg).get("config") or cfg):
+            print("playlog: Yoto day/night settings changed, recorded", flush=True)
+    except Exception as e:
+        errlog.err("yoto-web: Yoto config snapshot", e)
     try:
         playlog.sync()
         _sync["error"] = None

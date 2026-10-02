@@ -14,21 +14,21 @@
 :root {
   --bg: #fff7ec; --surface: #ffffff; --ink: #2a2118; --muted: #7a6c5d; --line: #eadcc8;
   --accent: #1f7aff; --tile: #f3e6d3; --shadow: 0 1px 2px rgba(60,40,10,.08), 0 6px 18px rgba(60,40,10,.08);
-  --grid: #efe4d4; --bar: #2a78d6; --empty: #f5ede1; --warn-bg: #fff1d6; --warn-ink: #7a4b00;
+  --grid: #efe4d4; --bar: #2a78d6; --empty: #f5ede1; --nightcell: #e2d8ca; --daycell: #faf5ee; --warn-bg: #fff1d6; --warn-ink: #7a4b00;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --other: #a39a8e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
     --accent: #4d95ff; --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
-    --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
+    --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --nightcell: #100d0a; --daycell: #3b3328; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --other: #7d7466;
   }
 }
 :root[data-theme="dark"] {
   --bg: #1b1712; --surface: #26211a; --ink: #f4ebdf; --muted: #b3a491; --line: #3a3228;
   --accent: #4d95ff; --tile: #302920; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
-  --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
+  --grid: #342d24; --bar: #3987e5; --empty: #2c261e; --nightcell: #100d0a; --daycell: #3b3328; --warn-bg: #3a2c12; --warn-ink: #f3cf8a;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --other: #7d7466;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -225,36 +225,74 @@ td .al { color: var(--muted); font-size: 12px; }
       (segs.length ? svg + legend + '<ul class="acts">' + acts + '</ul>' : '<div class="msg">Nothing played in the last 24 hours.</div>') + '</section>';
   }
 
-  function heatmap(heat) {
-    var max = 0; heat.forEach(function (r) { r.forEach(function (v) { if (v > max) max = v; }); });
+  // ---- time of day: one column per NIGHT, noon at top and bottom, 10-minute rows ----------------
+  // Operator, 2026-10-02: "I'm most concerned with nighttime use". So midnight sits mid-chart and a
+  // night is never cut in two. Empty cells are shaded by the Yoto's own day/night setting THAT night
+  // (recorded by yoto-web when it changes), so a changed bedtime shows up in the background.
+  function clockOf(k) { var m = (720 + k * 10) % 1440; return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); }
+  function mins(hhmm) { if (!hhmm) return null; var p = hhmm.split(":"); return +p[0] * 60 + +p[1]; }
+  function isNight(n, k) {
+    var N = mins(n.night_time), Dt = mins(n.day_time); if (N == null || Dt == null) return false;
+    var c = (720 + k * 10) % 1440;
+    return N > Dt ? (c >= N || c < Dt) : (c >= N && c < Dt);
+  }
+  function heatmap(nights) {
+    if (!nights || !nights.length) return '<section class="card"><h2>Time of day</h2><div class="msg">No nights recorded in this period.</div></section>';
     var ramp = dark() ? RAMP_D : RAMP_L;
-    // wide: weekdays down, hours across. Narrow (phone): hours down, weekdays across, so it fits
-    // without shrinking the labels to nothing. The SVG scales uniformly, so text stays undistorted.
-    var tall = $("main").clientWidth < 620;
-    var cw = tall ? 40 : 36, ch = tall ? 18 : 22, gap = 2, lx = tall ? 26 : 34, ty = 16;
-    var W = lx + (tall ? 7 : 24) * cw, H = ty + (tall ? 24 : 7) * ch;
-    var g = "";
-    if (tall) {
-      DAYS.forEach(function (dn, di) { g += '<text x="' + (lx + di * cw + cw / 2) + '" y="11" text-anchor="middle">' + dn + '</text>'; });
-      for (var hh = 0; hh < 24; hh += 3) g += '<text x="0" y="' + (ty + hh * ch + ch / 2 + 4) + '">' + String(hh).padStart(2, "0") + '</text>';
-    } else {
-      for (var h = 0; h < 24; h += 3) g += '<text x="' + (lx + h * cw + cw / 2) + '" y="11" text-anchor="middle">' + String(h).padStart(2, "0") + '</text>';
-      DAYS.forEach(function (dn, di) { g += '<text x="0" y="' + (ty + di * ch + ch / 2 + 4) + '">' + dn + '</text>'; });
-    }
-    heat.forEach(function (row, di) {
-      row.forEach(function (v, h) {
-        var fill = v > 0 ? ramp[Math.min(ramp.length - 1, Math.floor(Math.sqrt(v / max) * ramp.length))] : "var(--empty)";
-        var t = "<b>" + DAYS[di] + " " + String(h).padStart(2, "0") + ":00–" + String((h + 1) % 24).padStart(2, "0") + ":00</b><br>" + (v ? dur(v) + " listened" : "nothing");
-        var cx = tall ? di : h, cy = tall ? h : di;
-        g += '<rect class="hit" x="' + (lx + cx * cw + gap / 2) + '" y="' + (ty + cy * ch + gap / 2) + '" width="' + (cw - gap) + '" height="' + (ch - gap) + '" rx="3" fill="' + fill + '" data-tip="' + esc(t) + '"/>';
+    var avail = Math.max(260, $("main").clientWidth - 24 - 28);   // main padding + card padding
+    var lx = 46, rowH = 3, top = 6, plotH = 144 * rowH;
+    var n = nights.length, colW = Math.max(4, Math.min(80, Math.floor((avail - lx) / n)));
+    var W = lx + n * colW, H = top + plotH + 22;
+    var g = "", peak = new Array(144).fill(0), anyAssumed = false;
+    nights.forEach(function (nt, i) {
+      var x = lx + i * colW, d = new Date(nt.date + "T12:00:00");
+      var label = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+      anyAssumed = anyAssumed || nt.assumed;
+      // empty background: runs of the same mode merged into one rect each
+      var k = 0;
+      while (k < 144) {
+        var night = isNight(nt, k), j = k;
+        while (j < 144 && isNight(nt, j) === night) j++;
+        var t = "<b>" + esc(label) + " night</b><br>" + clockOf(k) + "–" + clockOf(j) + " · " + (night ? "night" : "day") + " mode" +
+                (nt.night_time ? " (" + esc(nt.night_time) + "–" + esc(nt.day_time) + (nt.assumed ? ", assumed" : "") + ")" : "");
+        g += '<rect x="' + (x + 0.5) + '" y="' + (top + k * rowH) + '" width="' + (colW - 1) + '" height="' + ((j - k) * rowH) +
+             '" fill="var(' + (night ? "--nightcell" : "--daycell") + ')" data-tip="' + esc(t) + '"/>';
+        k = j;
+      }
+      nt.slots.forEach(function (v, k) {
+        if (!v) return;
+        peak[k] += v;
+        var f = ramp[Math.min(ramp.length - 1, Math.floor(Math.min(1, v / 600) * ramp.length))];
+        var t = "<b>" + esc(label) + " night</b><br>" + clockOf(k) + "–" + clockOf(k + 1) + " · " + dur(v) + " listened" +
+                (isNight(nt, k) ? " · night mode" : "");
+        g += '<rect class="hit" x="' + (x + 0.5) + '" y="' + (top + k * rowH) + '" width="' + (colW - 1) + '" height="' + rowH +
+             '" fill="' + f + '" data-tip="' + esc(t) + '"/>';
       });
     });
-    // hour-of-day totals as one row under the grid, same ramp
-    var hours = []; for (var i = 0; i < 24; i++) hours.push(heat.reduce(function (a, r) { return a + r[i]; }, 0));
-    var peak = hours.indexOf(Math.max.apply(null, hours));
-    var sub = max ? "Darker = more listening. Peak hour: " + String(peak).padStart(2, "0") + ":00." : "No listening in this period.";
+    // gridlines over the cells: every hour faint, every 2 h labelled, midnight strong
+    for (var hk = 0; hk <= 144; hk += 6) {
+      var y = top + hk * rowH, clock = (12 + hk / 6) % 24, mid = clock === 0;
+      g += '<line x1="' + (lx - 4) + '" x2="' + W + '" y1="' + y + '" y2="' + y + '" stroke="var(' + (mid ? "--ink" : "--grid") + ')" stroke-opacity="' +
+           (mid ? 0.55 : 0.9) + '" stroke-width="' + (mid ? 1.2 : 0.6) + '"/>';
+      if (clock % 2 === 0) g += '<text x="' + (lx - 7) + '" y="' + (y + 3.5) + '" text-anchor="end"' + (mid ? ' style="font-weight:700;fill:var(--ink)"' : "") + '>' +
+           String(clock).padStart(2, "0") + ':00</text>';
+    }
+    var every = Math.max(1, Math.ceil(56 / colW));
+    nights.forEach(function (nt, i) {
+      if ((n - 1 - i) % every) return;
+      var d = new Date(nt.date + "T12:00:00");
+      g += '<text x="' + (lx + i * colW + colW / 2) + '" y="' + (top + plotH + 15) + '" text-anchor="middle">' +
+           esc(d.toLocaleDateString(undefined, { day: "numeric", month: "short" })) + '</text>';
+    });
+    var pk = peak.indexOf(Math.max.apply(null, peak));
+    var sub = "Each column is one night, noon to noon; each row 10 minutes. " +
+              (peak[pk] ? "Busiest slot: " + clockOf(pk) + "–" + clockOf(pk + 1) + "." : "Nothing played in this period.");
+    var legend = '<div class="legend"><span><i style="background:var(--nightcell)"></i>night mode, silent</span>' +
+      '<span><i style="background:var(--daycell)"></i>day mode, silent</span>' +
+      '<span><i style="background:' + ramp[1] + '"></i><i style="background:' + ramp[3] + '"></i><i style="background:' + ramp[6] + '"></i>playing: a few min → the full 10</span>' +
+      (anyAssumed ? '<span style="color:var(--muted)">day/night times before ' + "2 Oct" + ' assumed from the first recorded setting</span>' : "") + '</div>';
     return '<section class="card"><h2>Time of day</h2><p class="sub">' + sub + '</p>' +
-      '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Listening by weekday and hour">' + g + '</svg></section>';
+      '<div style="overflow-x:auto"><svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="width:' + W + 'px;max-width:none" role="img" aria-label="Listening by night and time of night">' + g + '</svg></div>' + legend + '</section>';
   }
 
   function daily(days) {
@@ -315,7 +353,7 @@ td .al { color: var(--muted); font-size: 12px; }
       return;
     }
     var vol = Object.keys(D.volume).map(function (k) { return { k: k, v: D.volume[k] }; }).sort(function (a, b) { return a.k - b.k; });
-    h += tiles(D.totals, D.range.days) + last24(D.last24) + heatmap(D.heat) + daily(D.daily) +
+    h += tiles(D.totals, D.range.days) + last24(D.last24) + heatmap(D.nights) + daily(D.daily) +
       '<div class="two">' +
       hbars("Most played cards", "By time listened.", D.cards.map(function (c) { return { v: c.listen_s, c: c }; }),
             function (r) { return r.c.album; }, function (r) { return dur(r.c.listen_s) + " · " + r.c.plays + " plays"; }) +

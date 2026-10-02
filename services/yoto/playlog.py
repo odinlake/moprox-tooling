@@ -68,6 +68,10 @@ def db():
     c.execute("create table if not exists rows (ts real primary key, state text, title text,"
               " album text, artist text, volume integer)")
     c.execute("create table if not exists meta (k text primary key, v text)")
+    # The player's day/night settings, one row per CHANGE (record_config). Recorded from 2026-10-02;
+    # nights before the first row are drawn with the earliest known settings and marked assumed.
+    c.execute("create table if not exists yoto_config (ts real primary key, day_time text, night_time text,"
+              " day_max integer, night_max integer)")
     return c
 
 
@@ -139,6 +143,83 @@ def sync():
         c.commit()
         c.close()
         return added
+
+
+def record_config(cfg):
+    """Store the player's day/night settings if they differ from the last stored row. `cfg` is
+    /device-v2/<id>/config's `config` object. Returns True when a change was stored."""
+    row = (cfg.get("dayTime"), cfg.get("nightTime"),
+           int(cfg["maxVolumeLimit"]) if cfg.get("maxVolumeLimit") else None,
+           int(cfg["nightMaxVolumeLimit"]) if cfg.get("nightMaxVolumeLimit") else None)
+    if not row[0] or not row[1]:
+        raise ValueError("Yoto config has no dayTime/nightTime: %s" % sorted(cfg)[:20])
+    with _lock:
+        c = db()
+        try:
+            last = c.execute("select day_time, night_time, day_max, night_max from yoto_config"
+                             " order by ts desc limit 1").fetchone()
+            if last == row:
+                return False
+            c.execute("insert into yoto_config values (?,?,?,?,?)", (time.time(),) + row)
+            c.commit()
+            return True
+        finally:
+            c.close()
+
+
+def _configs(c):
+    return c.execute("select ts, day_time, night_time, day_max, night_max from yoto_config order by ts").fetchall()
+
+
+def _config_at(cfgs, t):
+    """(day_time, night_time, assumed) in force at t."""
+    if not cfgs:
+        return None, None, True
+    cur = None
+    for r in cfgs:
+        if r[0] <= t:
+            cur = r
+    if cur is None:
+        return cfgs[0][1], cfgs[0][2], True
+    return cur[1], cur[2], False
+
+
+SLOT = 600                                   # the night map's resolution: 10 minutes
+SLOTS = 86400 // SLOT                        # 144 per noon-to-noon night
+
+
+def _nights(c, segs, t0, t1, first):
+    """One column per NIGHT, noon to noon local, so a night is never cut at midnight (operator,
+    2026-10-02: "I'm most concerned with nighttime use"). Each: date (the evening), 144 ten-minute
+    slots of seconds listened, and the Yoto's day/night times that night."""
+    start = datetime.datetime.fromtimestamp(max(t0, first or t0), TZ) - datetime.timedelta(hours=12)
+    end = datetime.datetime.fromtimestamp(t1, TZ) - datetime.timedelta(hours=12)
+    dates, d = [], start.date()
+    while d <= end.date():
+        dates.append(d)
+        d += datetime.timedelta(days=1)
+    idx = {d: i for i, d in enumerate(dates)}
+    slots = [[0.0] * SLOTS for _ in dates]
+    for s, e, st, *_ in segs:
+        if st != "playing":
+            continue
+        while s < e:
+            dt = datetime.datetime.fromtimestamp(s, TZ)
+            base = dt.replace(second=0, microsecond=0, minute=dt.minute - dt.minute % 10)
+            cut = min(e, (base + datetime.timedelta(minutes=10)).timestamp())
+            night = (dt - datetime.timedelta(hours=12)).date()
+            k = ((dt.hour - 12) % 24 * 60 + dt.minute) // 10
+            if night in idx:
+                slots[idx[night]][k] += cut - s
+            s = cut
+    cfgs = _configs(c)
+    out = []
+    for d, sl in zip(dates, slots):
+        noon = datetime.datetime(d.year, d.month, d.day, 12, tzinfo=TZ).timestamp()
+        day_t, night_t, assumed = _config_at(cfgs, noon + 12 * 3600)
+        out.append({"date": d.isoformat(), "slots": [round(x) for x in sl],
+                    "day_time": day_t, "night_time": night_t, "assumed": assumed})
+    return out
 
 
 # --- stats -----------------------------------------------------------------------------------------
@@ -218,6 +299,7 @@ def stats(days=30):
         days_list.append({"date": d.isoformat(), "listen_s": round(daily.get(d.isoformat(), 0))})
         d += datetime.timedelta(days=1)
 
+    nights = _nights(c, segs, t0, t1, first)
     l0 = t1 - 86400
     last24 = [{"s": s, "e": e, "state": st, "title": ti, "album": al, "volume": v}
               for s, e, st, ti, al, v in _segments(c, l0, t1)]
@@ -231,6 +313,7 @@ def stats(days=30):
         "cards": rnd(sorted(cards.values(), key=lambda x: -x["listen_s"])[:15]),
         "chapters": rnd(sorted(chapters.values(), key=lambda x: -x["listen_s"])[:30]),
         "heat": [[round(v) for v in row] for row in heat],
+        "nights": nights,
         "daily": days_list,
         "volume": {str(k): round(v) for k, v in sorted(vols.items())},
         "last24": {"start": l0, "end": t1, "segments": last24},
