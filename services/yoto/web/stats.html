@@ -109,6 +109,8 @@ td .al { color: var(--muted); font-size: 12px; }
 /* Floating reload, the same button private-web/site/mo/menu.js injects on the other estate stats
    pages (not loaded here: its menu would collide with this page's back button). Bottom-right, for
    the thumb, and because a home-screen app has no other way to reload. */
+/* the estate menu (mo.lan/menu.js), same markup and look as the other mo.lan pages */
+.bwrap{position:relative;display:inline-flex}#bbtn{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:.34rem .5rem;cursor:pointer;display:inline-flex;align-items:center}#bpop{position:absolute;left:0;top:calc(100% + 6px);background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:200px;padding:.3rem;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:99;display:flex;flex-direction:column}#bpop a{display:block;padding:.45rem .7rem;border-radius:7px;color:var(--ink);text-decoration:none;font-size:.92rem;white-space:nowrap}#bpop a.cur{font-weight:700}#bpop a:hover{background:rgba(128,128,128,.12)}
 #mo-reload { position: fixed; z-index: 98; right: calc(.8rem + env(safe-area-inset-right, 0px)); bottom: calc(.8rem + env(safe-area-inset-bottom, 0px));
   width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
   background: var(--surface); color: var(--muted); border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(0,0,0,.18);
@@ -122,6 +124,7 @@ td .al { color: var(--muted); font-size: 12px; }
 </head>
 <body>
 <header>
+  <div class="bwrap"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden></nav></div>
   <a class="iconbtn" href="./" aria-label="Back to the picker">‹</a>
   <h1>Listening</h1>
   <div class="ranges" id="ranges" role="group" aria-label="Period">
@@ -130,6 +133,7 @@ td .al { color: var(--muted); font-size: 12px; }
 </header>
 <main id="main"><div class="msg">Loading…</div></main>
 <div id="tip" role="tooltip"></div>
+<script src="/menu.js"></script>
 <button id="mo-reload" type="button" aria-label="Reload this page" title="Reload">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4.2V10h-5.8"/></svg>

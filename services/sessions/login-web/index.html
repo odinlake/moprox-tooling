@@ -27,10 +27,13 @@ button:disabled { opacity:.55; cursor:default; }
 .url { font:12px ui-monospace,monospace; color:var(--mut); word-break:break-all; max-height:4.2em; overflow:hidden; }
 input[type=text] { font:inherit; width:100%; padding:10px; border-radius:10px; border:1px solid var(--bd); background:var(--bg); color:var(--fg); }
 .btns { display:flex; gap:8px; flex-wrap:wrap; }
+.bwrap{position:relative;display:inline-flex}#bbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:8px;padding:.34rem .5rem;cursor:pointer;display:inline-flex;align-items:center}#bpop{position:absolute;left:0;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--bd);border-radius:10px;min-width:200px;padding:.3rem;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:99;display:flex;flex-direction:column}#bpop a{display:block;padding:.45rem .7rem;border-radius:7px;color:var(--fg);text-decoration:none;font-size:.92rem;white-space:nowrap}#bpop a.cur{font-weight:700}#bpop a:hover{background:rgba(128,128,128,.12)}
+main { padding-top:56px; }
 pre { white-space:pre-wrap; word-break:break-word; font:12px ui-monospace,monospace; color:var(--mut); margin:0; }
 </style>
 </head>
 <body>
+<div class="bwrap" style="position:fixed;top:1rem;left:1rem;z-index:20"><button id="bbtn" aria-label="Site menu"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><nav id="bpop" hidden></nav></div>
 <main>
   <div><h1>Claude login</h1>
   <p class="sub">Sign each box in to the Claude subscription. Every box gets its own login; never copy one box's login to another.</p></div>
@@ -94,5 +97,6 @@ pre { white-space:pre-wrap; word-break:break-word; font:12px ui-monospace,monosp
   load();
 })();
 </script>
+<script src="/menu.js"></script>
 </body>
 </html>
