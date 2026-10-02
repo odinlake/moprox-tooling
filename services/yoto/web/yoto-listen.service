@@ -1,0 +1,19 @@
+# Passive Yoto listener (services/yoto/listen.py): records every player message to
+# ~/.local/share/moprox/yoto/listen.jsonl. Stage 1 of the night-brightness listener.
+[Unit]
+Description=yoto-listen -- record the Yoto player's MQTT messages
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/yoto
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/yoto/listen.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
