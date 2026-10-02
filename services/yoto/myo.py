@@ -288,13 +288,26 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
         # chapter 01 -- and the Yoto app broke the same way, since it also addresses chapters by key.
         # So: stop first, write, wait for the player to ack the update, start, then verify that the
         # chapter playing is the one asked for and that the player's copy is the cloud's version.
+        #
+        # The player also answers FAIL when the notice lands ~1 s after a stop with nothing playing
+        # (three of four tries on 2026-10-02 20:30); the one OK came ~7 s after the stop. Every
+        # POST triggers a fresh notice, so a FAIL is retried by writing the same order again.
         link.send("card/stop")
-        ordered = set_order(twin, first + others, tok)     # keeps the twin's own (shuffle-marked) cover
-        cloud = (req("GET", "/content/" + twin, tok).get("card") or {}).get("updatedAt")
-        ack = _card_update(link, twin, wait=8)
+        time.sleep(1.5)
+        # The player's copy carries the cloud's version stamp, which can be LATER than what a GET
+        # right after the POST returns (19:30:26.600Z vs .075Z): compare against the write time.
+        written = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 5))
+        ack, tries = None, 0
+        for tries in range(1, 4):
+            base = len(link.msgs)
+            ordered = set_order(twin, first + others, tok)  # keeps the twin's own (shuffle-marked) cover
+            ack = _card_update(link, twin, wait=6, since=base)
+            if ack != "FAIL":
+                break
+            time.sleep(1.5)
         if ack == "FAIL":
-            sys.exit("the player refused to update its copy of the playlist (card-update FAIL); "
-                     "nothing was started")
+            sys.exit("the player refused to update its copy of the playlist %d times "
+                     "(card-update FAIL); nothing was started" % tries)
         if volume is not None:
             link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
         link.send("card/start", {"uri": "https://yoto.io/" + twin, "chapterKey": "01",
@@ -307,21 +320,23 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
                 now.get("cardId"), now.get("playbackStatus"))
         elif now.get("chapterTitle") != want:
             problem = "the player started %r instead of %r" % (now.get("chapterTitle"), want)
-        elif cloud and now.get("cardUpdatedAt") and now["cardUpdatedAt"] != cloud:
-            problem = "the player is playing an old copy of the playlist (%s, cloud has %s)" % (
-                now["cardUpdatedAt"], cloud)
+        elif now.get("cardUpdatedAt") and now["cardUpdatedAt"] < written:
+            problem = "the player is playing an old copy of the playlist (%s, written after %sZ)" % (
+                now["cardUpdatedAt"], written)
         if problem:
             link.send("card/stop")              # never leave the wrong story playing
-            sys.exit(problem + "; update ack: %s; stopped" % (ack or "none within 8 s"))
+            sys.exit(problem + "; update ack: %s after %d write(s); stopped" % (ack or "none", tries))
         if sleep is not None:
             link.send("sleep-timer/set", {"seconds": int(sleep)})
     return {"source": src, "cardId": twin, "order": [c.get("title") for c in ordered],
-            "not_found": missed, "volume": volume, "sleep": sleep, "now": now, "update_ack": ack}
+            "not_found": missed, "volume": volume, "sleep": sleep, "now": now, "update_ack": ack,
+            "writes": tries}
 
 
-def _card_update(link, card_id, wait=8):
+def _card_update(link, card_id, wait=6, since=0):
     """The player's answer to the cloud's card-update notice for `card_id`: "OK", "FAIL" or None
-    if none arrived within `wait`. Messages already received count (the notice can beat us here)."""
+    if none arrived within `wait`. Only messages from index `since` on count, so an answer to an
+    earlier write is not mistaken for this one (the notice itself can beat us back here)."""
     def find(msgs):
         for kind, m in msgs:
             st = (m or {}).get("status") if kind == "response" and isinstance(m, dict) else None
@@ -329,7 +344,7 @@ def _card_update(link, card_id, wait=8):
                 return st["card-update"]
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
-        hit = find(list(link.msgs))
+        hit = find(list(link.msgs)[since:])
         if hit:
             return hit
         time.sleep(0.05)
