@@ -192,10 +192,14 @@ def _nights(c, segs, t0, t1, first):
     """One column per NIGHT, noon to noon local, so a night is never cut at midnight (operator,
     2026-10-02: "I'm most concerned with nighttime use"). Each: date (the evening), 144 ten-minute
     slots of seconds listened, and the Yoto's day/night times that night."""
-    start = datetime.datetime.fromtimestamp(max(t0, first or t0), TZ) - datetime.timedelta(hours=12)
-    end = datetime.datetime.fromtimestamp(t1, TZ) - datetime.timedelta(hours=12)
-    dates, d = [], start.date()
-    while d <= end.date():
+    # Every night in the window, ending with TODAY's (the rightmost column is today's weekday,
+    # operator 2026-10-02), including nights before recording began: those are shown empty, flagged
+    # `recorded: false`, and left out of weekday averages rather than counted as silent.
+    end = datetime.datetime.fromtimestamp(t1, TZ).date()
+    begin = datetime.datetime.fromtimestamp(t0, TZ).date() + datetime.timedelta(days=1)
+    rec_from = (datetime.datetime.fromtimestamp(first, TZ) - datetime.timedelta(hours=12)).date() if first else end
+    dates, d = [], min(begin, end - datetime.timedelta(days=6))
+    while d <= end:
         dates.append(d)
         d += datetime.timedelta(days=1)
     idx = {d: i for i, d in enumerate(dates)}
@@ -217,7 +221,7 @@ def _nights(c, segs, t0, t1, first):
     for d, sl in zip(dates, slots):
         noon = datetime.datetime(d.year, d.month, d.day, 12, tzinfo=TZ).timestamp()
         day_t, night_t, assumed = _config_at(cfgs, noon + 12 * 3600)
-        out.append({"date": d.isoformat(), "slots": [round(x) for x in sl],
+        out.append({"date": d.isoformat(), "slots": [round(x) for x in sl], "recorded": d >= rec_from,
                     "day_time": day_t, "night_time": night_t, "assumed": assumed})
     return out
 
@@ -258,7 +262,7 @@ def stats(days=30):
     if days:
         t0 = t1 - days * 86400
     else:
-        t0 = first or t1
+        t0 = (first or t1) - 86400
     segs = _segments(c, t0, t1)
     play = [x for x in segs if x[2] == "playing"]
 

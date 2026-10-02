@@ -237,62 +237,84 @@ td .al { color: var(--muted); font-size: 12px; }
     return N > Dt ? (c >= N || c < Dt) : (c >= N && c < Dt);
   }
   function heatmap(nights) {
-    if (!nights || !nights.length) return '<section class="card"><h2>Time of day</h2><div class="msg">No nights recorded in this period.</div></section>';
+    // Seven columns, today's weekday on the RIGHT (operator, 2026-10-02). For the 7-day window each
+    // column is one real night; for longer windows each is the AVERAGE of that weekday's recorded
+    // nights. Nights before recording began are drawn empty, never hidden, and never averaged in.
     var ramp = dark() ? RAMP_D : RAMP_L;
-    var avail = Math.max(260, $("main").clientWidth - 24 - 28);   // main padding + card padding
-    var lx = 46, rowH = 3, top = 6, plotH = 144 * rowH;
-    var n = nights.length, colW = Math.max(4, Math.min(80, Math.floor((avail - lx) / n)));
-    var W = lx + n * colW, H = top + plotH + 22;
+    nights = nights || [];
+    var cols = [];
+    if (st.days === 7 || nights.length <= 7) {
+      nights.slice(-7).forEach(function (nt) {
+        var d = new Date(nt.date + "T12:00:00");
+        cols.push({ day: d.getDate(), top: d.toLocaleDateString(undefined, { weekday: "short" }), sub: d.toLocaleDateString(undefined, { day: "numeric", month: "short" }),
+                    name: d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) + " night",
+                    slots: nt.recorded ? nt.slots : null, mode: nt, n: nt.recorded ? 1 : 0, avg: false });
+      });
+    } else {
+      var last = nights[nights.length - 1], by = {};
+      nights.forEach(function (nt) { var w = new Date(nt.date + "T12:00:00").getDay(); (by[w] = by[w] || []).push(nt); });
+      var today = new Date(last.date + "T12:00:00").getDay();
+      for (var i = 6; i >= 0; i--) {
+        var w = (today - i + 7) % 7, list = by[w] || [], rec = list.filter(function (x) { return x.recorded; });
+        var sum = new Array(144).fill(0);
+        rec.forEach(function (x) { x.slots.forEach(function (v, k) { sum[k] += v; }); });
+        var newest = list[list.length - 1] || last;
+        var changed = rec.some(function (x) { return x.night_time !== newest.night_time || x.day_time !== newest.day_time; });
+        var wd = new Date(newest.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
+        cols.push({ top: wd, sub: rec.length ? "avg of " + rec.length : "none yet", name: wd + " nights, average of " + rec.length,
+                    slots: rec.length ? sum.map(function (v) { return v / rec.length; }) : null, mode: newest, n: rec.length, avg: true, changed: changed });
+      }
+    }
+    var avail = Math.max(260, $("main").clientWidth - 24 - 28);
+    var lx = 46, rowH = 4, top = 34, plotH = 144 * rowH;
+    var colW = Math.floor((avail - lx) / 7), W = lx + 7 * colW, H = top + plotH + 6;
     var g = "", peak = new Array(144).fill(0), anyAssumed = false;
-    nights.forEach(function (nt, i) {
-      var x = lx + i * colW, d = new Date(nt.date + "T12:00:00");
-      var label = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+    cols.forEach(function (c, i) {
+      var x = lx + i * colW, nt = c.mode;
       anyAssumed = anyAssumed || nt.assumed;
-      // empty background: runs of the same mode merged into one rect each
+      var subtxt = colW >= 80 ? c.sub : (c.avg ? (c.n ? "×" + c.n : "–") : String(c.day));
+      g += '<text x="' + (x + colW / 2) + '" y="13" text-anchor="middle" style="font-weight:700;fill:var(--ink)">' + esc(c.top) + '</text>' +
+           '<text x="' + (x + colW / 2) + '" y="27" text-anchor="middle">' + esc(subtxt) + '</text>';
       var k = 0;
       while (k < 144) {
         var night = isNight(nt, k), j = k;
         while (j < 144 && isNight(nt, j) === night) j++;
-        var t = "<b>" + esc(label) + " night</b><br>" + clockOf(k) + "–" + clockOf(j) + " · " + (night ? "night" : "day") + " mode" +
-                (nt.night_time ? " (" + esc(nt.night_time) + "–" + esc(nt.day_time) + (nt.assumed ? ", assumed" : "") + ")" : "");
-        g += '<rect x="' + (x + 0.5) + '" y="' + (top + k * rowH) + '" width="' + (colW - 1) + '" height="' + ((j - k) * rowH) +
+        var t = "<b>" + esc(c.name) + "</b><br>" + clockOf(k) + "–" + clockOf(j) + " · " + (night ? "night" : "day") + " mode" +
+                (nt.night_time ? " (" + esc(nt.night_time) + "–" + esc(nt.day_time) + (nt.assumed ? ", assumed" : "") + ")" : "") +
+                (c.changed ? "<br>the Yoto setting changed during this period" : "") +
+                (c.slots ? "" : (c.avg ? "<br>no recorded nights yet" : "<br>not recorded (before recording began)"));
+        g += '<rect x="' + (x + 1) + '" y="' + (top + k * rowH) + '" width="' + (colW - 2) + '" height="' + ((j - k) * rowH) +
              '" fill="var(' + (night ? "--nightcell" : "--daycell") + ')" data-tip="' + esc(t) + '"/>';
         k = j;
       }
-      nt.slots.forEach(function (v, k) {
-        if (!v) return;
+      (c.slots || []).forEach(function (v, k) {
+        if (v < 1) return;
         peak[k] += v;
         var f = ramp[Math.min(ramp.length - 1, Math.floor(Math.min(1, v / 600) * ramp.length))];
-        var t = "<b>" + esc(label) + " night</b><br>" + clockOf(k) + "–" + clockOf(k + 1) + " · " + dur(v) + " listened" +
+        var t = "<b>" + esc(c.name) + "</b><br>" + clockOf(k) + "–" + clockOf(k + 1) + " · " + dur(v) + (c.avg ? " on average" : " listened") +
                 (isNight(nt, k) ? " · night mode" : "");
-        g += '<rect class="hit" x="' + (x + 0.5) + '" y="' + (top + k * rowH) + '" width="' + (colW - 1) + '" height="' + rowH +
+        g += '<rect class="hit" x="' + (x + 1) + '" y="' + (top + k * rowH) + '" width="' + (colW - 2) + '" height="' + rowH +
              '" fill="' + f + '" data-tip="' + esc(t) + '"/>';
       });
     });
-    // gridlines over the cells: every hour faint, every 2 h labelled, midnight strong
+    // a gridline and a label every hour; midnight strong
     for (var hk = 0; hk <= 144; hk += 6) {
       var y = top + hk * rowH, clock = (12 + hk / 6) % 24, mid = clock === 0;
       g += '<line x1="' + (lx - 4) + '" x2="' + W + '" y1="' + y + '" y2="' + y + '" stroke="var(' + (mid ? "--ink" : "--grid") + ')" stroke-opacity="' +
-           (mid ? 0.55 : 0.9) + '" stroke-width="' + (mid ? 1.2 : 0.6) + '"/>';
-      if (clock % 2 === 0) g += '<text x="' + (lx - 7) + '" y="' + (y + 3.5) + '" text-anchor="end"' + (mid ? ' style="font-weight:700;fill:var(--ink)"' : "") + '>' +
+           (mid ? 0.55 : 0.9) + '" stroke-width="' + (mid ? 1.2 : 0.6) + '"/>' +
+           '<text x="' + (lx - 7) + '" y="' + (y + 3.5) + '" text-anchor="end"' + (mid ? ' style="font-weight:700;fill:var(--ink)"' : "") + '>' +
            String(clock).padStart(2, "0") + ':00</text>';
     }
-    var every = Math.max(1, Math.ceil(56 / colW));
-    nights.forEach(function (nt, i) {
-      if ((n - 1 - i) % every) return;
-      var d = new Date(nt.date + "T12:00:00");
-      g += '<text x="' + (lx + i * colW + colW / 2) + '" y="' + (top + plotH + 15) + '" text-anchor="middle">' +
-           esc(d.toLocaleDateString(undefined, { day: "numeric", month: "short" })) + '</text>';
-    });
     var pk = peak.indexOf(Math.max.apply(null, peak));
-    var sub = "Each column is one night, noon to noon; each row 10 minutes. " +
+    var sub = (cols.length && cols[0].avg ? "Each column is the average night for that weekday" : "Each column is one night") +
+              ", noon to noon; each row is 10 minutes. " +
               (peak[pk] ? "Busiest slot: " + clockOf(pk) + "–" + clockOf(pk + 1) + "." : "Nothing played in this period.");
     var legend = '<div class="legend"><span><i style="background:var(--nightcell)"></i>night mode, silent</span>' +
       '<span><i style="background:var(--daycell)"></i>day mode, silent</span>' +
-      '<span><i style="background:' + ramp[1] + '"></i><i style="background:' + ramp[3] + '"></i><i style="background:' + ramp[6] + '"></i>playing: a few min → the full 10</span>' +
-      (anyAssumed ? '<span style="color:var(--muted)">day/night times before ' + "2 Oct" + ' assumed from the first recorded setting</span>' : "") + '</div>';
+      '<span><i style="background:' + ramp[1] + '"></i><i style="background:' + ramp[3] + '"></i><i style="background:' + ramp[6] + '"></i>playing: a few min → all 10</span>' +
+      (anyAssumed ? '<span style="color:var(--muted)">day/night times before 2 Oct assumed from the first recorded setting</span>' : "") + '</div>';
     return '<section class="card"><h2>Time of day</h2><p class="sub">' + sub + '</p>' +
-      '<div style="overflow-x:auto"><svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="width:' + W + 'px;max-width:none" role="img" aria-label="Listening by night and time of night">' + g + '</svg></div>' + legend + '</section>';
+      '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="width:' + W + 'px;max-width:100%" role="img" aria-label="Listening by night and time of night">' + g + '</svg>' + legend + '</section>';
   }
 
   function daily(days) {
