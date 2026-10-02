@@ -257,98 +257,71 @@ def twin_of(cid, tok, create=True):
     return cid, twin
 
 
+def source_of(cid):
+    """The playlist a (shuffle) twin was copied from; any other card is its own source."""
+    for k, v in yoto.env().items():
+        if k.startswith("YOTO_TWIN_") and v == cid and k[len("YOTO_TWIN_"):] != cid:
+            return k[len("YOTO_TWIN_"):]
+    return cid
+
+
 def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     """Bard's play routine, once, for bard and the web picker alike.
 
-    `wanted` (titles or chapter keys) play first in the order given; `rest` is "shuffle", "order"
-    or "none" for what follows them. Order is set on the twin (0.5 s, no audio moves), then one
-    MQTT session sets volume BEFORE starting (a quiet request must never start loud), starts at
-    chapter 01 with secondsIn so it is a start and not a resume, sets the sleep timer AFTER the
-    start so it never delays the sound, and returns what the device says is actually playing.
-    volume=None leaves the volume alone; sleep=0 disables the timer. dry=True resolves and orders
-    but neither writes the card nor touches the player."""
+    PLAYS THE SOURCE CARD, NEVER A REORDERED TWIN. The player keeps its own copy of every card and
+    maps chapter keys through it; a reorder reaches that copy only if the player accepts the cloud's
+    card-update notice, and on 2026-10-02 it refused 6 of 7 (FAIL even with nothing playing, and one
+    "OK" that changed nothing). A rewritten twin therefore played whatever its stale copy had at the
+    requested key. A source card is never rewritten, so its copy stays current and its keys are right.
+
+    So: the first title in `wanted` starts (no title: a random story with at least `sleep` seconds of
+    card after it), and the card then carries on
+    in its fixed order. Later titles in `wanted` and `rest` cannot be honoured this way; they are
+    returned as `ignored` rather than silently dropped. One MQTT session sets volume BEFORE starting
+    (a quiet request must never start loud), starts with secondsIn so it is a start and not a
+    resume, verifies the chapter actually playing, and sets the sleep timer AFTER the start. If the
+    wrong story starts it is stopped and the call exits with the reason (yoto-web shows it)."""
     tok = yoto.token()
-    src, twin = twin_of(card_of(ident, tok), tok, create=not dry)
+    src = source_of(card_of(ident, tok))
     chapters = chapters_of(src, tok)
     first, others, missed = pick(chapters, list(wanted))
-    if rest == "shuffle":
-        random.shuffle(others)
-    elif rest == "none":
-        others = []
-    if not first and not others:
+    if wanted and not first:
         sys.exit("nothing to play: no chapter matched %r" % (list(wanted),))
+    if first:
+        start = first[0]
+    else:                                   # a random story, but one that leaves the sleep timer's
+        def left(n):                        # worth of listening rather than one story then silence
+            return sum(c.get("duration") or 0 for c in chapters[n:])
+        room = [c for n, c in enumerate(chapters) if left(n) >= (sleep or 0)]
+        start = random.choice(room or chapters[:1])
+    i = next(n for n, c in enumerate(chapters) if c.get("key") == start.get("key"))
+    order = [c.get("title") for c in chapters[i:]]
+    out = {"source": src, "cardId": src, "order": order, "not_found": missed,
+           "ignored": [c.get("title") for c in first[1:]], "volume": volume, "sleep": sleep}
     if dry:
-        return {"source": src, "cardId": twin, "order": [c.get("title") for c in first + others],
-                "not_found": missed, "volume": volume, "sleep": sleep, "dry": True}
+        return dict(out, dry=True)
+    cloud = (req("GET", "/content/" + src, tok).get("card") or {}).get("updatedAt") or ""
     with yoto.Link(tok, yoto.env()["YOTO_DEVICE_ID"]) as link:
-        # THE PLAYER KEEPS ITS OWN COPY OF EVERY CARD and maps chapter keys through that copy. A
-        # reorder only reaches it via a "card-update" notice that Yoto's cloud sends after the POST,
-        # and a player that is already playing the card answers FAIL (seen 2026-10-02 20:14:22) and
-        # keeps the old copy. Writing the order and starting at once therefore played the OLD
-        # chapter 01 -- and the Yoto app broke the same way, since it also addresses chapters by key.
-        # So: stop first, write, wait for the player to ack the update, start, then verify that the
-        # chapter playing is the one asked for and that the player's copy is the cloud's version.
-        #
-        # The player also answers FAIL when the notice lands ~1 s after a stop with nothing playing
-        # (three of four tries on 2026-10-02 20:30); the one OK came ~7 s after the stop. Every
-        # POST triggers a fresh notice, so a FAIL is retried by writing the same order again.
-        link.send("card/stop")
-        time.sleep(1.5)
-        # The player's copy carries the cloud's version stamp, which can be LATER than what a GET
-        # right after the POST returns (19:30:26.600Z vs .075Z): compare against the write time.
-        written = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 5))
-        ack, tries = None, 0
-        for tries in range(1, 4):
-            base = len(link.msgs)
-            ordered = set_order(twin, first + others, tok)  # keeps the twin's own (shuffle-marked) cover
-            ack = _card_update(link, twin, wait=6, since=base)
-            if ack != "FAIL":
-                break
-            time.sleep(1.5)
-        if ack == "FAIL":
-            sys.exit("the player refused to update its copy of the playlist %d times "
-                     "(card-update FAIL); nothing was started" % tries)
         if volume is not None:
             link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
-        link.send("card/start", {"uri": "https://yoto.io/" + twin, "chapterKey": "01",
+        link.send("card/start", {"uri": "https://yoto.io/" + src, "chapterKey": start.get("key"),
                                  "trackKey": "01", "secondsIn": 0}, wait=6)
         now = yoto.now_playing(link)
-        want = ordered[0].get("title")
         problem = None
-        if now.get("cardId") != twin or now.get("playbackStatus") != "playing":
+        if now.get("cardId") != src or now.get("playbackStatus") != "playing":
             problem = "the player did not start the playlist (it reports %s / %s)" % (
                 now.get("cardId"), now.get("playbackStatus"))
-        elif now.get("chapterTitle") != want:
-            problem = "the player started %r instead of %r" % (now.get("chapterTitle"), want)
-        elif now.get("cardUpdatedAt") and now["cardUpdatedAt"] < written:
-            problem = "the player is playing an old copy of the playlist (%s, written after %sZ)" % (
-                now["cardUpdatedAt"], written)
+        elif now.get("chapterTitle") != start.get("title"):
+            problem = "the player started %r instead of %r" % (now.get("chapterTitle"), start.get("title"))
+            if now.get("cardUpdatedAt", "")[:19] < cloud[:19]:
+                problem += " (its copy of the playlist, %s, is older than the cloud's %s)" % (
+                    now.get("cardUpdatedAt"), cloud)
         if problem:
             link.send("card/stop")              # never leave the wrong story playing
-            sys.exit(problem + "; update ack: %s after %d write(s); stopped" % (ack or "none", tries))
+            sys.exit(problem + "; stopped")
         if sleep is not None:
             link.send("sleep-timer/set", {"seconds": int(sleep)})
-    return {"source": src, "cardId": twin, "order": [c.get("title") for c in ordered],
-            "not_found": missed, "volume": volume, "sleep": sleep, "now": now, "update_ack": ack,
-            "writes": tries}
-
-
-def _card_update(link, card_id, wait=6, since=0):
-    """The player's answer to the cloud's card-update notice for `card_id`: "OK", "FAIL" or None
-    if none arrived within `wait`. Only messages from index `since` on count, so an answer to an
-    earlier write is not mistaken for this one (the notice itself can beat us back here)."""
-    def find(msgs):
-        for kind, m in msgs:
-            st = (m or {}).get("status") if kind == "response" and isinstance(m, dict) else None
-            if isinstance(st, dict) and "card-update" in st and card_id in str(st.get("req_body")):
-                return st["card-update"]
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        hit = find(list(link.msgs)[since:])
-        if hit:
-            return hit
-        time.sleep(0.05)
-    return None
+    return dict(out, now=now)
 
 
 def main():
