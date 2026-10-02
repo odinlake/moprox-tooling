@@ -255,7 +255,8 @@ class Link:
 
 # All scopes the estate needs, requested together (trap 3 above). user:content:manage is what creating
 # and updating MYO playlists requires (yoto.dev/authentication/scopes); it was not in the first grant.
-SCOPES = ("family:devices:control family:devices:view family:library:view "
+# family:devices:manage is what PUT /device-v2/<id>/config (display brightness, dim, day/night) needs.
+SCOPES = ("family:devices:control family:devices:view family:devices:manage family:library:view "
           "user:content:manage offline_access")
 AUTH_URL = "https://login.yotoplay.com/authorize"
 REDIRECT = "http://localhost:8765/callback"
