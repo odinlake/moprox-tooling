@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Claude login</title>
+<style>
+:root { --bg:#f6f7f9; --panel:#fff; --fg:#1f2328; --mut:#656d76; --bd:#d0d7de; --accent:#0969da; --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --mut:#8d96a0; --bd:#30363d; --accent:#4493f8; --ok:#3fb950; --bad:#f85149; --warn:#d29922; } }
+:root[data-theme="dark"] { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --mut:#8d96a0; --bd:#30363d; --accent:#4493f8; --ok:#3fb950; --bad:#f85149; --warn:#d29922; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+main { max-width:640px; margin:0 auto; padding:16px 16px 48px; display:grid; gap:14px; }
+h1 { font-size:20px; margin:4px 0 0; }
+p.sub { margin:0; color:var(--mut); font-size:14px; }
+.card { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px; display:grid; gap:10px; }
+.row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.name { font-weight:700; font-size:17px; }
+.what { color:var(--mut); font-size:13px; }
+.st { font-size:14px; }
+.ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+button, a.btn { font:inherit; font-weight:600; border-radius:10px; border:1px solid var(--bd); background:var(--panel); color:var(--fg); padding:10px 14px; cursor:pointer; text-decoration:none; display:inline-block; text-align:center; }
+button.primary, a.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button:disabled { opacity:.55; cursor:default; }
+.steps { display:grid; gap:10px; border-top:1px solid var(--bd); padding-top:10px; }
+.steps ol { margin:0; padding-left:20px; display:grid; gap:10px; }
+.url { font:12px ui-monospace,monospace; color:var(--mut); word-break:break-all; max-height:4.2em; overflow:hidden; }
+input[type=text] { font:inherit; width:100%; padding:10px; border-radius:10px; border:1px solid var(--bd); background:var(--bg); color:var(--fg); }
+.btns { display:flex; gap:8px; flex-wrap:wrap; }
+pre { white-space:pre-wrap; word-break:break-word; font:12px ui-monospace,monospace; color:var(--mut); margin:0; }
+</style>
+</head>
+<body>
+<main>
+  <div><h1>Claude login</h1>
+  <p class="sub">Sign each box in to the Claude subscription. Every box gets its own login; never copy one box's login to another.</p></div>
+  <div id="boxes"><div class="card">Checking…</div></div>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return "&#" + c.charCodeAt(0) + ";"; }); }
+  function api(path, body) {
+    return fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" } : { credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; }); });
+  }
+  function days(ms) { return ms ? Math.floor((ms - Date.now()) / 864e5) : null; }
+  function stLine(s) {
+    if (s.error) return '<span class="bad">could not check: ' + esc(s.error) + '</span>';
+    if (!s.logged_in) return '<span class="bad">not logged in</span>';
+    var d = days(s.refresh_exp), exp = s.refresh_exp ? new Date(s.refresh_exp).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "?";
+    var cls = d == null ? "" : d < 0 ? "bad" : d <= 5 ? "warn" : "ok";
+    return '<span class="' + cls + '">' + (d != null && d < 0 ? "login EXPIRED " + exp : "logged in, expires " + exp + (d != null ? " (" + d + " days)" : "")) + '</span>' +
+      (s.email ? ' · <span class="what">' + esc(s.email) + '</span>' : "");
+  }
+  var state = {};
+  function render(list) {
+    $("boxes").innerHTML = list.map(function (s) {
+      return '<div class="card" id="c-' + s.box + '"><div class="row"><div><div class="name">' + esc(s.label) + '</div><div class="what">' + esc(s.what) + '</div></div>' +
+        '<button class="primary" data-box="' + s.box + '">Log in</button></div><div class="st">' + stLine(s) + '</div><div class="steps" hidden></div></div>';
+    }).join("");
+  }
+  function load() { api("api/status").then(render).catch(function (e) { $("boxes").innerHTML = '<div class="card bad">' + esc(e.message) + '</div>'; }); }
+  $("boxes").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-box]"); if (b) return startLogin(b.getAttribute("data-box"), b);
+    var c = e.target.closest("button[data-copy]"); if (c) { var u = state[c.getAttribute("data-copy")].url;
+      (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(function () { c.textContent = "Copied"; }, function () { c.textContent = "Copy failed: long-press the link"; }); }
+    var s = e.target.closest("button[data-send]"); if (s) sendCode(s.getAttribute("data-send"), s);
+  });
+  function startLogin(box, btn) {
+    var card = $("c-" + box), steps = card.querySelector(".steps");
+    btn.disabled = true; btn.textContent = "Starting…"; steps.hidden = false; steps.innerHTML = "Starting the login on " + esc(box) + "…";
+    api("api/start", { box: box }).then(function (r) {
+      state[box] = r;
+      steps.innerHTML = '<ol><li><a class="btn primary" href="' + esc(r.url) + '" target="_blank" rel="noopener">Open the Claude sign-in page</a> ' +
+        '<button data-copy="' + box + '">Copy link</button><div class="url">' + esc(r.url) + '</div></li>' +
+        '<li>Approve it. Claude then shows a code: copy it.</li>' +
+        '<li><input type="text" id="code-' + box + '" placeholder="Paste the code here" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<div class="btns" style="margin-top:8px"><button class="primary" data-send="' + box + '">Finish login</button></div></li></ol>';
+      btn.textContent = "Restart login"; btn.disabled = false;
+    }).catch(function (e) { steps.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; btn.textContent = "Log in"; btn.disabled = false; });
+  }
+  function sendCode(box, btn) {
+    var v = ($("code-" + box).value || "").trim(); if (!v) return;
+    var card = $("c-" + box), steps = card.querySelector(".steps");
+    btn.disabled = true; btn.textContent = "Finishing and testing…";
+    api("api/code", { sid: state[box].sid, code: v }).then(function (r) {
+      card.querySelector(".st").innerHTML = stLine(r.status);
+      steps.innerHTML = (r.ok ? '<div class="ok"><b>Done.</b> ' + esc(box) + ' answered a test request (AUTH-OK).</div>'
+                              : '<div class="bad"><b>Not working yet.</b> The test request said: ' + esc(r.probe || "nothing") + '</div>') +
+        '<pre>' + esc(r.output) + '</pre>';
+    }).catch(function (e) { steps.insertAdjacentHTML("beforeend", '<div class="bad">' + esc(e.message) + '</div>'); btn.disabled = false; btn.textContent = "Finish login"; });
+  }
+  load();
+})();
+</script>
+</body>
+</html>

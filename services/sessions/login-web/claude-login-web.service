@@ -1,0 +1,26 @@
+# mo.lan/claude-login -- the Claude login broker. Source of truth: moprox-tooling/services/sessions/login-web
+# (install.sh). Runs as mikael: it drives `claude auth login` for mikael's ~/.claude, and reaches
+# claude-loop with mikael's ops SSH key. tooling-pull does not restart it: after a change,
+# sudo systemctl restart claude-login-web.service
+[Unit]
+Description=claude-login -- broker interactive Claude logins for the estate boxes (mo.lan/claude-login)
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/sessions/login-web
+# Requires, not just After: the gate must be up before the port listens.
+Requires=claudelogin-gate.service
+After=claudelogin-gate.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=CLAUDE_LOGIN_PORT=8034
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/sessions/login-web/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
