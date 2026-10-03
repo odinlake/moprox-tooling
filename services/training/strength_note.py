@@ -28,6 +28,10 @@ A session whose set count was never tracked says so, rather than losing the load
 
   strength_note.py --ex heel-raise-SL-loaded --sets-unknown --reps 10 --kg 32
 
+An UNEVEN session — three sets of 10, 10, 8 against a 3x10 target — gives one count per set:
+
+  strength_note.py --ex db-chest-press --sets 3 --reps 10,10,8 --kg 20
+
 A row that was WRONG is retracted by appending its replacement and naming it. The file still keeps
 both; the feed counts only the later one:
 
@@ -63,6 +67,42 @@ LOG = Path(os.environ.get("STRENGTH_LOG",
 # independent reading on all 28 rows today; it is one rephrasing away from not doing, and it fails
 # toward the claim. This is the field that ends the parse.
 KG_SRC = ("stated", "assumed")
+
+
+# One count per set, because that is how an uneven session is actually done — and because the log
+# has carried that shape since 2026-09-21 while this writer could not produce it.
+#
+# All 6 rows in the live log whose `reps` is a list (`[10,10,8]`, `[10,12,15]`, `[10,10,6]`,
+# `[10,10,8]`, `[10,10,7]`, `[10,10,7.5]`, newest 2026-10-02, every one `agent: coach`) are
+# hand-written JSON that went around this script, because `--reps` took one integer and a session
+# of 10/10/8 is not one integer. The cost of that is measured and it is the whole feed: `float()`
+# of a list raised out of strength.volume(), strength.py died on every run from 2026-09-21, and
+# update.py's non-fatal wrapper went on serving the previous strength.json — 26 failed runs, the
+# panel frozen for 9 days, with no outward sign — until b7dd0271 taught the READER the shape.
+#
+# Teaching the reader a shape the writer cannot write fixes that row and not the next one: the row
+# still arrives by hand, past every check in this file, so the vocabulary it uses is whatever it
+# improvised. The live log is the evidence — `sets_uncertain` and `date_uncertain`, invented on
+# hand-written rows by this same producer and read by nothing to this day. The durable fix is for
+# the sanctioned writer to have the word.
+#
+# Floats are accepted because the log already holds one: 2026-10-02's overhead press is 10/10/7.5,
+# "the last rep barely". Rejecting it would send that row back around the CLI.
+def reps_arg(s):
+    """`10` or `10,10,8` -> [10] / [10, 10, 8]. One entry per set, in the order performed."""
+    out = []
+    for part in str(s).split(","):
+        part = part.strip()
+        if not part:
+            raise argparse.ArgumentTypeError("empty rep count in %r — give 10 or 10,10,8" % (s,))
+        try:
+            n = float(part)
+        except ValueError:
+            raise argparse.ArgumentTypeError("%r is not a rep count" % (part,))
+        if n <= 0:
+            raise argparse.ArgumentTypeError("a set of %s reps is not a set" % (part,))
+        out.append(int(n) if n == int(n) else n)
+    return out
 
 
 def log_rows():
@@ -101,7 +141,9 @@ def main(argv=None):
                     help="the set count was not tracked (an at-home session, a movement named "
                          "after the fact). Volume load is then not computed for this row and the "
                          "session's set total is published as a floor.")
-    ap.add_argument("--reps", type=int, help="reps per set (omit for a timed movement)")
+    ap.add_argument("--reps", type=reps_arg,
+                    help="reps per set (omit for a timed movement). One count for an even "
+                         "session, or one per set for an uneven one: 10,10,8")
     ap.add_argument("--kg", type=float, help="load per set; omit for bodyweight")
     ap.add_argument("--kg-src", choices=KG_SRC,
                     help="where --kg came from: 'stated' (read off the machine) or 'assumed' "
@@ -132,6 +174,18 @@ def main(argv=None):
         ap.error("give --reps (weighted or bodyweight) or --secs (timed)")
     if a.reps is not None and a.secs is not None:
         ap.error("--reps and --secs are different movement shapes; give one")
+    # A per-set list STATES the set count, so it must not contradict the one the caller also gave.
+    # Refused rather than reconciled: one row answering "how many sets" two ways is the ambiguity
+    # the hand-written path has no opinion about, and picking a winner here would publish a set
+    # total and a volume load computed off different session shapes. All 6 live list rows agree
+    # with their own `sets`, so nothing legitimate is being turned away.
+    if a.reps is not None and len(a.reps) > 1:
+        if a.sets is not None and a.sets != len(a.reps):
+            ap.error("--reps lists %d sets (%s) but --sets says %d"
+                     % (len(a.reps), ",".join(str(n) for n in a.reps), a.sets))
+        if a.sets_unknown:
+            ap.error("--reps %s states %d sets, so the count is not unknown"
+                     % (",".join(str(n) for n in a.reps), len(a.reps)))
     # `kg: 0` is how this log spells "no external load", not a load of zero, and strength.py's
     # load() reads it that way — so it attributes no source for either spelling and would drop the
     # field. Rejecting here is the difference between the writer knowing that and believing it
@@ -161,7 +215,12 @@ def main(argv=None):
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
            "ex": a.ex.strip().lower().replace(" ", "-")}
-    for k, v in (("sets", a.sets), ("reps", a.reps), ("kg", a.kg), ("kg_src", a.kg_src),
+    # An even session stays a bare number, exactly as every row written before this did. Emitting
+    # [10] for `--reps 10` would change the shape — and therefore the content id — of every row
+    # this writer appends from now on, for no gain: strength.per_set() reads a list, and a list of
+    # one says nothing a number does not.
+    reps = None if a.reps is None else (a.reps[0] if len(a.reps) == 1 else a.reps)
+    for k, v in (("sets", a.sets), ("reps", reps), ("kg", a.kg), ("kg_src", a.kg_src),
                  ("secs", a.secs), ("supersedes", sup),
                  ("rir", a.rir), ("note", a.note or None), ("agent", a.agent or None)):
         if v is not None:
