@@ -176,6 +176,52 @@ def check_jsonl_fraction(lane, skips):
     return None
 
 
+def check_json_newest(lane, skips):
+    """Age of the newest record inside a JSON document on disk.
+
+    For a DERIVED artifact — one JSON object holding a list of records, written by a script rather
+    than appended to by a collector. `path` names the list inside the document ("" if the document
+    is itself the list).
+
+    `newest_file` cannot do this job. These artifacts are git-tracked, so their mtime is when the
+    checkout last wrote them, which every pull moves and which says nothing about whether the
+    producer ever ran again: a file regenerated once and then abandoned keeps a fresh mtime
+    forever. Reading the records' own clock is the whole point.
+    """
+    paths = expand(lane["glob"])
+    if not paths:
+        return f"no files match {lane['glob']}"
+    newest, newest_in, read = None, None, 0
+    for p in paths:
+        try:
+            doc = json.loads(Path(p).read_text())
+        except Exception as exc:
+            # One unreadable artifact must not decide the lane for the others, and must not be
+            # silent either. If it was the only one, `newest` stays None and the lane breaches below.
+            errlog.err(f"freshness: cannot read {p}", exc)
+            continue
+        read += 1
+        for key in [k for k in str(lane.get("path", "")).split(".") if k]:
+            doc = doc.get(key) if isinstance(doc, dict) else None
+        if not isinstance(doc, list):
+            return (f"{os.path.basename(p)} holds no list at {lane.get('path', '')!r} — "
+                    f"the artifact's shape is not what this lane was written against")
+        for r in doc:
+            t = parse_ts(r.get(lane["field"])) if isinstance(r, dict) else None
+            if t is not None and (newest is None or t > newest):
+                newest, newest_in = t, p
+    if newest is None:
+        return (f"no usable '{lane['field']}' value in {read} readable file(s) "
+                f"of {len(paths)} matching {lane['glob']}")
+    age = (time.time() - newest) / HOUR
+    if age > lane["max_age_h"]:
+        return (f"newest record in {os.path.basename(newest_in)} is {age:.1f} h old "
+                f"(limit {lane['max_age_h']} h), at "
+                f"{datetime.fromtimestamp(newest, timezone.utc).isoformat(timespec='seconds')} — "
+                f"the file's own mtime says nothing here; nothing has regenerated it")
+    return None
+
+
 def check_http_json_newest(lane, skips):
     """Age of the newest record in a JSON array served by an estate HTTP service.
 
@@ -214,6 +260,7 @@ def check_http_json_newest(lane, skips):
 KINDS = {"newest_file": check_newest_file,
          "jsonl_newest": check_jsonl_newest,
          "jsonl_fraction": check_jsonl_fraction,
+         "json_newest": check_json_newest,
          "http_json_newest": check_http_json_newest}
 
 
