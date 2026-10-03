@@ -274,6 +274,31 @@ def _save_adhoc(d):
     yoto._put(ADHOC, ",".join("%s:%s" % kv for kv in d.items()))
 
 
+ADHOC_DIM = 0.5              # "dark tinted": a one-shot card must not pass for its playlist
+
+
+def adhoc_cover(cover, tok):
+    """The source's cover darkened, with the shuffle disc on it, for queue()'s one-shot cards.
+
+    Uploaded once per source image and remembered in yoto.env (YOTO_ADHOC_COVER_<hash of the source
+    url>), so a play costs nothing after the first; a new playlist cover gets a new key, hence new
+    art. Any failure returns the source cover unchanged: art must never cost a play."""
+    url = (cover or {}).get("imageL")
+    if not url or not url.startswith("https://"):
+        return cover
+    key = "YOTO_ADHOC_COVER_" + hashlib.sha1(url.encode()).hexdigest()[:12]
+    hit = yoto.env().get(key)
+    if hit:
+        return {"imageL": hit}
+    try:
+        import covers
+        made = upload_cover(covers.jpeg(covers.shuffle_badge(covers.fetch(url), dim=ADHOC_DIM)), tok)
+        yoto._put(key, made["imageL"])
+        return made
+    except (Exception, SystemExit):
+        return cover
+
+
 def source_of(cid):
     """The playlist an ad-hoc card or a (shuffle) twin was made from; any other card is its own."""
     hit = adhoc_cards().get(cid)
@@ -323,6 +348,7 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
         return dict(out, cardId=None, dry=True)
     meta = dict(card.get("metadata") or {})
     meta["media"] = _media(seq)
+    meta["cover"] = adhoc_cover(meta.get("cover"), tok)
     made = req("POST", "/content", tok, {"title": card.get("title"), "content": {"chapters": seq},
                                          "metadata": meta})
     cid = (made.get("card") or made).get("cardId")
