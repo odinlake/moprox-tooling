@@ -259,8 +259,7 @@ main { padding: 2px 10px calc(env(safe-area-inset-bottom) + 140px); }
                       rest: st.sel.length ? RESTS[st.restIx][0] : "shuffle" })
       .then(function (r) {
         var now = r.now || {};
-        var more = (r.ignored || []).length ? " (then in playlist order; only the first pick can start)" : "";
-        if (now.playbackStatus === "playing" && now.chapterTitle) toast("Playing " + short(now.chapterTitle) + more, more ? 8000 : 5000);
+        if (now.playbackStatus === "playing" && now.chapterTitle) toast("Playing " + short(now.chapterTitle), 5000);
         else toast("Sent. The player reports: " + (now.playbackStatus || "unknown"), 6000);
         st.sel = [];
       })

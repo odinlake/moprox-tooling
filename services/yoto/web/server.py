@@ -55,7 +55,8 @@ def library():
     lib = myo.req("GET", "/card/family/library", tok)
     cards = lib.get("cards") or lib
     rows = [(c.get("card") or c) for c in (cards.values() if isinstance(cards, dict) else cards)]
-    twins = {v for k, v in yoto.env().items() if k.startswith("YOTO_TWIN_")}
+    # twins and queue()'s one-shot play cards are plumbing, not playlists a person picks
+    twins = {v for k, v in yoto.env().items() if k.startswith("YOTO_TWIN_")} | set(myo.adhoc_cards())
     me = next((r.get("userId") for r in rows if r.get("cardId") in twins), None)
     out = []
     for r in rows:

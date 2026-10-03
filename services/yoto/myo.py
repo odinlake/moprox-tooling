@@ -257,8 +257,28 @@ def twin_of(cid, tok, create=True):
     return cid, twin
 
 
+ADHOC = "YOTO_ADHOC"          # "<adhoc cardId>:<source cardId>,..." -- the live one-shot play cards
+
+
+def adhoc_cards():
+    """{ad-hoc cardId: source cardId} for the one-shot cards queue() has made and not yet deleted."""
+    out = {}
+    for pair in (yoto.env().get(ADHOC) or "").split(","):
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _save_adhoc(d):
+    yoto._put(ADHOC, ",".join("%s:%s" % kv for kv in d.items()))
+
+
 def source_of(cid):
-    """The playlist a (shuffle) twin was copied from; any other card is its own source."""
+    """The playlist an ad-hoc card or a (shuffle) twin was made from; any other card is its own."""
+    hit = adhoc_cards().get(cid)
+    if hit:
+        return hit
     for k, v in yoto.env().items():
         if k.startswith("YOTO_TWIN_") and v == cid and k[len("YOTO_TWIN_"):] != cid:
             return k[len("YOTO_TWIN_"):]
@@ -268,60 +288,76 @@ def source_of(cid):
 def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     """Bard's play routine, once, for bard and the web picker alike.
 
-    PLAYS THE SOURCE CARD, NEVER A REORDERED TWIN. The player keeps its own copy of every card and
-    maps chapter keys through it; a reorder reaches that copy only if the player accepts the cloud's
-    card-update notice, and on 2026-10-02 it refused 6 of 7 (FAIL even with nothing playing, and one
-    "OK" that changed nothing). A rewritten twin therefore played whatever its stale copy had at the
-    requested key. A source card is never rewritten, so its copy stays current and its keys are right.
+    PLAYS A BRAND-NEW ONE-SHOT CARD IN THE ORDER WANTED. The player keeps its own copy of every
+    card and only re-downloads one when it LOADS it, i.e. switches to it from another card; a stop
+    does not unload it, and its card-update notices are FAILed once the card has been played since
+    boot (2026-10-03: 1 OK then 5 FAIL in a row, every FAIL playing the stale copy's story). So a
+    reordered twin cannot be relied on. A card the player has never seen has no copy to be stale:
+    4 of 4 one-shot cards played the right story (create 0.1-0.3 s, no audio moves -- the tracks
+    are the same yoto:#<sha> as the source's).
 
-    So: the first title in `wanted` starts (no title: a random story with at least `sleep` seconds of
-    card after it), and the card then carries on
-    in its fixed order. Later titles in `wanted` and `rest` cannot be honoured this way; they are
-    returned as `ignored` rather than silently dropped. One MQTT session sets volume BEFORE starting
-    (a quiet request must never start loud), starts with secondsIn so it is a start and not a
-    resume, verifies the chapter actually playing, and sets the sleep timer AFTER the start. If the
-    wrong story starts it is stopped and the call exits with the reason (yoto-web shows it)."""
+    `wanted` (titles or chapter keys) play first in the order given; `rest` is "shuffle", "order"
+    or "none" for what follows them. The one-shot card carries the SOURCE's title and metadata, so
+    the stats page (which groups plays by card title) and the cover stay as they were; its id is
+    kept in yoto.env YOTO_ADHOC so yoto-web hides it, and the previous one-shot cards are deleted
+    after the sound has started. One MQTT session sets volume BEFORE starting (a quiet request must
+    never start loud), starts with secondsIn so it is a start and not a resume, verifies the chapter
+    actually playing, and sets the sleep timer AFTER the start. If the wrong story starts it is
+    stopped and the call exits with the reason (yoto-web shows it)."""
     tok = yoto.token()
     src = source_of(card_of(ident, tok))
-    chapters = chapters_of(src, tok)
+    d = req("GET", "/content/" + src, tok)
+    card = d.get("card") or d
+    chapters = (card.get("content") or {}).get("chapters") or []
     first, others, missed = pick(chapters, list(wanted))
-    if wanted and not first:
+    if rest == "shuffle":
+        random.shuffle(others)
+    elif rest == "none":
+        others = []
+    seq = renumber(first + others)
+    if not seq:
         sys.exit("nothing to play: no chapter matched %r" % (list(wanted),))
-    if first:
-        start = first[0]
-    else:                                   # a random story, but one that leaves the sleep timer's
-        def left(n):                        # worth of listening rather than one story then silence
-            return sum(c.get("duration") or 0 for c in chapters[n:])
-        room = [c for n, c in enumerate(chapters) if left(n) >= (sleep or 0)]
-        start = random.choice(room or chapters[:1])
-    i = next(n for n, c in enumerate(chapters) if c.get("key") == start.get("key"))
-    order = [c.get("title") for c in chapters[i:]]
-    out = {"source": src, "cardId": src, "order": order, "not_found": missed,
-           "ignored": [c.get("title") for c in first[1:]], "volume": volume, "sleep": sleep}
+    out = {"source": src, "order": [c.get("title") for c in seq], "not_found": missed,
+           "volume": volume, "sleep": sleep}
     if dry:
-        return dict(out, dry=True)
-    cloud = (req("GET", "/content/" + src, tok).get("card") or {}).get("updatedAt") or ""
+        return dict(out, cardId=None, dry=True)
+    meta = dict(card.get("metadata") or {})
+    meta["media"] = _media(seq)
+    made = req("POST", "/content", tok, {"title": card.get("title"), "content": {"chapters": seq},
+                                         "metadata": meta})
+    cid = (made.get("card") or made).get("cardId")
+    if not cid:
+        sys.exit("Yoto did not create the play card: %s" % json.dumps(made)[:200])
+    live = adhoc_cards()
+    old = [k for k in live if k != cid]
+    live[cid] = src
+    _save_adhoc(live)
+    want = seq[0].get("title")
     with yoto.Link(tok, yoto.env()["YOTO_DEVICE_ID"]) as link:
         if volume is not None:
             link.send("volume/set", {"volume": yoto.vol_cmd(volume)})
-        link.send("card/start", {"uri": "https://yoto.io/" + src, "chapterKey": start.get("key"),
+        link.send("card/start", {"uri": "https://yoto.io/" + cid, "chapterKey": "01",
                                  "trackKey": "01", "secondsIn": 0}, wait=6)
         now = yoto.now_playing(link)
         problem = None
-        if now.get("cardId") != src or now.get("playbackStatus") != "playing":
+        if now.get("cardId") != cid or now.get("playbackStatus") != "playing":
             problem = "the player did not start the playlist (it reports %s / %s)" % (
                 now.get("cardId"), now.get("playbackStatus"))
-        elif now.get("chapterTitle") != start.get("title"):
-            problem = "the player started %r instead of %r" % (now.get("chapterTitle"), start.get("title"))
-            if now.get("cardUpdatedAt", "")[:19] < cloud[:19]:
-                problem += " (its copy of the playlist, %s, is older than the cloud's %s)" % (
-                    now.get("cardUpdatedAt"), cloud)
+        elif now.get("chapterTitle") != want:
+            problem = "the player started %r instead of %r" % (now.get("chapterTitle"), want)
         if problem:
             link.send("card/stop")              # never leave the wrong story playing
             sys.exit(problem + "; stopped")
         if sleep is not None:
             link.send("sleep-timer/set", {"seconds": int(sleep)})
-    return dict(out, now=now)
+    for k in old:                               # after the sound: never delays a play
+        try:
+            req("DELETE", "/content/" + k, tok)
+        except SystemExit:
+            continue                            # left in YOTO_ADHOC; the next play tries again
+        live.pop(k, None)
+    _save_adhoc(live)
+    return dict(out, cardId=cid, now=now, deleted=[k for k in old if k not in live])
 
 
 def main():
