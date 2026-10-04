@@ -14,6 +14,10 @@ What counts as manual, from the recorded log (listen.jsonl, 2026-10-03/04):
            reports the card as removed (2026-10-04 02:40:27).
   - button: playbackStatus moving between playing and paused (never to "stopped": a card ending
            or the sleep timer firing stops it by itself).
+  - skip:  the chapter changing on the same card with more than 90 s of the previous one left (by
+           the last position seen <= 10 s earlier). Automatic changes come with 4-6 s left (the
+           player reports position every 5 s); 21 s and 39 s were also seen, and track lengths are
+           not exact (one ran 73 s past its trackLength), so those are treated as automatic.
 None of these count within 3 s of a command response on /response: that was a remote command
 (ours, the Yoto app's or Home Assistant's), not a hand on the player.
 
@@ -29,6 +33,7 @@ import yoto
 
 LIT, DARK, HOLD = "1", "0", 15.0
 QUIET_AFTER_REMOTE = 3.0
+SKIP_LEFT = 90
 STATE = Path(os.environ.get("YOTO_BRIGHT_STATE", str(Path.home() / ".local/share/moprox/yoto/brightguard.json")))
 
 
@@ -40,7 +45,9 @@ class Guard:
         self.inserted = None
         self.playback = None
         self.last_remote = 0.0
-        self.timer_end = None               # when the running sleep timer reaches 0, by its last report
+        self.timer_end = None
+        self.chapter = None                 # (cardId, chapterKey) last seen
+        self.left = None                    # (seconds of that chapter left, when seen)               # when the running sleep timer reaches 0, by its last report
         self.until = 0.0                    # when the screen goes dark again
         self.lit = False
         self.lock = threading.Lock()
@@ -79,6 +86,16 @@ class Guard:
                 if keys <= {"volume", "volumeMax"} and self.volume is not None and m["volume"] != self.volume and not remote:
                     why = "knob %s->%s" % (self.volume, m["volume"])
                 self.volume = m["volume"]
+            ck = (m.get("cardId"), m.get("chapterKey"))
+            if ck[1]:
+                if self.chapter and ck != self.chapter and ck[0] == self.chapter[0] and self.left \
+                        and t - self.left[1] <= 10 and self.left[0] > SKIP_LEFT and not remote:
+                    why = why or "skip %s->%s (%ds left)" % (self.chapter[1], ck[1], self.left[0])
+                if ck != self.chapter:
+                    self.left = None
+                self.chapter = ck
+                if isinstance(m.get("position"), (int, float)) and m.get("trackLength"):
+                    self.left = (m["trackLength"] - m["position"], t)
             pb = m.get("playbackStatus")
             if pb:
                 if self.playback in ("playing", "paused") and pb in ("playing", "paused") and pb != self.playback and not remote:
