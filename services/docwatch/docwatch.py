@@ -120,12 +120,30 @@ def curate(row):
         return
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents"))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
+    import run, tg
     try:
-        import run, tg
         msg = run.run_agent("bard-curate", CURATE.format(**c), timeout=1200)
-        tg.send(msg or "finished %r, but said nothing" % c["title"], agent="bard")
     except BaseException as e:
         errlog.err(f"docwatch: bard could not curate {c['title']!r} on {c['card']}: {type(e).__name__}: {e}")
+        msg = f"⚠️ could not finish {c['title']!r} ({type(e).__name__}); the playlist image may lack it."
+    # The playlist's own image is a collage of its books, so it is a book behind until rebuilt from
+    # the covers bard just saved. Deterministic, so it does not depend on bard remembering to.
+    rc = Path(__file__).resolve().parents[1] / "yoto" / "reader_cover.py"
+    try:
+        r = subprocess.run([sys.executable, str(rc), c["cardId"]], capture_output=True, text=True, timeout=300)
+        if r.returncode == 0:
+            o = json.loads(r.stdout.strip().splitlines()[-1])
+            msg += f"\nPlaylist image updated: {len(o['books'])} books" + (
+                f" (no cover yet: {', '.join(o['no_cover'])})" if o["no_cover"] else "") + "."
+        else:
+            raise RuntimeError(((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1])
+    except Exception as e:
+        errlog.err(f"docwatch: rebuilding the {c['card']} playlist image failed", e)
+        msg += f"\n⚠️ playlist image not updated: {e}"
+    try:
+        tg.send(msg, agent="bard")
+    except BaseException as e:
+        errlog.err(f"docwatch: posting bard's report failed: {type(e).__name__}: {e}")
 
 
 def to_yoto(rec, row):
