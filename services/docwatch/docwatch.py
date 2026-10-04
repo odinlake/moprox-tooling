@@ -78,6 +78,57 @@ SECRET_FOLDER = os.environ.get("DOCWATCH_SECRET_FOLDER", "Secrets")
 # a sync loop, a bad page token), not a busy day. Stop and say so rather than reorganising the drive.
 SANE_MAX = int(os.environ.get("DOCWATCH_MAX_PER_RUN", "25"))
 
+# Home recordings for the Yoto (operator, 2026-10-04). An audio file named "Pappa läser: <book>" or
+# "Daddy reads <book>" (likewise "Akiko läser/reads") is ALSO appended to that reader's playlist,
+# after it is filed as usual. Keyed on cardId, not title, so renaming a playlist in the app does not
+# break the route; both cards were made in the Yoto app (Daddy Reads 2026-09-29, Akiko Läser 09-28).
+YOTO_ROUTES = [
+    (re.compile(r"^(?:pappa|papa|daddy|dad)\s+(?:läser|laser|reads)\b", re.I), "ckpmj"),
+    (re.compile(r"^akiko\s+(?:läser|laser|reads)\b", re.I), "gKv8S"),
+]
+MYO = Path(__file__).resolve().parents[1] / "yoto" / "myo.py"     # this tree's copy, never ~/projects
+
+
+def yoto_route(name):
+    """(cardId, chapter title) for a reader's recording, else None.
+
+    The title is whatever follows the reader prefix, minus separators: "Akiko läser: Julia Äter
+    Allt.m4a" -> "Julia Äter Allt". iPhone filenames arrive NFD-decomposed ("a" + combining
+    diaeresis), so the name is NFC-normalised first or "läser" never matches."""
+    import unicodedata
+    stem = unicodedata.normalize("NFC", os.path.splitext(name)[0]).strip()
+    for rx, card in YOTO_ROUTES:
+        m = rx.match(stem)
+        if m:
+            return card, (stem[m.end():].strip(" :-–—_") or stem)
+    return None
+
+
+def to_yoto(rec, row):
+    """Append a filed recording to its reader's Yoto playlist; note the outcome on the digest row.
+    A failure is loud but does not undo the filing: `yoto append <card> <file>` redoes it by hand,
+    and is idempotent on the audio."""
+    hit = yoto_route(rec["name"])
+    if not hit or rec["bucket"] != "audio":
+        return
+    card, title = hit
+    path = pipeline.dl_path(rec["key"], rec["name"])
+    try:
+        r = subprocess.run([sys.executable, str(MYO), "append", card, path, "--title", title],
+                           capture_output=True, text=True, timeout=900)
+        out = json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 and r.stdout.strip() else None
+    except Exception as e:
+        out, r = None, None
+        errlog.err(f"docwatch: yoto append of {rec['name']!r} raised", e)
+    if out:
+        verb = "added to" if out["status"] == "added" else "already on"
+        row["yoto"] = f"🎧 {verb} Yoto **{out['card']}** as chapter {out['chapter']}: {out['title']}"
+    else:
+        tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["no output"])[-1] if r else "see journal"
+        why = tail[:200]
+        errlog.err(f"docwatch: yoto append of {rec['name']!r} to {card} failed: {why}")
+        row["yoto"] = f"⚠️ not added to Yoto ({why}). Retry: `yoto append {card} {path}`"
+
 _svc = None
 
 
@@ -234,7 +285,8 @@ def notify(filed, skipped, given_up=()):
         lines.append(
             f"\n**{r['proposed']}**{flag}\n{r['folder']}\n{r['summary']}"
             f"\n[filed copy](https://drive.google.com/file/d/{r['copy_id']}/view)"
-            f" · [original: {r['old_name']}](https://drive.google.com/file/d/{r['drive_id']}/view)")
+            f" · [original: {r['old_name']}](https://drive.google.com/file/d/{r['drive_id']}/view)"
+            + (f"\n{r['yoto']}" if r.get("yoto") else ""))
     for r in skipped:
         # A permanent refusal is a different message from a transient one. It is not "this failed,
         # I will try again", it is "nothing will ever file this, here it is, deal with it or leave
@@ -445,6 +497,7 @@ def main():
         row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "drive_id": fid, "copy_id": cp["id"],
                "old_name": name, "proposed": d["proposed"], "folder": dest,
                "summary": d.get("summary", ""), "confidence": d.get("confidence", "medium")}
+        to_yoto(rec, row)
         with open(LOG, "a") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         filed.append(row)

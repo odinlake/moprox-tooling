@@ -7,6 +7,7 @@
     myo.py shuffle <card> [title ...]                   named first, rest shuffled
     myo.py copy <card> <new title>                      a second card over the same audio (~1 s)
     myo.py cover <card> <image.jpg|png>                 cover art on the card and its (shuffle) twin
+    myo.py append <card> <audio file> [--title T]       add ONE recording as the last chapter
     myo.py queue <card> [title ...] [--volume N] [--sleep S] [--rest shuffle|order|none]
                                                         bard's play routine, on the card's twin
 
@@ -386,7 +387,70 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
     return dict(out, cardId=cid, now=now, deleted=[k for k in old if k not in live])
 
 
+# Card ceilings from yoto.dev: 100 chapters, 5 h per card.
+MAX_CHAPTERS, MAX_SECONDS = 100, 5 * 3600
+
+
+def append(ident, path, title, tok):
+    """Add one recording to the end of an existing playlist, leaving every other chapter alone.
+
+    For the family's home recordings ("Pappa läser ...", "Akiko läser ..."), which docwatch routes here
+    from Drive as they arrive. The card was made in the Yoto app and the earlier chapters' audio is
+    not on disk, so a rebuild is not an option: this uploads the new file and POSTs the existing
+    chapters plus one, through set_order so the cover and other metadata survive. Idempotent on the
+    audio: a file whose transcode is already on the card is reported, not added twice.
+    Phone recordings arrive as .m4a; they go up as MP3 like every other file this tool has sent."""
+    import subprocess, tempfile
+    cid = card_of(ident, tok)
+    if not os.path.isfile(path):
+        sys.exit("no such file: " + path)
+    tmp = None
+    try:
+        if not path.lower().endswith(".mp3"):
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", path, "-vn",
+                            "-b:a", "128k", tmp], check=True)
+        tr = upload(tmp or path, tok)
+    finally:
+        if tmp:
+            os.unlink(tmp)
+    info, url = tr.get("transcodedInfo") or {}, "yoto:#" + tr["transcodedSha256"]
+    d = req("GET", "/content/" + cid, tok)
+    card = d.get("card") or d
+    chapters = ((card.get("content") or {}).get("chapters")) or []
+    for i, ch in enumerate(chapters, 1):
+        if any(t.get("trackUrl") == url for t in ch.get("tracks") or []):
+            return {"cardId": cid, "card": card.get("title"), "status": "already",
+                    "chapter": i, "title": ch.get("title"), "chapters": len(chapters)}
+    secs = sum(c.get("duration") or sum(t.get("duration") or 0 for t in c.get("tracks") or [])
+               for c in chapters) + (info.get("duration") or 0)
+    if len(chapters) + 1 > MAX_CHAPTERS or secs > MAX_SECONDS:
+        sys.exit("%s is full: %d chapters, %.1f h with this one (limits %d, %d h)"
+                 % (card.get("title"), len(chapters) + 1, secs / 3600, MAX_CHAPTERS, MAX_SECONDS // 3600))
+    t = title or title_of(path)
+    # The chapter icon on the player's screen: the same as the chapter before it, since a card of
+    # one reader's recordings wears one icon throughout. None on an empty card (Yoto's default).
+    disp = (chapters[-1].get("display") if chapters else None) or None
+    chapters.append({"key": "", "title": t, "overlayLabel": "", "duration": info.get("duration"),
+                     "fileSize": info.get("fileSize"),
+                     **({"display": disp} if disp else {}),
+                     "tracks": [{"key": "01", "title": t, "trackUrl": url, "duration": info.get("duration"),
+                                 **({"display": disp} if disp else {}),
+                                 "fileSize": info.get("fileSize"), "channels": info.get("channels"),
+                                 "format": info.get("format"), "type": "audio", "overlayLabel": ""}]})
+    set_order(cid, chapters, tok)
+    return {"cardId": cid, "card": card.get("title"), "status": "added", "chapter": len(chapters),
+            "title": t, "chapters": len(chapters), "duration": info.get("duration")}
+
+
 def main():
+    if len(sys.argv) >= 4 and sys.argv[1] == "append":
+        import argparse
+        ap = argparse.ArgumentParser(prog="yoto append")
+        ap.add_argument("card"); ap.add_argument("file"); ap.add_argument("--title")
+        a = ap.parse_args(sys.argv[2:])
+        print(json.dumps(append(a.card, a.file, a.title, yoto.token()), ensure_ascii=False))
+        return
     if len(sys.argv) == 4 and sys.argv[1] == "cover":
         print(json.dumps(set_cover(sys.argv[2], sys.argv[3], yoto.token()), ensure_ascii=False))
         return
