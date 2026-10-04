@@ -11,11 +11,9 @@ book behind. This reads the card's chapters and uses whatever cover the picker h
 run after every new recording. Chapters without a cover are left out rather than drawn blank. More
 than MAX books: the newest MAX, since the newest is the one the family will be looking for.
 
-Each BOOK's own cover also gets a small reader badge in its bottom-right corner (operator,
-2026-10-04), so the picker shows who reads it. The mosaic must use the PLAIN covers, so the first
-time a plain cover is seen it is kept in covers/.src/<title>.jpg and the badged one written over
-covers/<title>.jpg. A badged file carries a JPEG comment (BADGED); a file without it is plain,
-which is how a cover bard has just (re)saved is recognised and re-badged.
+Each book's reader badge is NOT baked into its cover: the picker crops covers to 5:6 tiles, so a
+baked-in corner landed somewhere different on every book (tried 2026-10-04, reverted the same day).
+The picker draws it from READER_OF instead, pinned to the tile's corner.
 """
 import math, os, sys
 from pathlib import Path
@@ -25,8 +23,6 @@ import covers, myo, yoto
 
 SHARE = Path.home() / ".local/share/moprox/yoto"
 COVERS, ART = SHARE / "covers", SHARE / "card-covers"
-SRC = COVERS / ".src"                                  # plain covers, for the mosaic
-BADGED = b"moprox-reader-badge"
 W, H = covers.W, covers.H
 ORANGE, NAVY = (255, 139, 2), (31, 42, 68)          # Pappa läser's frame, sampled 2026-09-28
 G, MAX = 12, 6
@@ -37,7 +33,8 @@ AKIKO = ("akiko-white-1024.png", (213, 119, 828, 939), 0.52, 0.17)
 READERS = {"ckpmj": MIKAEL,     # Daddy Reads
            "gKv8S": AKIKO,      # Akiko Läser
            "6jwsz": MIKAEL}     # Pappa läser little tiger books: its card image is hand-made, so
-CARD_IMAGE = {"ckpmj", "gKv8S"}  # only chapter badges there, never a rebuilt card image
+CARD_IMAGE = {"ckpmj", "gKv8S"}  # it is never rebuilt here; listed for the picker's badge only
+READER_OF = {cid: r[0].split("-")[0] for cid, r in READERS.items()}   # cardId -> "mikael" | "akiko"
 
 
 def badge(D, reader, sc=2):
@@ -76,31 +73,6 @@ def badge(D, reader, sc=2):
     return lay.resize((D, D), Image.LANCZOS)
 
 
-def plain(title):
-    """The plain cover for a chapter, moving a freshly saved one into .src first. None if none."""
-    cur, src = COVERS / ("%s.jpg" % title), SRC / ("%s.jpg" % title)
-    if cur.exists() and Image.open(cur).info.get("comment") != BADGED:
-        SRC.mkdir(exist_ok=True)
-        os.replace(cur, src)                       # a new or replaced plain cover wins
-    return src if src.exists() else None
-
-
-def badge_cover(title, reader):
-    """covers/<title>.jpg = the plain cover with the reader's badge in the bottom-right corner."""
-    src = plain(title)
-    if not src:
-        return False
-    im = Image.open(src).convert("RGBA")
-    D = round(min(im.size) * 0.27); m = round(min(im.size) * 0.035)
-    x, y = im.width - D - m, im.height - D - m
-    sh = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    ImageDraw.Draw(sh).ellipse((x, y + D // 30, x + D, y + D + D // 30), fill=(0, 0, 0, 120))
-    im = Image.alpha_composite(im, sh.filter(ImageFilter.GaussianBlur(max(2, D // 25))))
-    im.alpha_composite(badge(D, reader), (x, y))
-    im.convert("RGB").save(COVERS / ("%s.jpg" % title), quality=90, comment=BADGED)
-    return True
-
-
 def collage(paths):
     """1 book: full width. 2: stacked. 3+: two columns. Each cell cover-cropped from the TOP, where
     the titles are."""
@@ -129,10 +101,8 @@ def build(card, tok):
     if cid not in READERS:
         sys.exit("%s is not a reader playlist (%s)" % (cid, ", ".join(READERS)))
     titles = [c.get("title") for c in myo.chapters_of(cid, tok)]
-    for t in titles:
-        badge_cover(t, READERS[cid])
-    have = [SRC / ("%s.jpg" % t) for t in titles if (SRC / ("%s.jpg" % t)).exists()]
-    missing = [t for t in titles if not (SRC / ("%s.jpg" % t)).exists()]
+    have = [COVERS / ("%s.jpg" % t) for t in titles if (COVERS / ("%s.jpg" % t)).exists()]
+    missing = [t for t in titles if not (COVERS / ("%s.jpg" % t)).exists()]
     if cid not in CARD_IMAGE:
         return cid, None, [p.stem for p in have], missing
     if not have:
@@ -149,13 +119,22 @@ def build(card, tok):
     return cid, im.convert("RGB"), [p.stem for p in have], missing
 
 
+def badge_png(reader, out, D=192):
+    """The picker's corner badge as a transparent PNG (web/reader-<name>.png)."""
+    badge(D, reader).save(out)
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--badges":
+        for r in (MIKAEL, AKIKO):
+            badge_png(r, os.path.join(sys.argv[2], "reader-%s.png" % r[0].split("-")[0]))
+        return
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     tok = yoto.token()
     cid, im, used, missing = build(sys.argv[1], tok)
     import json
-    if im is None:                                  # chapter badges only (see CARD_IMAGE)
+    if im is None:                                  # hand-made card image (see CARD_IMAGE)
         print(json.dumps({"card": cid, "books": used, "no_cover": missing, "card_image": False},
                          ensure_ascii=False))
         return

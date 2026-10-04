@@ -25,12 +25,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parents[1] / "lib"))
 import yoto, myo, errlog, playlog
+from reader_cover import READER_OF          # which family member reads each home-recording playlist
 
 PORT = int(os.environ.get("YOTO_WEB_PORT", "8030"))
 COVERS = Path(os.environ.get("YOTO_COVERS", str(Path.home() / ".local/share/moprox/yoto/covers")))
 THUMBS = COVERS / ".thumbs"
 # The icon set (same mo "M" + corner glyph as mo/search and mo/mail, here a Y) and the PWA manifest.
-STATIC = {"/icon.svg": "image/svg+xml", "/icon-yoto-180.png": "image/png", "/icon-yoto-512.png": "image/png",
+STATIC = {"/reader-mikael.png": "image/png", "/reader-akiko.png": "image/png",
+          "/icon.svg": "image/svg+xml", "/icon-yoto-180.png": "image/png", "/icon-yoto-512.png": "image/png",
           "/apple-touch-icon.png": "image/png", "/mo-yoto.webmanifest": "application/manifest+json"}
 HA_ADDRS = {"10.10.10.7", "127.0.0.1"}   # Home Assistant's agent-subnet leg; loopback for tests
 ORIGINS = {"https://mo.lan", "http://127.0.0.1:%d" % PORT, "http://localhost:%d" % PORT}
@@ -88,14 +90,17 @@ def playlist(cid):
         icon = (ch.get("display") or {}).get("icon16x16")
         img, kind = None, None
         if local_cover(t):
-            img, kind = "api/img/" + urllib.parse.quote(t + ".jpg"), "cover"
+            # ?v=mtime: /api/img is cached for a week, so a replaced cover needs a new URL to show
+            img = "api/img/%s?v=%d" % (urllib.parse.quote(t + ".jpg"), local_cover(t).stat().st_mtime)
+            kind = "cover"
         elif icon and icon.startswith("https://"):
             img, kind = icon, "icon"          # 16x16 pixel art; the page scales it up pixelated
         elif cover and cover.startswith("https://"):
             img, kind = cover, "cardcover"
         chs.append({"key": ch.get("key"), "title": t, "img": img, "kind": kind,
                     "duration": ch.get("duration") or sum((tr.get("duration") or 0) for tr in ch.get("tracks") or [])})
-    return {"cardId": cid, "title": (card.get("title") or "").strip(), "chapters": chs}
+    return {"cardId": cid, "title": (card.get("title") or "").strip(), "chapters": chs,
+            "reader": READER_OF.get(cid)}
 
 
 def sync_playlog():
