@@ -20,7 +20,7 @@ HOW COURTESY CLASSES ACTUALLY WORK, from the portal's own notice:
 THE RULES (operator, 2026-09-19). Say nothing unless every one of these holds:
   1. the slot is on a date he is still down to attend. A courtesy class on a lesson he cancelled is
      useless, because being unable to attend that day is why he cancelled it. The overview's
-     Scheduled Lessons is the register: a date missing from it is a date he cancelled.
+     Scheduled Lessons is the register: a cancelled lesson stays listed, marked "Not attending".
   2. he has a courtesy class to spend. The page's empty state covers both "no spaces" and "no valid
      Courtesy Class" in one sentence, and that ambiguity costs nothing, because both mean silence.
   3. he has not already booked one.
@@ -136,6 +136,9 @@ OVERVIEW_JS = r"""
     if (!f.date || !f.time) return;               // not a lesson row
     rows.push({
       courtesy: !!dl.querySelector('.carousel-table__field-value--courtesy, [aria-label="Courtesy class"]'),
+      // A cancelled lesson STAYS in the list, with a "Not attending" pill in its Action cell.
+      off: /not attending/i.test(f.action || ''),
+      action: f.action || '',
       date: f.date, pool: f.pool || '', time: f.time, cls: f['class'] || ''
     });
   });
@@ -145,9 +148,12 @@ OVERVIEW_JS = r"""
     lessons: rows.length,
     booked: booked.length > 0,
     rows: booked,
-    // Every date the child is still down to attend. A date MISSING from here is one he has told
-    // them he cannot make, which is exactly the date a courtesy class on it would be useless.
-    attending: rows.filter(r => !r.courtesy).map(r => r.date),
+    // Every date the child is still down to attend. A cancelled lesson does NOT drop out of the
+    // list (the 2026-09-19 assumption, wrong): it stays, marked "Not attending", and a courtesy
+    // class on that date is the one thing that can never be useful.
+    attending: rows.filter(r => !r.courtesy && !r.off).map(r => r.date),
+    notAttending: rows.filter(r => r.off).map(r => r.date),
+    actions: rows.map(r => r.action),
     block: booked.map(r => [r.date, r.pool, r.time, r.cls].filter(Boolean).join(' ')).join(' | ').slice(0, 400),
     links: Array.from(document.querySelectorAll('a[href*="catchup" i]'))
              .map(a => ((a.innerText||'').trim()) + ' => ' + a.getAttribute('href'))
@@ -396,6 +402,18 @@ def main():
             errlog.err("puddleducks_watch: the courtesy page for child %s showed neither an offer "
                        "list nor the no-spaces notice. Not reading that as 'nothing free'." % pk[:8])
             return 1
+
+    # The "Not attending" pill is the only sign of a cancelled lesson, and the one thing between the
+    # operator and an alert for a class the child cannot go to (it fired on 2026-10-04 for exactly that,
+    # because the code assumed cancelled dates drop off the list). An Action cell this does not
+    # recognise may be that pill reworded, so it fails the run rather than reading as "attending".
+    known = re.compile(r"^(|unable to attend\??|not attending)$", re.I)
+    odd = sorted({a for a in courtesy.get("actions") or [] if not known.match(a.strip())})
+    if odd:
+        errlog.err("puddleducks_watch: unrecognised Scheduled Lessons action(s) %r. A cancelled "
+                   "lesson may be marked differently now; not guessing which dates are attended."
+                   % odd)
+        return 1
 
     now = datetime.datetime.now()
     booked = bool(courtesy.get("booked"))
