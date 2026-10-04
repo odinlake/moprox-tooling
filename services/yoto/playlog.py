@@ -224,19 +224,19 @@ def _config_at(cfgs, t):
 
 
 SLOT = 600                                   # the night map's resolution: 10 minutes
-SLOTS = 86400 // SLOT                        # 144 per noon-to-noon night
+SLOTS = 86400 // SLOT                        # 144 per day, midnight to midnight
 
 
 def _nights(c, segs, t0, t1, first):
-    """One column per NIGHT, noon to noon local, so a night is never cut at midnight (operator,
-    2026-10-02: "I'm most concerned with nighttime use"). Each: date (the evening), 144 ten-minute
-    slots of seconds listened, and the Yoto's day/night times that night."""
+    """One column per DAY, midnight to midnight local. Each: date, 144 ten-minute slots of seconds
+    listened, and the Yoto's day/night times that day. (2026-10-02 to 10-04 this was noon to noon,
+    keeping a night in one column; the operator asked for midnight back at the edges on 10-04.)"""
     # Every night in the window, ending with TODAY's (the rightmost column is today's weekday,
     # operator 2026-10-02), including nights before recording began: those are shown empty, flagged
     # `recorded: false`, and left out of weekday averages rather than counted as silent.
     end = datetime.datetime.fromtimestamp(t1, TZ).date()
     begin = datetime.datetime.fromtimestamp(t0, TZ).date() + datetime.timedelta(days=1)
-    rec_from = (datetime.datetime.fromtimestamp(first, TZ) - datetime.timedelta(hours=12)).date() if first else end
+    rec_from = datetime.datetime.fromtimestamp(first, TZ).date() if first else end
     dates, d = [], min(begin, end - datetime.timedelta(days=6))
     while d <= end:
         dates.append(d)
@@ -250,10 +250,10 @@ def _nights(c, segs, t0, t1, first):
             dt = datetime.datetime.fromtimestamp(s, TZ)
             base = dt.replace(second=0, microsecond=0, minute=dt.minute - dt.minute % 10)
             cut = min(e, (base + datetime.timedelta(minutes=10)).timestamp())
-            night = (dt - datetime.timedelta(hours=12)).date()
-            k = ((dt.hour - 12) % 24 * 60 + dt.minute) // 10
-            if night in idx:
-                slots[idx[night]][k] += cut - s
+            day = dt.date()
+            k = (dt.hour * 60 + dt.minute) // 10
+            if day in idx:
+                slots[idx[day]][k] += cut - s
             s = cut
     cfgs = _configs(c)
     guards = c.execute("select ts, start, end from guard_config order by ts").fetchall()
