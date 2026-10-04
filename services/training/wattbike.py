@@ -76,6 +76,27 @@ def _user_id():
     return None
 
 
+def _files_of(s):
+    """Yield (ext, local_name, entry) for every file a RideSession names.
+
+    sessionData is NOT uniform: the whole-ride classes (wbs, wbsr, tcx, fit) map the extension to
+    one {name} dict, but `wbss` maps it to a LIST of per-segment dicts, one per contiguous stretch
+    of the ride. An isinstance(ent, dict) guard silently drops the list form, which is how the
+    estate ended up holding 0 .wbss files while the index named one for 3 of its 4 sessions
+    (analyst, 2026-10-04). Segment files keep the span out of their remote name -- there can be
+    more than one per session -- so the local name is the remote one minus the user-id prefix.
+    """
+    for ext, ent in (s.get("sessionData") or {}).items():
+        for e in (ent if isinstance(ent, list) else [ent]):
+            if not isinstance(e, dict) or not e.get("name"):
+                continue
+            if isinstance(ent, list):
+                local = e["name"].split("_", 1)[-1]
+            else:
+                local = "%s.%s" % (s["objectId"], ext)
+            yield ext, local, e
+
+
 def pull(dest=None):
     """Fetch every session for the stored user and every sessionData file we do not hold.
 
@@ -109,10 +130,8 @@ def pull(dest=None):
     (dest / "raw").mkdir(parents=True, exist_ok=True)
     new, missed = [], []
     for s in rows:
-        for ext, ent in (s.get("sessionData") or {}).items():
-            if not isinstance(ent, dict) or not ent.get("name"):
-                continue
-            p = dest / "raw" / ("%s.%s" % (s["objectId"], ext))
+        for ext, local, ent in _files_of(s):
+            p = dest / "raw" / local
             if p.exists():
                 continue
             code, data = _get(api + "/files/" + ent["name"])
@@ -197,9 +216,15 @@ def join_line(handle, timeout=None):
         if ln.startswith("WATTBIKE:"):
             summary = ln.split("WATTBIKE:", 1)[1].strip()
     return ("\n\nWATTBIKE: full-fidelity ride data pulled in %ss (%s). Per-revolution power, "
-            "cadence, balance, per-leg pedal effectiveness and a 75-point force curve per stroke "
+            "cadence, balance, per-leg pedal effectiveness and a force curve per stroke "
             "are under private-data/wattbike/raw/<sessionId>.wbs, with the session index in "
-            "private-data/wattbike/sessions.json. Use it if this session is the matching ride.\n"
+            "private-data/wattbike/sessions.json. The curve is laps[0].data[i].polar.force, a "
+            "comma-separated string of polar.cnt samples at a FIXED 100 Hz, so its length is "
+            "6000/cadence (58..190 points, median 69 over the 16298 strokes held on "
+            "2026-10-04) -- index k is crank angle 360*k/cnt, and curves at different cadences "
+            "must be resampled to a common length before they are compared. polar.lcnt is how "
+            "many of those samples are the left leg. Use it if this session is the matching "
+            "ride.\n"
             % (state["secs"], summary or "no summary line"))
 
 
