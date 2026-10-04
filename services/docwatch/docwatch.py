@@ -104,6 +104,30 @@ def yoto_route(name):
     return None
 
 
+CURATE = """NEW RECORDING (curate mode, full permissions; see 'New home recordings' in your CLAUDE.md).
+docwatch has just appended a home recording to a Yoto playlist. Finish it.
+  card: {card} ({cardId}), chapter {chapter} of {chapters}, current chapter title: {title!r}
+  original filename: {name!r}
+  local audio file: {file}
+  transcript excerpt (machine, may be garbled): {transcript}"""
+
+
+def curate(row):
+    """Hand a freshly added recording to bard in curate mode, and post bard's one-line report.
+    Best effort: the recording is already on the card, so a failure here costs only the cover."""
+    c = row.pop("_curate", None)
+    if not c:
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
+    try:
+        import run, tg
+        msg = run.run_agent("bard-curate", CURATE.format(**c), timeout=1200)
+        tg.send(msg or "finished %r, but said nothing" % c["title"], agent="bard")
+    except BaseException as e:
+        errlog.err(f"docwatch: bard could not curate {c['title']!r} on {c['card']}: {type(e).__name__}: {e}")
+
+
 def to_yoto(rec, row):
     """Append a filed recording to its reader's Yoto playlist; note the outcome on the digest row.
     A failure is loud but does not undo the filing: `yoto append <card> <file>` redoes it by hand,
@@ -121,6 +145,9 @@ def to_yoto(rec, row):
         out, r = None, None
         errlog.err(f"docwatch: yoto append of {rec['name']!r} raised", e)
     if out:
+        if out["status"] == "added":
+            row["_curate"] = {**out, "file": path, "name": rec["name"],
+                              "transcript": (rec.get("text") or "")[:1500]}
         verb = "added to" if out["status"] == "added" else "already on"
         row["yoto"] = f"🎧 {verb} Yoto **{out['card']}** as chapter {out['chapter']}: {out['title']}"
     else:
@@ -498,8 +525,9 @@ def main():
                "old_name": name, "proposed": d["proposed"], "folder": dest,
                "summary": d.get("summary", ""), "confidence": d.get("confidence", "medium")}
         to_yoto(rec, row)
-        with open(LOG, "a") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with open(LOG, "a") as fh:                  # "_" keys are in-run hand-offs, not the record
+            fh.write(json.dumps({k: v for k, v in row.items() if not k.startswith("_")},
+                                ensure_ascii=False) + "\n")
         filed.append(row)
 
     for r in filed:                                 # filed at last — stop offering it
@@ -523,7 +551,12 @@ def main():
     pending_save(pend)
 
     state_save(st)
+    curating = [r for r in filed if r.get("_curate")]
+    for r in curating:
+        r["yoto"] += " (bard is fetching its cover)"
     notify(filed, skipped, given_up)
+    for r in curating:
+        curate(r)
     for s in skipped:                               # the digest is not a log; the journal is
         errlog.warn(f"docwatch: skipped {s['old_name']!r} — {s['why']}")
     for g in given_up:

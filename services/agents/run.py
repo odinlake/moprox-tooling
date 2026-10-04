@@ -18,6 +18,11 @@ AGENTS = {
     "theming": HOME / "projects/private-data/agents/theming",
     "analyst": HOME / "projects/private-data/agents/analyst",   # loop agent (read-mostly)
     "bard":    HOME / "projects/private-data/agents/bard",      # kids' Yoto entertainer
+    # bard again, same persona dir, but with FULL permissions for one job: finishing a home recording
+    # docwatch has just put on a Yoto playlist (identify the book, fix the title, fetch the cover).
+    # The operator asked for this explicitly (2026-10-04): what is needed varies per book, so a
+    # fixed script cannot do it. Never reached from Telegram; only docwatch calls it.
+    "bard-curate": HOME / "projects/private-data/agents/bard",
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -61,6 +66,13 @@ THEMING_DENY = ",".join("Bash(%s)" % p for p in (
     "git push origin master:*",
     "git reset --hard:*", "git clean:*", "sudo:*", "rm:*", "reboot:*", "shutdown:*",
     "dd:*", "mkfs:*", "gh pr merge:*", "gh repo delete:*", "gh repo archive:*"))
+YOTO_SHARE = HOME / ".local/share/moprox/yoto"          # covers/<chapter title>.jpg live here
+DOCINDEX_DL = HOME / "docindex/dl"                       # where docwatch downloaded the recording
+# Full permissions minus the catastrophic and the outward: it fetches from the web and writes
+# covers, it never needs root, deletion, a push, or the host's power button.
+CURATE_DENY = ",".join("Bash(%s)" % p for p in (
+    "sudo:*", "rm -rf:*", "git push:*", "git reset --hard:*", "reboot:*", "shutdown:*",
+    "dd:*", "mkfs:*", "gh:*"))
 AGENT_FLAGS = {
     # dev already has broad Bash (can run convo directly); the rest get the convo helper as their one
     # way to read/search the shared conversation on demand.
@@ -103,6 +115,10 @@ AGENT_FLAGS = {
              "--permission-mode", "acceptEdits",
              "--allowedTools", "Read,Grep,Glob,Edit,Write,%s,%s" % (YOTO_TOOL, CONVO_TOOL),
              "--add-dir", str(SHARED_MEM)],   # bard-memory.md lives in the memory store; variadic: keep last
+    "bard-curate": ["--model", "sonnet",
+                    "--dangerously-skip-permissions",
+                    "--disallowedTools", CURATE_DENY,
+                    "--add-dir", str(YOTO_SHARE), str(DOCINDEX_DL), str(REPOS[1]), str(SHARED_MEM)],  # variadic: keep last
 }
 
 def _log_usage(agent, j):

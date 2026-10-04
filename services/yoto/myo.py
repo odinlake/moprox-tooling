@@ -8,6 +8,7 @@
     myo.py copy <card> <new title>                      a second card over the same audio (~1 s)
     myo.py cover <card> <image.jpg|png>                 cover art on the card and its (shuffle) twin
     myo.py append <card> <audio file> [--title T]       add ONE recording as the last chapter
+    myo.py retitle <card> <chapter no.> <new title>     rename one chapter (and its track)
     myo.py queue <card> [title ...] [--volume N] [--sleep S] [--rest shuffle|order|none]
                                                         bard's play routine, on the card's twin
 
@@ -443,7 +444,26 @@ def append(ident, path, title, tok):
             "title": t, "chapters": len(chapters), "duration": info.get("duration")}
 
 
+def retitle(ident, number, new, tok):
+    """Rename chapter <number> (1-based position) and its tracks; nothing else moves. The picker's
+    cover is looked up by chapter title, so rename the cover file to match."""
+    cid = card_of(ident, tok)
+    chapters = chapters_of(cid, tok)
+    if not 1 <= number <= len(chapters):
+        sys.exit("%s has %d chapters; no chapter %d" % (cid, len(chapters), number))
+    ch = chapters[number - 1]
+    old = ch.get("title")
+    ch["title"] = new
+    for t in ch.get("tracks") or []:
+        t["title"] = new
+    set_order(cid, chapters, tok)
+    return {"cardId": cid, "chapter": number, "old": old, "title": new}
+
+
 def main():
+    if len(sys.argv) == 5 and sys.argv[1] == "retitle":
+        print(json.dumps(retitle(sys.argv[2], int(sys.argv[3]), sys.argv[4], yoto.token()), ensure_ascii=False))
+        return
     if len(sys.argv) >= 4 and sys.argv[1] == "append":
         import argparse
         ap = argparse.ArgumentParser(prog="yoto append")
