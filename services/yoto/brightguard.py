@@ -14,10 +14,14 @@ What counts as manual, from the recorded log (listen.jsonl, 2026-10-03/04):
            reports the card as removed (2026-10-04 02:40:27).
   - button: playbackStatus moving between playing and paused (never to "stopped": a card ending
            or the sleep timer firing stops it by itself).
-  - skip:  the chapter changing on the same card with more than 90 s of the previous one left (by
-           the last position seen <= 10 s earlier). Automatic changes come with 4-6 s left (the
-           player reports position every 5 s); 21 s and 39 s were also seen, and track lengths are
-           not exact (one ran 73 s past its trackLength), so those are treated as automatic.
+  - chapter knob: turning it searches back or forward through the chapters, one change per step.
+           On the same card, a change counts as manual when it goes BACKWARDS (the player never
+           moves to an earlier chapter by itself), when it comes within 10 s of a change already
+           judged manual (the same search continuing), or when it goes forward with more than 90 s
+           of the previous chapter left (by a position seen <= 10 s earlier). Automatic changes come
+           with 4-6 s left (the player reports position every 5 s); 21 s and 39 s were also seen,
+           and track lengths are not exact (one ran 73 s past its trackLength), so a forward step
+           near the end of a chapter on its own is treated as automatic.
 None of these count within 3 s of a command response on /response: that was a remote command
 (ours, the Yoto app's or Home Assistant's), not a hand on the player.
 
@@ -34,6 +38,12 @@ import yoto
 LIT, DARK, HOLD = "1", "0", 15.0
 QUIET_AFTER_REMOTE = 3.0
 SKIP_LEFT = 90
+SEARCH_GAP = 10.0
+
+
+def _order(key):
+    """Chapter keys sort numerically when they are numbers ("01" < "10"), else as text."""
+    return (0, int(key), "") if str(key).isdigit() else (1, 0, str(key))
 STATE = Path(os.environ.get("YOTO_BRIGHT_STATE", str(Path.home() / ".local/share/moprox/yoto/brightguard.json")))
 
 
@@ -47,7 +57,8 @@ class Guard:
         self.last_remote = 0.0
         self.timer_end = None
         self.chapter = None                 # (cardId, chapterKey) last seen
-        self.left = None                    # (seconds of that chapter left, when seen)               # when the running sleep timer reaches 0, by its last report
+        self.left = None                    # (seconds of that chapter left, when seen)
+        self.searching = 0.0                # when a chapter change was last judged manual               # when the running sleep timer reaches 0, by its last report
         self.until = 0.0                    # when the screen goes dark again
         self.lit = False
         self.lock = threading.Lock()
@@ -88,9 +99,17 @@ class Guard:
                 self.volume = m["volume"]
             ck = (m.get("cardId"), m.get("chapterKey"))
             if ck[1]:
-                if self.chapter and ck != self.chapter and ck[0] == self.chapter[0] and self.left \
-                        and t - self.left[1] <= 10 and self.left[0] > SKIP_LEFT and not remote:
-                    why = why or "skip %s->%s (%ds left)" % (self.chapter[1], ck[1], self.left[0])
+                if self.chapter and ck != self.chapter and ck[0] == self.chapter[0] and not remote:
+                    a, b = _order(self.chapter[1]), _order(ck[1])
+                    step = "chapter %s->%s" % (self.chapter[1], ck[1])
+                    if b < a:
+                        why = why or step + " (backwards)"
+                    elif t - self.searching <= SEARCH_GAP:
+                        why = why or step + " (search continues)"
+                    elif self.left and t - self.left[1] <= 10 and self.left[0] > SKIP_LEFT:
+                        why = why or step + " (%ds left)" % self.left[0]
+                    if why and why.startswith("chapter"):
+                        self.searching = t
                 if ck != self.chapter:
                     self.left = None
                 self.chapter = ck
