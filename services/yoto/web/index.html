@@ -81,7 +81,7 @@ main { padding: 2px 10px calc(env(safe-area-inset-bottom) + 140px); }
 /* Who reads it, on home-recording playlists. Drawn here rather than baked into the cover, because
    covers are cropped to this 5:6 tile and a baked-in corner ended up somewhere different on each. */
 .tile .reader { position: absolute; right: 8px; bottom: 8px; width: 28%; aspect-ratio: 1;
-  filter: drop-shadow(0 2px 4px rgba(0,0,0,.45)); pointer-events: none; }
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,.45)); pointer-events: none; z-index: 1; }
 .tile.read .cap { padding-right: calc(28% + 12px); }
 .tile.sel .badge { background: var(--accent); color: var(--accent-ink); transform: scale(1.08); }
 
