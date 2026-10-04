@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Passive Yoto listener: record every message the player publishes, with our arrival time.
+"""Yoto listener: record every message the player publishes, with our arrival time, and feed each
+one to brightguard (light the screen for 15 s at night when someone actually touches the player).
 
 Stage 1 of the night-brightness listener (flash the screen to 1 for 15 s on a manual interaction,
 else 0). Before anything acts on these messages we need to know, from real use, which ones a hand
@@ -20,6 +21,7 @@ import json, os, ssl, sys, threading, time
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yoto
+import brightguard
 
 LOG = Path(os.environ.get("YOTO_LISTEN_LOG", str(Path.home() / ".local/share/moprox/yoto/listen.jsonl")))
 SESSION = 45 * 60          # reconnect with a fresh access token well inside its lifetime
@@ -29,6 +31,9 @@ def write(topic, m):
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a") as f:
         f.write(json.dumps({"t": round(time.time(), 3), "topic": topic, "m": m}, ensure_ascii=False) + "\n")
+
+
+GUARD = brightguard.Guard()
 
 
 def session(tok, dev):
@@ -51,7 +56,12 @@ def session(tok, dev):
             m = json.loads(msg.payload.decode())
         except Exception:
             m = msg.payload.decode(errors="replace")
-        write(msg.topic.split("/")[-1], m)
+        topic = msg.topic.split("/")[-1]
+        write(topic, m)
+        try:                                 # the guard must never cost the log
+            GUARD.feed(topic, m, time.time())
+        except Exception as e:
+            print("brightguard: %s: %s" % (type(e).__name__, e), flush=True)
 
     c.on_connect = on_connect
     c.on_message = on_message
@@ -75,6 +85,7 @@ def session(tok, dev):
 def main():
     dev = yoto.env()["YOTO_DEVICE_ID"]
     print("yoto-listen: logging to %s" % LOG, flush=True)
+    GUARD.restore()
     while True:
         try:
             session(yoto.token(), dev)
