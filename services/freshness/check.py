@@ -98,6 +98,56 @@ def check_newest_file(lane, skips):
     return None
 
 
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def check_filename_period(lane, skips):
+    """Age of the newest period an archive of dated files CLAIMS to cover, read from the filenames.
+
+    For an archive whose members name the period they are evidence for, and whose arrival time is
+    recorded nowhere else. `statements/amex/2026-05-11_2026-06-10.pdf` and
+    `statements/halifax/2026-07-05.pdf` are both of that shape: the newest date in the basename is
+    the end of the newest covered period, and nothing INSIDE the file is read — the lane asks
+    whether the archive has grown, not whether a parse succeeded.
+
+    `newest_file` is not a weaker version of this, it is a different measurement, and on a
+    git-tracked archive it is a measurement of the checkout. Measured on the live tree 2026-10-05:
+    mtime says the newest file under statements/amex is 1431.1 h old and names
+    `2026-01-11_2026-02-10.pdf` — a FEBRUARY statement — because a checkout rewrites every mtime and
+    does not preserve their order. statements/halifax reports the same 1431.1 h from a different
+    file. Both numbers are the age of the checkout, so above any threshold the lane reads stale
+    forever and below it reads ok forever, whatever the archive does. The periods themselves were
+    2819.6 h (Amex) and 2219.6 h (Halifax) old at that moment, and neither card had gained a file in
+    over three months. Same hazard check_json_stamp names, one step worse.
+
+    A matching file whose basename carries no YYYY-MM-DD is counted into `skips` rather than
+    ignored: it is a member of the archive this lane cannot see, and if it is the only one the lane
+    breaches below on `newest is None`.
+    """
+    paths = expand(lane["glob"])
+    if not paths:
+        return f"no files match {lane['glob']}"
+    newest, newest_in = None, None
+    for p in paths:
+        found = ISO_DATE.findall(os.path.basename(p))
+        if not found:
+            skips.add(ValueError(f"{os.path.basename(p)} carries no YYYY-MM-DD period in its name"))
+            continue
+        t = parse_ts(max(found))
+        if t is not None and (newest is None or t > newest):
+            newest, newest_in = t, p
+    if newest is None:
+        return (f"no usable YYYY-MM-DD period in the name of any of {len(paths)} file(s) "
+                f"matching {lane['glob']}")
+    age = (time.time() - newest) / HOUR
+    if age > lane["max_age_h"]:
+        return (f"newest covered period ends {datetime.fromtimestamp(newest, timezone.utc).date()}, "
+                f"{age:.1f} h ago (limit {lane['max_age_h']} h) — {os.path.basename(newest_in)} of "
+                f"{len(paths)} file(s); that is what the archive SAYS it covers, not when the files "
+                f"were written")
+    return None
+
+
 def check_jsonl_newest(lane, skips):
     """Age of the newest record — counting only records that carry data, if the lane says which.
 
@@ -303,6 +353,7 @@ def check_http_json_newest(lane, skips):
 
 
 KINDS = {"newest_file": check_newest_file,
+         "filename_period": check_filename_period,
          "jsonl_newest": check_jsonl_newest,
          "jsonl_fraction": check_jsonl_fraction,
          "json_newest": check_json_newest,
