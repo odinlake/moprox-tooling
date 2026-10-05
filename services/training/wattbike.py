@@ -221,10 +221,14 @@ def join_line(handle, timeout=None):
             "private-data/wattbike/sessions.json. The curve is laps[0].data[i].polar.force, a "
             "comma-separated string of polar.cnt samples at a FIXED 100 Hz, so its length is "
             "6000/cadence (58..190 points, median 69 over the 16298 strokes held on "
-            "2026-10-04) -- index k is crank angle 360*k/cnt, and curves at different cadences "
-            "must be resampled to a common length before they are compared. polar.lcnt is how "
-            "many of those samples are the left leg. Use it if this session is the matching "
-            "ride.\n"
+            "2026-10-04), and curves at different cadences must be resampled to a common "
+            "length before they are compared. polar.lcnt is how many of those leading samples "
+            "are the left leg, and the crank angle is PER HALF, not uniform over the "
+            "revolution: left sample k is 180*k/lcnt deg, right sample j (force[lcnt+j]) is "
+            "180+180*j/(cnt-lcnt) deg. That reproduces the published anglePeakForce angles on "
+            "32596/32596 peaks; a uniform 360*k/cnt grid is wrong by a median 2.6 deg (max 98) "
+            "because lcnt is a time split with median share 0.4853, not cnt/2. Resample each "
+            "half separately. Use it if this session is the matching ride.\n"
             % (state["secs"], summary or "no summary line"))
 
 
