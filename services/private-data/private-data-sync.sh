@@ -45,9 +45,29 @@ conflicts_are_derived() {
   return 0
 }
 
-# A rebase nobody is sitting in front of: in progress, conflicts only in derived artifacts, and not
-# touched for 30 min. A human resolving a conflict by hand touches .git/rebase-merge constantly —
-# every `git add`, every `git rebase --continue` — so 30 min of silence is not a human at a keyboard.
+# True when NOTHING is left unmerged and nothing staged carries a conflict marker — the resolution
+# of a conflict is already in the index and only `--continue` is missing.
+#
+# This is not a hypothetical state, it is the one the 2026-10-05 wedge was left in by the version of
+# finish_derived_rebase() that ran on claude-dev at 12:04:33Z. That run resolved the derived file and
+# staged it, its `git rebase --continue` failed, `|| true` swallowed the message, and the loop's next
+# pass asked conflicts_are_derived() — which requires at least one unmerged path — got `false`, and
+# returned 1 with no diagnostic. Without this predicate the guard can only ever recognise a rebase
+# that is still unresolved, so the half-resolved tree its own self-heal produced was refused hourly.
+resolution_staged() {
+  local u m
+  u=$(git diff --name-only --diff-filter=U 2>/dev/null) || return 1
+  [ -z "$u" ] || return 1
+  # Staged conflict markers mean someone (or something) ran `git add` over an unresolved file; that
+  # content must not be committed as data, so it stays a human's problem.
+  m=$(git diff --cached -U0 2>/dev/null | grep -cE '^\+(<<<<<<< |>>>>>>> |=======$)') || m=0
+  [ "$m" -eq 0 ]
+}
+
+# A rebase nobody is sitting in front of: in progress, not touched for 30 min, and either conflicted
+# only in derived artifacts or already resolved into the index. A human resolving a conflict by hand
+# touches .git/rebase-merge constantly — every `git add`, every `git rebase --continue` — so 30 min
+# of silence is not a human at a keyboard.
 # Deliberately NOT keyed on a marker file this script writes: the wedge this exists for was left by a
 # build that wrote no marker, and a self-heal that cannot heal the wedge in front of it is theatre.
 machine_rebase() {
@@ -57,7 +77,7 @@ machine_rebase() {
     age=$(( $(date +%s) - $(stat -c %Y "$d" 2>/dev/null || echo 0) ))
     [ "$age" -ge 1800 ] || { say "rebase dir $d touched ${age}s ago — assuming a human is in it"; return 1; }
   done
-  conflicts_are_derived
+  conflicts_are_derived || resolution_staged
 }
 
 # Complete a rebase whose conflicts are all derived artifacts, keeping OUR side at every step.
@@ -73,21 +93,53 @@ machine_rebase() {
 # Empty-diff case is real and must not be an error: if the only change in the replayed commit was the
 # derived file and the remote's content is identical after staging, `git rebase --continue` refuses
 # with "nothing to commit"; --skip is the correct move and loses nothing.
+# A DIRTY WORKING TREE, not an unresolved conflict, is what stops `git rebase --continue` here, and
+# git says so in words that point at the wrong thing. Measured 2026-10-05 on a throwaway clone in
+# exactly claude-dev's state: with the derived file resolved and staged (`git ls-files -u` EMPTY) and
+# one unstaged tracked modification left by a producer, `git rebase --continue` exits 1 saying
+#
+#     You must edit all merge conflicts and then mark them as resolved using git add
+#
+# which is not true — there were none. `git add -u` and the identical --continue exits 0 and prints
+# "Successfully rebased and updated refs/heads/main". This repo's tree is dirty by construction:
+# polar-fetch writes every 5 min, notif-ingest every 15, and this script's flock is unpaired
+# (moprox-memory/private-data-sync-lock-unpaired.md), so that unstaged write is the NORMAL case and
+# the 12:04:33Z run hit it on its first try.
+#
+# So the tree is cleaned by COMMITTING it, never by discarding it — `git add -u` stages tracked
+# modifications only, which is this script's own job, and leaves untracked files for the sweep below.
+# Commits made at a rebase stop (notif-ingest made five on the detached HEAD before this was
+# written) are carried by --continue and the branch ref is moved to include them, whereas
+# `git rebase --abort` resets to orig-head and destroys them — verified both ways.
+#
+# Every failure path says why at err. The version this replaces had `|| true` on both git calls and
+# a bare `return 1` in the loop, so the one time it ran for real it left no record of what stopped
+# it: the only line in the journal was the caller's generic "needs a human".
 finish_derived_rebase() {
-  local p guard=0
+  local p guard=0 out
   while [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; do
     guard=$((guard + 1))
-    [ "$guard" -gt 20 ] && { err "WARN: derived-conflict resolution did not converge in $guard steps"; return 1; }
-    conflicts_are_derived || return 1
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      git checkout --theirs -- "$p" 2>/dev/null || return 1
-      git add -- "$p" || return 1
-    done < <(git diff --name-only --diff-filter=U)
+    [ "$guard" -gt 20 ] && { err "WARN: rebase resolution did not converge in $guard steps"; return 1; }
+    if conflicts_are_derived; then
+      while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        git checkout --theirs -- "$p" 2>/dev/null || { err "WARN: checkout --theirs failed for $p"; return 1; }
+        git add -- "$p" || { err "WARN: git add failed for $p"; return 1; }
+      done < <(git diff --name-only --diff-filter=U)
+    elif ! resolution_staged; then
+      err "WARN: rebase conflicts are not confined to this script's derived outputs (or a conflict marker is staged): $(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+      return 1
+    fi
+    # The clean-tree precondition. -uno: tracked modifications only.
+    if [ -n "$(git status --porcelain -uno)" ]; then
+      git add -u || { err "WARN: git add -u failed, cannot clean the tree for rebase --continue"; return 1; }
+    fi
     if git diff --cached --quiet; then
-      git rebase --skip >/dev/null 2>&1 || true
+      # Real and not an error: if the replayed commit's only change was the derived file and the
+      # remote's content is identical after staging, --continue refuses with "nothing to commit".
+      out=$(git rebase --skip 2>&1) || { err "WARN: rebase --skip failed: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)"; return 1; }
     else
-      GIT_EDITOR=true git rebase --continue >/dev/null 2>&1 || true
+      out=$(GIT_EDITOR=true git rebase --continue 2>&1) || { err "WARN: rebase --continue failed: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)"; return 1; }
     fi
   done
   return 0
@@ -161,7 +213,7 @@ if [ -f .git/MERGE_HEAD ]; then
 fi
 if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
   if machine_rebase && finish_derived_rebase; then
-    say "finished a stale machine-made rebase (derived-artifact conflict only), keeping this box's regeneration"
+    say "finished a stale machine-made rebase (derived-artifact conflict, or a resolution left staged by an earlier run), keeping this box's regeneration and any commits producers made at the stop"
   else
     err "SKIP: rebase in progress in $REPO, needs a human — this sweep published nothing and will keep publishing nothing until the tree is resolved"
     exit 1
