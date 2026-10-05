@@ -457,7 +457,18 @@ def retitle(ident, number, new, tok):
     for t in ch.get("tracks") or []:
         t["title"] = new
     set_order(cid, chapters, tok)
-    return {"cardId": cid, "chapter": number, "old": old, "title": new}
+    # The picker finds a chapter's cover by its exact title, so a retitled chapter keeps its cover
+    # only if the file follows it (the docstring always said so; the code did not, 2026-10-05).
+    covers_dir = os.path.expanduser("~/.local/share/moprox/yoto/covers")
+    src, dst = os.path.join(covers_dir, old + ".jpg"), os.path.join(covers_dir, new + ".jpg")
+    moved = None
+    if old != new and os.path.exists(src):
+        if not os.path.exists(dst):
+            os.replace(src, dst)
+            moved = True
+        else:
+            moved = "kept the existing %s.jpg" % new
+    return {"cardId": cid, "chapter": number, "old": old, "title": new, "cover_renamed": moved}
 
 
 def main():

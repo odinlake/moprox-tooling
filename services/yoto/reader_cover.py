@@ -74,8 +74,9 @@ def badge(D, reader, sc=2):
 
 
 def collage(paths):
-    """1 book: full width. 2: stacked. 3+: two columns. Each cell cover-cropped from the TOP, where
-    the titles are."""
+    """1 book: full width. 2: stacked. 3+: two columns, filled left to right; an odd count leaves the
+    last cell (bottom right) empty for the badge. Each cell cover-cropped from the TOP, where the
+    titles are."""
     base = Image.new("RGB", (W, H), ORANGE)
     n = len(paths)
     cols = 1 if n <= 2 else 2
@@ -88,10 +89,7 @@ def collage(paths):
         bk = bk.resize((round(bk.width * sc), round(bk.height * sc)), Image.LANCZOS)
         x0 = (bk.width - cw) // 2
         r, c = divmod(i, cols)
-        if n % cols and i == n - 1:                 # odd last book: centre it in its row
-            x = (W - cw) // 2
-        else:
-            x = G + c * (cw + G)
+        x = G + c * (cw + G)
         base.paste(bk.crop((x0, 0, x0 + cw, ch)), (x, G + r * (ch + G)))
     return base
 
@@ -110,8 +108,22 @@ def build(card, tok):
     have = have[-MAX:]
     im = collage(have).convert("RGBA")
     n = len(have)
-    D, cy = (320, 840) if n == 1 else (270, 865) if n == 2 else (250, H // 2 if n <= 4 else 880)
+    # Where the badge goes is chosen so it never sits on a title (titles are at the top of each
+    # cover; 2026-10-05 a centred badge covered the third book's). 1 and 2 books: the approved spots.
+    # Odd 3+: the empty last cell. Even 4+: the bottom edge, over the last row's author names.
     cx = W // 2
+    if n == 1:
+        D, cy = 320, 840
+    elif n == 2:
+        D, cy = 270, 865
+    else:
+        rows = math.ceil(n / 2)
+        cw, ch = (W - 3 * G) // 2, (H - G * (rows + 1)) // rows
+        if n % 2:
+            D = min(250, round(min(cw, ch) * 0.85))
+            cx, cy = G + cw + G + cw // 2, G + (rows - 1) * (ch + G) + ch // 2
+        else:
+            D, cy = 230, H - G - 115 - 8
     sh = Image.new("RGBA", im.size, (0, 0, 0, 0))
     ImageDraw.Draw(sh).ellipse((cx - D // 2, cy - D // 2 + 10, cx + D // 2, cy + D // 2 + 10), fill=(0, 0, 0, 130))
     im = Image.alpha_composite(im, sh.filter(ImageFilter.GaussianBlur(14)))
