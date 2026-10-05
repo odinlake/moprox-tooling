@@ -10,6 +10,11 @@
 # Producers that DO commit their own subtree with a meaningful message keep doing so — this only
 # ever sees what they left behind, so their history stays well-labelled and this stays a backstop.
 #
+# ONE exception, added deliberately and explained at the PRODUCERS table below: a derived artifact
+# whose producer has no schedule anywhere is regenerated here before the sweep, because this is the
+# only hourly unit in the repo that already runs on the box holding the tree. That step is
+# make-style and non-fatal, so this file is still a backstop first.
+#
 # Install: cp services/private-data/private-data-sync.{service,timer} /etc/systemd/system/
 set -uo pipefail
 
@@ -65,6 +70,97 @@ if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] || [ -f .git/MERGE_HEAD 
   err "SKIP: rebase/merge in progress in $REPO, needs a human — this sweep published nothing and will keep publishing nothing until the tree is resolved"
   exit 1
 fi
+
+# Regenerate derived artifacts whose producer has no schedule of its own.
+#
+# WHY HERE: finance/statements.json is the ONE file the gated /finance dashboard is built from, and
+# finance/amex-cycles.json is the estate's only Amex figure for cycles newer than the PDF archive
+# (push alerts have carried no amount or merchant since 2026-08-06, issue i-20260814-154101, and
+# statements/amex stops at 2026-06-10). Neither had a producer schedule of ANY kind. Measured
+# 2026-10-04: the committed statements.json was generated 2026-09-04, 714 h / 29.75 d earlier, and
+# in that window three landed producer fixes never reached the dashboard — it still served
+# amex_cycles=110 with neither card_ceilings nor months_by_card, both of which build.py emits now.
+# Freshness lanes exist for both artifacts and are the estate's two top incidents today, and both
+# lane notes say the fix "needs a unit installed on a box this repo cannot reach". That was wrong,
+# and written twice: a NEW unit does need a hand, because tooling-pull.sh deploys code and never
+# installs unit files — but THIS script is already installed, already hourly, already runs as mikael
+# on the box that holds the tree, and its ExecStart is redeployed from origin/main every 5 min. The
+# schedule was reachable the whole time; only a new unit was not.
+#
+# Make-style, deliberately NOT unconditional. build.py stamps `generated` into its own output on
+# every run and takes ~21 s to parse the PDFs, so running it hourly would commit a 100 kB file whose
+# only delta is a timestamp, 24 times a day forever — churn in the repo that is the operator's
+# backup. Regenerating only when an INPUT is newer holds the commit rate at the rate real finance
+# data actually arrives, and the artifact's own stamp still advances whenever its evidence does.
+#
+# Non-fatal by construction. This script's job is to back the tree up, and that must not become
+# hostage to a PDF parser: a producer that dies is reported at err — the repo rule is that an
+# unexpected condition reaches the journal — and the sweep below still stages, commits and pushes
+# everything else, including a PARTIAL regeneration, which is data a human needs to see.
+#
+# Keyed on the producer existing under $REPO, because memory-sync.service runs this very file
+# against moprox-memory, which has no finance/ — so that invocation skips the table entirely, and so
+# does a throwaway clone that does not carry the producer.
+#
+# out|producer|input paths, all repo-relative. The producer is invoked as `python3 <producer> <out>`;
+# build.py takes its destination as argv[1] and transitively rewrites finance/amex-cycles.json, so
+# this one row covers both stale lanes.
+PRODUCERS="finance/statements.json|finance/build.py|statements mail"
+
+regen() {
+  local out="$1" prod="$2" ins="$3" d stale="" ef rc=0 line so=""
+  [ -f "$REPO/$prod" ] || return 0
+  if [ ! -f "$REPO/$out" ]; then
+    stale="absent"
+  else
+    for d in $ins; do
+      [ -e "$REPO/$d" ] || continue
+      # -print -quit: stop at the FIRST newer input rather than walking a 50k-file mail archive.
+      if [ -n "$(find "$REPO/$d" -newer "$REPO/$out" -print -quit 2>/dev/null)" ]; then
+        stale="$d newer"; break
+      fi
+    done
+  fi
+  [ -n "$stale" ] || return 0
+  # The producer's stderr is kept SEPARATE from its stdout and re-emitted verbatim, one line at a
+  # time, on BOTH the success and the failure path. This is services/update.py's run() idiom and it
+  # is here for its reason: a captured child's stderr exists only in the capturing variable, so on
+  # exit 0 it is dropped on the floor — which voids services/lib/errlog.py's contract, where a
+  # `<3>`/`<4>` prefix on a child's stderr line is what becomes a real PRIORITY in the journal. An
+  # aggregate warning about a PARTIAL result is precisely the thing a producer emits while still
+  # exiting 0, and discarding it would make this step a place where an unexpected condition stops
+  # reaching the journal. Line at a time, unmodified, so the prefixes stay at the start of the line
+  # and journald still files each at the producer's own level rather than at this script's.
+  #
+  # stdout is deliberately NOT re-emitted on success: build.py writes a multi-line Amazon
+  # reconciliation report there for a human at a terminal, it carries no level prefixes, and nothing
+  # in the estate reads it. On a FAILURE its tail IS carried onto the err line, because a producer
+  # that dies mid-report leaves the only account of how far it got there.
+  #
+  # What this makes visible, measured 2026-10-05 by running build.py for real: a SUCCESSFUL build
+  # prints `Rotated text discovered. Output will be incomplete.` on stderr 18 times — pdftotext
+  # saying it could not fully extract 18 of the statement PDFs this dashboard is built from. That is
+  # unprefixed, so journald files it at the unit's own level and not at err, and it is the point:
+  # the estate has never once seen that sentence.
+  ef=$(mktemp "${TMPDIR:-/tmp}/regen-err.XXXXXX") || { err "WARN: mktemp failed, not regenerating $out"; return 0; }
+  # timeout: build.py shells out to pdftotext per PDF, and a hung one would otherwise hold the lock
+  # into the next firing. 21 s measured today, so 600 s is slack rather than a limit.
+  so=$(timeout 600 python3 "$REPO/$prod" "$REPO/$out" 2>"$ef") || rc=$?
+  while IFS= read -r line; do printf '%s\n' "$line" >&2; done <"$ef"
+  if [ "$rc" -eq 0 ]; then
+    say "regenerated $out ($stale)"
+  else
+    # Both buffers on the err line, stderr first: the producer's own diagnosis if it made one, and
+    # the stdout tail if it died before it could. `finance/build.py` exits non-zero on a partial
+    # Amex build (private-data 5328ef6), which is the shape this branch exists for.
+    err "WARN: producer $prod exited $rc ($stale), $out may be stale or partial:" \
+        "$({ cat "$ef"; printf '%s\n' "$so"; } | tr '\n' ' ' | tr -s ' ' | cut -c1-300)"
+  fi
+  rm -f "$ef"
+}
+printf '%s\n' "$PRODUCERS" | while IFS='|' read -r _o _p _i; do
+  [ -n "$_o" ] && regen "$_o" "$_p" "$_i"
+done
 
 BRANCH="$(git symbolic-ref --quiet --short HEAD || echo main)"
 HAS_REMOTE=$(git remote | head -1)
