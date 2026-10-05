@@ -110,11 +110,12 @@ docwatch has just appended a home recording to a Yoto playlist. Finish it.
   original filename: {name!r}
   local audio file: {file}
   transcript excerpt (machine, may be garbled): {transcript}
-The current title comes from the filename, typed on a phone, usually Title Cased ("Ingrid har
-Plåster") and sometimes with the reader's initials in front ("AO ..."). Compare it with the
-published title CHARACTER BY CHARACTER, letter case included: Swedish titles are sentence case
-("Ingrid har plåster"), so a capital mid-title is an error to fix, and initials are dropped. If it
-differs in any way, run `yoto retitle` (it moves the cover file with the title)."""
+The current title is just the filename, typed by the operator on a phone: treat it as a hint for
+finding the book, nothing more. It can be wrong in any way (typos, missing accents, Title Case,
+initials like "AO ...", a partial or series title like "Bamse 1"). Once the book is identified, set
+the chapter title to its OFFICIAL published title exactly (spelling, accents, letter case) with
+`yoto retitle` (it moves the cover file with the title). Keep the filename title only if you could
+not identify the book for certain, and say so."""
 
 
 def curate(row):
