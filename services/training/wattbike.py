@@ -228,7 +228,14 @@ def join_line(handle, timeout=None):
             "180+180*j/(cnt-lcnt) deg. That reproduces the published anglePeakForce angles on "
             "32596/32596 peaks; a uniform 360*k/cnt grid is wrong by a median 2.6 deg (max 98) "
             "because lcnt is a time split with median share 0.4853, not cnt/2. Resample each "
-            "half separately. Use it if this session is the matching ride.\n"
+            "half separately. Two of the derived fields are arithmetic, not measurement: "
+            "pes.combinedCoefficient is the UNWEIGHTED mean of leftCoefficient and "
+            "rightCoefficient (16298/16298 strokes, exact at 4 dp where that mean is "
+            "representable), so cite two PES numbers and not three; and `balance` is "
+            "100*sum(force[:lcnt])/sum(force) to a median 0.019 pts, so balance CAN be recomputed "
+            "over any sub-interval of the ride. The per-leg coefficients canNOT: they are not the "
+            "half-curve's mean/peak ratio (median residual 0.125 left, 0.141 right), so there is "
+            "no per-interval PES. Use it if this session is the matching ride.\n"
             % (state["secs"], summary or "no summary line"))
 
 
