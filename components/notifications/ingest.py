@@ -9,6 +9,9 @@ Dedupe key: (app, post_time). Commits to private-data when new lines land.
 import fcntl, json, re, subprocess, sys, time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/lib"))
+import errlog  # noqa: E402  — see git(): this program's death was filed at info, git's reason nowhere
+
 SRC = Path.home() / "ha-notif/notif.jsonl"
 DEST = Path.home() / "projects/private-data/notifications"
 REPO = DEST.parent
@@ -28,8 +31,28 @@ OTP = re.compile(
 
 
 def git(*args, check=True):
-    return subprocess.run(["git", "-C", str(REPO), *args],
-                          check=check, capture_output=True, text=True)
+    """Run git in REPO. A checked failure says WHY at err level, then exits 1.
+
+    `capture_output=True` puts git's own sentence in the exception and NOWHERE else:
+    CalledProcessError.__str__ repeats only the argv and the exit status, and an uncaught exception
+    reaches journald through Python's default excepthook, which writes to stderr with no `<N>`
+    prefix — so journald files every line of it at PRIORITY=6.
+
+    Measured on claude-dev 2026-10-05: twelve consecutive runs, 09:15:57..12:00:47Z, died here on
+    `commit` exit 128 while the shared tree sat in a stale rebase. Each left 16 info lines and not
+    one err record from this program, so `search_logs(priority=3)` showed only systemd's generic
+    "Failed to start notif-ingest.service" — and git's fatal sentence, the one fact that identifies
+    the rebase as the cause, was captured by this function and then discarded at every level.
+
+    Still exit 1, so the unit-failed incident stays: the point is that the err record now names the
+    cause instead of leaving it to be guessed from a neighbouring unit's journal."""
+    try:
+        return subprocess.run(["git", "-C", str(REPO), *args],
+                              check=check, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        said = " ".join((exc.stderr or "").split()) or " ".join((exc.stdout or "").split())
+        errlog.die(f"git {' '.join(args)} failed in {REPO} (exit {exc.returncode}): "
+                   f"{said or 'git said nothing on either stream'}")
 
 
 def acquire_sync_lock(timeout=300):
