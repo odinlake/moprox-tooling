@@ -1,0 +1,18 @@
+# Receives the shopping list Home Assistant pushes on every change. Source of truth:
+# moprox-tooling/services/shopping. Only HA (10.10.10.7) may POST; see nftables-shopping.conf.
+[Unit]
+Description=shopping list receiver (HA pushes the list here)
+After=network-online.target shopping-gate.service
+Wants=network-online.target
+Requires=shopping-gate.service
+
+[Service]
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/shopping/shopping.py serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

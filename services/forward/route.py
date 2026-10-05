@@ -21,6 +21,31 @@ import tg, convo, tg_files
 DEV_INBOX = Path.home() / ".local/share/moprox/dev-requests.jsonl"
 ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming)\b[\s:,>\-]*", re.I)   # explicit address at the start
 
+# The shopping list (services/shopping, 2026-10-05). Asking to SEE it is answered right here, with no
+# model call, because it is a lookup the operator wants in a second while standing in a shop.
+# Anchored on purpose: "add milk to the shopping list" must NOT match; that goes to valet below.
+SHOP_GET = re.compile(
+    r"^\s*(?:(?:get|show|send|give|view|see|read|check|what'?s on|whats on|what is on)\s+)?(?:me\s+)?"
+    r"(?:the\s+|my\s+|our\s+)?(?:shopping|grocery|groceries)(?:\s+list)?"
+    r"(?:\s+(?:please|pls|now))?\s*[?.!]*\s*$"
+    r"|^\s*(?:(?:visa|skicka|ge mig)\s+)?(?:inköpslistan?|handlingslistan?)\s*[?.!]*\s*$", re.I)
+# Anything else about shopping (adding, ticking off, a photo of an empty bottle) goes to valet, which
+# runs the `shopping` tool. Deterministic, so the steward never has to guess.
+SHOP_ANY = re.compile(r"\b(?:shopping|grocery)\s+list|\bgroceries\b|inköpslist|handlingslist"
+                      r"|^\s*(?:buy|köp)\b|\bto the list\b|\bpå listan\b", re.I)
+
+
+def fast(rec):
+    """Answer what needs no agent. True if the message was handled here."""
+    text = (rec.get("text") or "").strip()
+    if rec.get("files") or not SHOP_GET.match(text):
+        return False
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shopping"))
+    import shopping
+    convo.log_in(text, rec.get("msg_id"), rec.get("reply_to"), to="shopping")   # question before answer
+    tg.send(shopping.text(), agent="shopping")
+    return True
+
 def _json(s):
     m = re.search(r"\{.*\}", s or "", re.S)
     try: return json.loads(m.group(0)) if m else None
@@ -43,6 +68,7 @@ def decide(rec):
     if m: return m.group(1).lower(), "explicit address"
     a = convo.agent_for_msg(rec.get("reply_to"))
     if a: return a, "reply-to %s" % rec.get("reply_to")
+    if SHOP_ANY.search(text): return "valet", "shopping list"
     last = convo.last_agent() or "coach"
     prompt = ("Route the operator's new Telegram message to ONE agent. Output ONLY "
               '{"route":"coach|dev|steward|valet|theming","reason":"<short>"}.\n'

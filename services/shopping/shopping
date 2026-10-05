@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stable command name so an agent can be allowlisted with just Bash(shopping:*). Mirrors to
+# ~/.local/bin/shopping (install.sh). Runs the DEPLOYED tree, never ~/projects.
+exec /usr/bin/python3 /opt/moprox-tooling/services/shopping/shopping.py "$@"

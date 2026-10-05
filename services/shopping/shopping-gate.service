@@ -1,0 +1,14 @@
+# Re-apply the shopping receiver's ingress gate at boot. shopping-web.service Requires= this.
+[Unit]
+Description=shopping receiver ingress gate (nftables) -- HA only
+After=nftables.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/nftables-shopping.conf
+ExecReload=/usr/sbin/nft -f /etc/nftables-shopping.conf
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

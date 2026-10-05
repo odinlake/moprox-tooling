@@ -47,6 +47,7 @@ DEV_DENY = ",".join("Bash(%s)" % p for p in (
 TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"   # classified history
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
 DRIVE_TOOL = "Bash(drive-put:*)"        # ...plus the one-verb Drive uploader (services/drive/drive-put)
+SHOPPING_TOOL = "Bash(shopping:*)"      # the household shopping list in HA (services/shopping)
 YOTO_TOOL = "Bash(yoto:*)"              # the ONE verb bard may run: player + playlist, nothing else
 THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
 # theming pushes feature BRANCHES and opens PRs, but never bypasses protections: deny force-push +
@@ -95,7 +96,7 @@ AGENT_FLAGS = {
     # valet: morning brief + afternoon catch-up; reads (only) the Google Workspace MCP (read-only,
     # impersonating Mikael) for overnight email + calendar, scoped to ONLY this agent.
     "valet": ["--permission-mode", "acceptEdits",
-              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s,%s" % (CONVO_TOOL, DRIVE_TOOL),
+              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s,%s,%s" % (CONVO_TOOL, DRIVE_TOOL, SHOPPING_TOOL),
               "--mcp-config", str(AGENTS["valet"] / "mcp.json"), "--strict-mcp-config",
               "--add-dir", str(SHARED_MEM), str(TG_FILES)],   # valet-memory.md lives in the memory store; variadic: keep last
     # theming: theme-ontology expert. Answers data questions via the totolo MCP (scoped to ONLY this

@@ -41,6 +41,9 @@ def router_worker():
     while True:
         rec = Q["router"].get()
         try:
+            if route.fast(rec):                    # e.g. "get shopping list": no agent needed (logs itself)
+                print("fast: shopping list |", (rec.get("text") or "")[:50])
+                continue
             agent, reason = route.decide(rec)
             print("route:", agent, "(%s) |" % reason, (rec.get("text") or "")[:50])
             convo.log_in(route.text_of(rec), rec.get("msg_id"), rec.get("reply_to"), to=agent)
