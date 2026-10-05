@@ -112,9 +112,10 @@ docwatch has just appended a home recording to a Yoto playlist. Finish it.
   transcript excerpt (machine, may be garbled): {transcript}
 The current title is just the filename, typed by the operator on a phone: treat it as a hint for
 finding the book, nothing more. It can be wrong in any way (typos, missing accents, Title Case,
-initials like "AO ...", a partial or series title like "Bamse 1"). Once the book is identified, set
-the chapter title to its OFFICIAL published title exactly (spelling, accents, letter case) with
-`yoto retitle` (it moves the cover file with the title). Keep the filename title only if you could
+initials like "AO ...", a partial title). Once the book is identified, set the chapter title to
+its OFFICIAL published title exactly (spelling, accents, letter case) with `yoto retitle` (it moves
+the cover file with the title). A story from a collection ("Bamse 1" = part 1 of a Bamse collection)
+is titled "<collection hero>: <official story title>", e.g. "Bamse: Skalmans märkliga bil". Keep the filename title only if you could
 not identify the book for certain, and say so."""
 
 
