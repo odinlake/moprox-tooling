@@ -23,6 +23,76 @@ REPO=${PRIVATE_DATA_REPO:-/home/mikael/projects/private-data}
 LOG=${PRIVATE_DATA_LOG:-/home/mikael/.local/state/private-data-sync.log}
 MAX_MB=50   # GitHub hard-rejects >100 MB; bail loudly well before that rather than wedge the push
 
+# Declared up here, not at the regen table below, because the rebase guard needs it: a conflict
+# confined to these paths is a machine artifact this script made and can finish itself. The table's
+# full rationale, and the format, are at the PRODUCERS use site further down.
+# out|producer|input paths, all repo-relative.
+PRODUCERS="finance/statements.json|finance/build.py|statements mail"
+regen_outs() { printf '%s\n' "$PRODUCERS" | cut -d'|' -f1; }
+
+# True when EVERY currently-conflicted path is one of our regen outputs, and there is at least one.
+# `-x -F` on purpose: a substring or regex match here would let a conflict in, say,
+# finance/statements.json.bak be treated as derived.
+conflicts_are_derived() {
+  local u outs p
+  u=$(git diff --name-only --diff-filter=U 2>/dev/null) || return 1
+  [ -n "$u" ] || return 1
+  outs=$(regen_outs)
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$outs" | grep -qxF -- "$p" || return 1
+  done <<<"$u"
+  return 0
+}
+
+# A rebase nobody is sitting in front of: in progress, conflicts only in derived artifacts, and not
+# touched for 30 min. A human resolving a conflict by hand touches .git/rebase-merge constantly —
+# every `git add`, every `git rebase --continue` — so 30 min of silence is not a human at a keyboard.
+# Deliberately NOT keyed on a marker file this script writes: the wedge this exists for was left by a
+# build that wrote no marker, and a self-heal that cannot heal the wedge in front of it is theatre.
+machine_rebase() {
+  local d age
+  for d in .git/rebase-merge .git/rebase-apply; do
+    [ -d "$d" ] || continue
+    age=$(( $(date +%s) - $(stat -c %Y "$d" 2>/dev/null || echo 0) ))
+    [ "$age" -ge 1800 ] || { say "rebase dir $d touched ${age}s ago — assuming a human is in it"; return 1; }
+  done
+  conflicts_are_derived
+}
+
+# Complete a rebase whose conflicts are all derived artifacts, keeping OUR side at every step.
+#
+# --theirs, not --ours, and the distinction matters: mid-rebase `ours` is the commit being replayed
+# ONTO (what the remote already has) and `theirs` is the local commit being replayed. We keep the
+# LOCAL one because it is the newer regeneration AND because dropping it is not recoverable: regen()
+# is make-style on mtimes, so once this box's out-file is replaced by the remote's content with a
+# fresh mtime, nothing re-derives it until an INPUT changes again — the newer numbers would be gone
+# with no error anywhere. Taking the local side costs at most one superseded regeneration on the
+# remote, which the next run on either box re-derives.
+#
+# Empty-diff case is real and must not be an error: if the only change in the replayed commit was the
+# derived file and the remote's content is identical after staging, `git rebase --continue` refuses
+# with "nothing to commit"; --skip is the correct move and loses nothing.
+finish_derived_rebase() {
+  local p guard=0
+  while [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; do
+    guard=$((guard + 1))
+    [ "$guard" -gt 20 ] && { err "WARN: derived-conflict resolution did not converge in $guard steps"; return 1; }
+    conflicts_are_derived || return 1
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      git checkout --theirs -- "$p" 2>/dev/null || return 1
+      git add -- "$p" || return 1
+    done < <(git diff --name-only --diff-filter=U)
+    if git diff --cached --quiet; then
+      git rebase --skip >/dev/null 2>&1 || true
+    else
+      GIT_EDITOR=true git rebase --continue >/dev/null 2>&1 || true
+    fi
+  done
+  return 0
+}
+
 mkdir -p "$(dirname "$LOG")"
 # Tee rather than redirect. `exec >>"$LOG" 2>&1` sends EVERYTHING to a file, so a unit that exits
 # non-zero reaches journald and the incident queue with NO reason attached — which is exactly what
@@ -64,11 +134,38 @@ flock -w 300 9 || { say "busy: another sync holds the lock, skipping"; exit 0; }
 # moprox-memory/err-line-is-not-an-incident-private-data-sync); priority 6 is below what a priority
 # query reads; and the watchdog's silence>4h rule is defeated by this very line arriving every hour.
 # A repo that had stopped publishing indefinitely was indistinguishable from one with nothing to do.
-# Same "needs a human" shape as the oversize guard below, now reported the same way. The tree is
-# still not touched: this returns before anything stages, commits, pulls or pushes.
-if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] || [ -f .git/MERGE_HEAD ]; then
-  err "SKIP: rebase/merge in progress in $REPO, needs a human — this sweep published nothing and will keep publishing nothing until the tree is resolved"
+# Same "needs a human" shape as the oversize guard below, now reported the same way.
+#
+# 2026-10-05 — the wedge the paragraph above predicted HAPPENED, and "needs a human" turned out to be
+# both wrong and expensive. Measured: at 09:02:32Z this script regenerated finance/statements.json on
+# claude-dev and swept it into b2e49fe; the push was rejected because claude-loop had pushed its own
+# regeneration of the SAME derived file 54 min earlier (private-data dc33ef9); sync_push's
+# `git pull --rebase` hit `CONFLICT (content): Merge conflict in finance/statements.json` and RETURNED
+# WITHOUT ABORTING. From 09:15:57Z notif-ingest.service then failed every 15 min with
+# `git commit ... returned non-zero exit status 128` — a wedge in one producer's unattended rebase
+# takes down every OTHER writer of the shared tree, which is a blast radius the old comment did not
+# consider, and nothing in the estate can reach the box to type `git rebase --abort`.
+#
+# So the guard now distinguishes the two cases instead of refusing both:
+#  * a rebase whose every conflicted path is one of OUR regen outputs is machine-made — two boxes
+#    independently re-derived the same artifact, and byte-difference is the regeneration stamp, not a
+#    decision anyone made. finish_derived_rebase() completes it, keeping THIS box's version.
+#  * anything else — a merge, a conflict in real data, a rebase a human is actively resolving — still
+#    exits 1 untouched.
+# The staleness test is what keeps a human's in-progress rebase safe: theirs was touched minutes ago,
+# a wedge has been sitting for hours. No marker file is required for that path precisely because the
+# wedge that motivated this was created by the version that had none.
+if [ -f .git/MERGE_HEAD ]; then
+  err "SKIP: merge in progress in $REPO, needs a human — this sweep published nothing and will keep publishing nothing until the tree is resolved"
   exit 1
+fi
+if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+  if machine_rebase && finish_derived_rebase; then
+    say "finished a stale machine-made rebase (derived-artifact conflict only), keeping this box's regeneration"
+  else
+    err "SKIP: rebase in progress in $REPO, needs a human — this sweep published nothing and will keep publishing nothing until the tree is resolved"
+    exit 1
+  fi
 fi
 
 # Regenerate derived artifacts whose producer has no schedule of its own.
@@ -105,7 +202,10 @@ fi
 # out|producer|input paths, all repo-relative. The producer is invoked as `python3 <producer> <out>`;
 # build.py takes its destination as argv[1] and transitively rewrites finance/amex-cycles.json, so
 # this one row covers both stale lanes.
-PRODUCERS="finance/statements.json|finance/build.py|statements mail"
+#
+# ONE COPY, DECLARED AT THE TOP OF THE FILE, because the rebase guard runs before this point and needs
+# the out column: a derived artifact regenerated independently on two boxes conflicts on content by
+# construction, and that is the one conflict class this script may resolve on its own.
 
 regen() {
   local out="$1" prod="$2" ins="$3" d stale="" ef rc=0 line so=""
@@ -197,7 +297,26 @@ sync_push() {
     say "pushed: $what"; return 0
   fi
   if ! r=$(git pull --rebase "$HAS_REMOTE" "$BRANCH" 2>&1); then
-    err "WARN: push rejected and rebase failed, leaving commit local: $(printf '%s' "$r" | tr '\n' ' ' | cut -c1-300)"
+    # "Leaving the commit local and retrying is the strictly safer failure: nothing is lost ... the
+    # next run picks it up" — the paragraph above said that, and for a CONFLICT it was false in both
+    # halves. The next run did not pick it up: it hit the rebase guard and exited 1 every hour, and
+    # in between, notif-ingest.service crashed 8 times on `git commit` exit 128 because a tree
+    # mid-rebase refuses commits from every producer, not just from us. Measured on claude-dev
+    # 2026-10-05T09:02:34Z..11:02Z. So the rebase state does not survive this function any more:
+    # resolve it if it is only a derived artifact, abort it otherwise. Both outcomes leave a tree
+    # other producers can still commit to, which is the property that was actually missing.
+    if finish_derived_rebase; then
+      say "resolved a derived-artifact conflict during rebase, keeping this box's regeneration"
+      if ! e=$(git push "$HAS_REMOTE" "$BRANCH" 2>&1); then
+        err "WARN: push failed after derived-conflict rebase, commit is local: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"
+        return 1
+      fi
+      say "pushed after rebase: $what"; return 0
+    fi
+    # Safe HERE in a way it is not at the top-of-run guard: this rebase is seconds old and made by
+    # this process, so the hard reset it performs can only discard what the rebase itself staged.
+    git rebase --abort >/dev/null 2>&1 || git merge --abort >/dev/null 2>&1 || true
+    err "WARN: push rejected and rebase failed, rebase ABORTED so other producers can still commit, leaving commit local: $(printf '%s' "$r" | tr '\n' ' ' | cut -c1-300)"
     return 1
   fi
   if ! e=$(git push "$HAS_REMOTE" "$BRANCH" 2>&1); then
