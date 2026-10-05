@@ -26,6 +26,9 @@ from pathlib import Path
 
 ENV = Path.home() / ".config/claude-dev/shopping.env"
 STATE = Path.home() / ".local/share/moprox/shopping.json"
+# Items asked for while HA had no todo.shopping_list (the integration is added in the HA UI, which
+# no file can do). Kept here and sent the moment a push says the list exists, so nothing is lost.
+PENDING = Path.home() / ".local/share/moprox/shopping-pending.json"
 PORT = int(os.environ.get("SHOPPING_PORT", "8031"))
 HA_ADDRS = {"10.10.10.7", "127.0.0.1"}       # Home Assistant's agent-subnet leg; loopback for tests
 CONFIRM_S = 20                               # how long `add` waits for HA's push before saying so
@@ -91,7 +94,9 @@ def text(show_done=False):
     if not d:
         return "🛒 I have not heard from Home Assistant yet, so I can't show the list."
     if not d.get("exists", True):
-        return "🛒 Home Assistant has no `todo.shopping_list`; the list cannot work until it does."
+        w = pending()
+        return ("🛒 Home Assistant has no shopping list yet (Settings → Devices & services → Add "
+                "integration → Shopping List)." + (" Waiting to be added: " + ", ".join(w) + "." if w else ""))
     items = open_items(d)
     age = time.time() - d.get("received", 0)
     stale = " _(last update from HA %d h ago)_" % (age // 3600) if age > 3 * 3600 else ""
@@ -107,7 +112,37 @@ def text(show_done=False):
     return out
 
 
+def pending():
+    try:
+        return json.loads(PENDING.read_text())
+    except FileNotFoundError:
+        return []
+
+
+def flush_pending():
+    """Send queued items now that the list exists. Called from the receiver, off the request thread."""
+    items = pending()
+    if not items:
+        return
+    try:
+        ha("add", items)
+        PENDING.unlink()
+        print("flushed %d queued item(s): %s" % (len(items), ", ".join(items)), flush=True)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
+        import tg
+        tg.send("🛒 The shopping list exists now; added what was waiting: %s." % ", ".join(items), agent="shopping")
+    except Exception as e:
+        print("<3>shopping: flushing queued items failed: %s: %s" % (type(e).__name__, e), flush=True)
+
+
 def cmd_add(names):
+    if load().get("exists") is False:
+        q = pending() + [n for n in names if n not in pending()]
+        PENDING.parent.mkdir(parents=True, exist_ok=True)
+        PENDING.write_text(json.dumps(q, ensure_ascii=False))
+        print(json.dumps({"queued": names, "why": "Home Assistant has no todo.shopping_list yet; queued "
+                          "and added automatically once it exists", "waiting": q}, ensure_ascii=False))
+        return
     since = time.time()
     ha("add", names)
     want = [n.strip().lower() for n in names]
@@ -162,6 +197,9 @@ class H(http.server.BaseHTTPRequestHandler):
                   "ha_ts": d.get("ts")})
             print("push: %d items (%d open), exists=%s" % (len(items), len(open_items()), d.get("exists")),
                   flush=True)
+            if d.get("exists", True) and pending():
+                import threading
+                threading.Thread(target=flush_pending, daemon=True).start()
             return self.reply(200, {"ok": True})
         except Exception as e:
             print("<3>shopping: bad push from HA: %s: %s" % (type(e).__name__, e), flush=True)
