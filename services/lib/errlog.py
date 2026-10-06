@@ -80,18 +80,37 @@ class Skips:
 
     Per-record logging would drown a big file; reporting nothing is how corruption hides. So:
     aggregate, then speak up if anything was dropped — and shout if EVERYTHING was, because that
-    is a broken input, not a stray bad line."""
+    is a broken input, not a stray bad line.
+
+    Aggregating the COUNT but only the FIRST exception loses the other reasons entirely, and the
+    reason is the only actionable half. Measured on claude-dev 2026-10-06: dashboard-update spent
+    the day reporting `agent icon: skipped 3 of 9 unusable record(s) (first: FileNotFoundError:
+    .../agents/bard/icon.svg)` every 2 minutes. THREE records failed for TWO distinct reasons and
+    the line named one of them; the repair that ended it (private-data 81b3f85, 13:05:26Z) had to
+    create bard/icon.svg AND burndown/icon.svg, and the journal never once said `burndown`. The
+    digit was the whole evidence a second cause existed. So: dedupe reasons and name them, capped,
+    with the remainder counted rather than dropped — still one line, still once per process."""
+
+    NAMED = 3   # distinct reasons named per report; past this they are counted, never silently cut
 
     def __init__(self, context):
         self.context = context
         self.n = 0
-        self.first = None
+        self.reasons = {}    # "Type: str(exc)" -> None, insertion-ordered, at most NAMED entries
+        self.unnamed = 0     # records whose reason was new but arrived after the cap was reached
         self.total = None
 
     def add(self, exc=None, total=None):
         self.n += 1
-        if self.first is None and exc is not None:
-            self.first = exc
+        if exc is not None:
+            k = f"{type(exc).__name__}: {exc}"
+            if k not in self.reasons:
+                # Bounded in memory as well as in text: a loop over a million corrupt lines must
+                # not accumulate a million keys here just to print three of them.
+                if len(self.reasons) < self.NAMED:
+                    self.reasons[k] = None
+                else:
+                    self.unnamed += 1
         if total is not None:
             self.total = total
 
@@ -104,11 +123,14 @@ class Skips:
         if total is None:
             total = self.total
         d = f" of {total}" if total else ""
-        first = f" (first: {type(self.first).__name__}: {self.first})" if self.first else ""
+        why = ""
+        if self.reasons:
+            rest = f"; +{self.unnamed} record(s) with further reasons" if self.unnamed else ""
+            why = " (" + "; ".join(self.reasons) + rest + ")"
         if total and self.n >= total:
-            err(f"{self.context}: ALL {self.n}{d} records unusable — treat the input as broken{first}")
+            err(f"{self.context}: ALL {self.n}{d} records unusable — treat the input as broken{why}")
         else:
-            warn(f"{self.context}: skipped {self.n}{d} unusable record(s){first}")
+            warn(f"{self.context}: skipped {self.n}{d} unusable record(s){why}")
         return True
 
 
