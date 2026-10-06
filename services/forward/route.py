@@ -24,8 +24,13 @@ ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming)\b[\s:,>\-]*", re.
 # The shopping list (services/shopping, 2026-10-05). Asking to SEE it is answered right here, with no
 # model call, because it is a lookup the operator wants in a second while standing in a shop.
 # Anchored on purpose: "add milk to the shopping list" must NOT match; that goes to valet below.
+# "shop X, Y and Z" adds; "clear shop" blanks the list (operator, 2026-10-06). Instant, no model.
+# "shop" must be a whole word, so "shopping list" never lands here.
+SHOP_ADD = re.compile(r"^\s*shop\b[\s:,\-]+(\S.*)$", re.I | re.S)
+SHOP_CLEAR = re.compile(r"^\s*(?:clear|empty|blank|reset)\s+(?:the\s+)?shop(?:ping)?(?:\s+list)?\s*[.!]*\s*$"
+                        r"|^\s*shop(?:ping)?(?:\s+list)?\s+(?:clear|empty|done)\s*[.!]*\s*$", re.I)
 SHOP_GET = re.compile(
-    r"^\s*(?:(?:get|show|send|give|view|see|read|check|what'?s on|whats on|what is on)\s+)?(?:me\s+)?"
+    r"^\s*shop\s*[?.!]*\s*$|^\s*(?:(?:get|show|send|give|view|see|read|check|what'?s on|whats on|what is on)\s+)?(?:me\s+)?"
     r"(?:the\s+|my\s+|our\s+)?(?:shopping|grocery|groceries)(?:\s+list)?"
     r"(?:\s+(?:please|pls|now))?\s*[?.!]*\s*$"
     r"|^\s*(?:(?:visa|skicka|ge mig)\s+)?(?:inköpslistan?|handlingslistan?)\s*[?.!]*\s*$", re.I)
@@ -38,12 +43,27 @@ SHOP_ANY = re.compile(r"\b(?:shopping|grocery)\s+list|\bgroceries\b|inköpslist|
 def fast(rec):
     """Answer what needs no agent. True if the message was handled here."""
     text = (rec.get("text") or "").strip()
-    if rec.get("files") or not SHOP_GET.match(text):
+    if rec.get("files"):
+        return False
+    get, clr, add = SHOP_GET.match(text), SHOP_CLEAR.match(text), (None if SHOP_CLEAR.match(text) else SHOP_ADD.match(text))
+    if not (get or clr or add):
         return False
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shopping"))
     import shopping
     convo.log_in(text, rec.get("msg_id"), rec.get("reply_to"), to="shopping")   # question before answer
-    tg.send(shopping.text(), agent="shopping")
+    try:
+        if get:
+            msg = shopping.text()
+        elif clr:
+            n = shopping.clear()
+            msg = "🛒 Cleared the shopping list (%d item%s)." % (n, "" if n == 1 else "s") if n else "🛒 The list was already empty."
+        else:
+            new, dup, items = shopping.add(shopping.split_items(add.group(1)))
+            msg = ("🛒 Added " + ", ".join(new) + "." if new else "🛒 Nothing new.") + \
+                  (" Already on it: " + ", ".join(dup) + "." if dup else "") + " %d on the list." % len(items)
+    except Exception as e:
+        msg = "🛒 ⚠️ That did NOT reach the list: %s" % e
+    tg.send(msg, agent="shopping")
     return True
 
 def _json(s):

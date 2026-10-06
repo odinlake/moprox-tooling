@@ -135,6 +135,41 @@ def flush_pending():
         print("<3>shopping: flushing queued items failed: %s: %s" % (type(e).__name__, e), flush=True)
 
 
+def split_items(s):
+    """"milk, eggs, salt and vinegar crisps" -> ["milk", "eggs", "salt and vinegar crisps"]. Only
+    commas, semicolons and newlines separate items: splitting on "and" would cut a product in two."""
+    import re
+    parts = re.split(r"\s*[,;\n]\s*", s.strip())
+    return [p.strip(" .") for p in parts if p.strip(" .")]
+
+
+def add(names):
+    """Add and confirm; returns the open items. Raises RuntimeError if HA does not confirm."""
+    if load().get("exists") is False:
+        raise RuntimeError("Home Assistant has no shopping list")
+    have = {i["summary"].strip().lower() for i in open_items()}
+    new = [n for n in names if n.strip().lower() not in have]
+    if new:
+        since = time.time()
+        ha("add", new)
+        want = [n.strip().lower() for n in new]
+        if wait_push(since, lambda d: all(any(i["summary"].strip().lower() == w for i in open_items(d))
+                                          for w in want)) is None:
+            raise RuntimeError("HA did not confirm within %d s" % CONFIRM_S)
+    return new, [n for n in names if n not in new], open_items()
+
+
+def clear():
+    """Blank the list: every item, open or ticked. Returns how many went."""
+    items = [i["summary"] for i in load().get("items") or []]
+    if items:
+        since = time.time()
+        ha("remove", items)
+        if wait_push(since, lambda d: not d.get("items")) is None:
+            raise RuntimeError("HA did not confirm within %d s" % CONFIRM_S)
+    return len(items)
+
+
 def cmd_add(names):
     if load().get("exists") is False:
         q = pending() + [n for n in names if n not in pending()]
