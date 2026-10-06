@@ -361,6 +361,91 @@ function progChart(sess, series, head, thr, agg, info, dom){
   }
   return `<div class="chartwrap">${title}<svg viewBox="0 0 ${W} ${H}"><g class="grid">${g}</g>${thrm}${xl}${curves}${dots}${aggline}</svg></div>`;
 }
+// Per-lift progress, small multiples: one panel per lift, one kg axis each (seconds for the plank).
+// strength.py computes every number (its PROGRESS comment has the rules and why); this only draws.
+// Main line = estimated 1-rep max (Epley), because on a held weight the reps climb for weeks and a
+// load line calls that a stall. Faint step behind = the working load, on the SAME axis — no dual
+// axis. Grey dashed = the lift this one replaced. A feed from before `progress` existed draws nothing.
+function strengthProgress(d){
+  const P = d.progress; if(!P) return "";
+  const lifts = Object.values(P).filter(p => p.points && p.points.length); if(!lifts.length) return "";
+  const T = s => new Date(s+"T00:00:00Z").getTime(), DAY = 86400000;
+  const all = [];
+  lifts.forEach(p => { p.points.forEach(x=>all.push(T(x.date)));
+    (p.predecessor?p.predecessor.points:[]).forEach(x=>all.push(T(x.date))); });
+  const t0 = Math.min(...all)-2*DAY, t1 = Math.max(...all)+3*DAY;
+  // Fortnightly Monday ticks, shared by every panel (the prototype's sharex).
+  const ticks = []; { const m = new Date(t0); m.setUTCDate(m.getUTCDate()+((8-m.getUTCDay())%7));
+    for(let t=m.getTime(); t<=t1; t+=14*DAY) ticks.push(t); }
+  const MO = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const dl = t => { const x=new Date(t); return x.getUTCDate()+" "+MO[x.getUTCMonth()]; };
+  const f1 = v => (Math.round(v*10)/10).toString();
+  const W=250, H=168, pL=28, pR=8, pT=26, pB=18;
+  const px = t => pL+(t-t0)/(t1-t0)*(W-pL-pR);
+  const ink = "var(--fg)", mut = "var(--mut)", acc = "var(--accent)", grey = "#9ba1a8";
+  const panel = p => {
+    const timed = p.unit==="s", u = timed ? " s" : " kg";
+    const e = timed ? p.points.map(x=>({t:T(x.date),v:x.secs,x}))
+                    : p.points.filter(x=>x.e1rm!=null).map(x=>({t:T(x.date),v:x.e1rm,x}));
+    const step = p.points.map(x=>({t:T(x.date),v:timed?x.secs:x.kg}));
+    const pre = (!timed && p.predecessor) ? p.predecessor.points.map(x=>({t:T(x.date),v:x.e1rm,x})) : [];
+    const outl = timed ? [] : (p.outliers||[]);
+    const vals = [...e,...step,...pre].map(o=>o.v).concat(outl.map(o=>o.e1rm));
+    const lo0=Math.min(...vals), hi0=Math.max(...vals), pad=(hi0-lo0)*0.2||5, lo=lo0-pad, hi=hi0+pad*1.6;
+    const py = v => H-pB-(v-lo)/(hi-lo)*(H-pT-pB);
+    // ~4 round y ticks
+    const raw=(hi-lo)/4, mag=Math.pow(10,Math.floor(Math.log10(raw))), stp=[1,2,2.5,5,10].map(k=>k*mag).find(k=>k>=raw);
+    let g="", yl="";
+    for(let v=Math.ceil(lo/stp)*stp; v<=hi; v+=stp){ const y=py(v).toFixed(1);
+      g+=`<line x1="${pL}" x2="${W-pR}" y1="${y}" y2="${y}"/>`;
+      yl+=`<text class="axis" x="${pL-4}" y="${(+y+3).toFixed(1)}" text-anchor="end">${+v.toFixed(1)}</text>`; }
+    const xl = ticks.map(t=>`<text class="axis" x="${px(t).toFixed(1)}" y="${H-4}" text-anchor="middle">${dl(t)}</text>`).join("");
+    const path = pts => pts.map((o,i)=>(i?"L":"M")+px(o.t).toFixed(1)+" "+py(o.v).toFixed(1)).join(" ");
+    const stepPath = pts => pts.map((o,i)=>(i?`H${px(o.t).toFixed(1)} V${py(o.v).toFixed(1)}`:`M${px(o.t).toFixed(1)} ${py(o.v).toFixed(1)}`)).join(" ");
+    let svg = "";
+    // Rep definition tightened here: a dip right after it is the ruler, not the muscle.
+    if(p.clean_from){ const xv=px(T(p.clean_from)), x=xv.toFixed(1);
+      // Text on whichever side of the marker has room, so it never runs off the panel's edge.
+      const r = xv > (pL+W-pR)/2, tx = (r ? xv-3 : xv+3).toFixed(1), an = r ? "end" : "start";
+      svg += `<line x1="${x}" x2="${x}" y1="${pT}" y2="${H-pB}" stroke="${grey}" stroke-dasharray="1.5 2.5"/>`
+           + `<text x="${tx}" y="${H-pB-14}" text-anchor="${an}" font-size="8.5" fill="${mut}">clean reps</text>`
+           + `<text x="${tx}" y="${H-pB-4}" text-anchor="${an}" font-size="8.5" fill="${mut}">counted from here</text>`; }
+    if(pre.length){
+      svg += `<path d="${path(pre)}" fill="none" stroke="${grey}" stroke-width="1.3" stroke-dasharray="4 3"/>`
+           + pre.map(o=>`<circle cx="${px(o.t).toFixed(1)}" cy="${py(o.v).toFixed(1)}" r="2.4" fill="${grey}"><title>${o.x.date} · ${p.predecessor.label} · ${f1(o.x.kg)} kg × ${f1(o.x.reps)} → est. ${o.x.e1rm} kg</title></circle>`).join("")
+           + `<text x="${px(pre[0].t).toFixed(1)}" y="${(py(pre[0].v)-6).toFixed(1)}" font-size="8.5" fill="${grey}">${p.predecessor.label}</text>`;
+    }
+    svg += `<path d="${stepPath(step)}" fill="none" stroke="${acc}" stroke-opacity="${timed?0.35:0.25}" stroke-width="1.6"/>`;
+    if(e.length){
+      if(!timed) svg += `<path d="${path(e)}" fill="none" stroke="${acc}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      svg += e.map(o=>`<circle cx="${px(o.t).toFixed(1)}" cy="${py(o.v).toFixed(1)}" r="2.9" fill="${acc}" stroke="var(--panel)" stroke-width="1.2">`
+        +`<title>${o.x.date} · ${timed?`${o.x.secs} s`:`${f1(o.x.kg)} kg × ${f1(o.x.reps)} → est. 1RM ${o.x.e1rm} kg`}</title></circle>`).join("");
+      const a=e[0], z=e[e.length-1];
+      svg += `<text x="${px(a.t).toFixed(1)}" y="${(py(a.v)+(timed?13:-7)).toFixed(1)}" font-size="9.5" fill="${ink}">${Math.round(a.v)}${timed?u:""}</text>`;
+      // The last value carries its dose; anchored right of the point so it never runs off the panel.
+      const zx=px(z.t).toFixed(1);
+      // Above-left of the point. An off-line set's marker can sit in that box (the 2 Oct squat, four
+      // days before the last point): then the label rises clear above the marker, and the marker's own
+      // label goes to its left, as in the prototype.
+      const hits = outl.map(o=>({x:px(T(o.date)), y:py(o.e1rm)}))
+        .filter(o=>o.x>+zx-55 && o.x<=+zx+4 && o.y>py(z.v)-30 && o.y<py(z.v)+4);
+      const zy = hits.length ? Math.min(py(z.v), Math.min(...hits.map(o=>o.y))-6) : py(z.v);
+      svg += timed
+        ? `<text x="${zx}" y="${(zy-7).toFixed(1)}" text-anchor="end" font-size="10" font-weight="600" fill="${ink}">${Math.round(z.v)}${u}</text>`
+        : `<text x="${zx}" y="${(zy-17).toFixed(1)}" text-anchor="end" font-size="10" font-weight="600" fill="${ink}">${Math.round(z.v)}${u}</text>`
+          + `<text x="${zx}" y="${(zy-7).toFixed(1)}" text-anchor="end" font-size="8.5" font-weight="600" fill="${ink}">(${f1(z.x.kg)} × ${f1(z.x.reps)})</text>`;
+    }
+    outl.forEach(o=>{ const x=px(T(o.date)), y=py(o.e1rm);
+      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" fill="none" stroke="${acc}" stroke-width="1.4"><title>${o.date} · ${f1(o.kg)} kg × ${f1(o.reps)}: off the working line → est. ${o.e1rm} kg</title></circle>`
+           + `<text x="${(x-7).toFixed(1)}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="${ink}">${f1(o.kg)} ×${f1(o.reps)} → est. ${Math.round(o.e1rm)}</text>`; });
+    const pct = p.change_pct==null ? "" : `<tspan fill="${mut}" font-weight="400">  ${p.change_pct>=0?"+":""}${Math.round(p.change_pct)}%</tspan>`;
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${p.title}"><text x="2" y="12" font-size="11" font-weight="600" fill="${ink}">${p.title}${pct}</text>`
+         + `<g class="grid">${g}</g>${yl}${xl}${svg}</svg>`;
+  };
+  const skipped = d.progress_skipped ? ` · <span class="est" title="rows a chart could not read — strength.py logs each at warn level">${d.progress_skipped} row(s) unreadable</span>` : "";
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.6rem 1rem;margin:.2rem 0 .4rem">${lifts.map(panel).join("")}</div>`
+       + `<div class="muted" style="font-size:.72rem;margin-bottom:.8rem">line = est. 1-rep max from weight × reps (Epley; trend, not a true max) · faint step = working load · grey = the lift it replaced · % = change in est. max (plank: in seconds)${skipped}</div>`;
+}
 // Resistance work has no HR trace, so it gets its own panel rather than a row in the session table:
 // load and reps are the measurement, and there is nothing to draw a sparkline from. Volume load is
 // labelled as an index on purpose — 30 kg of pulldown is not 30 kg of squat, so it is comparable
@@ -452,6 +537,7 @@ async function loadStrength(){
   const wline = withheld.length
     ? `<div class="muted" style="font-size:.72rem;margin-top:.4rem">In the log but not on this panel: ${withheld.join(", ")}.</div>` : "";
   el.innerHTML = `<h2>Strength <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— no HR; load and reps are the measurement</span></h2>
+    ${strengthProgress(d)}
     <div class="row" style="gap:1rem;align-items:flex-start;flex-wrap:wrap">
       <div style="flex:1;min-width:260px"><table class="compact">
         <thead><tr><th>movement</th><th class="num">best</th><th class="num" title="times logged">n</th><th></th></tr></thead>

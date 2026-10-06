@@ -197,8 +197,12 @@ def superseded(rows):
     return out
 
 
-def entries():
-    """(rows, skipped, notes, retracted). Rows that do not satisfy REQUIRED are dropped, not fatal."""
+def entries(live=None):
+    """(rows, skipped, notes, retracted). Rows that do not satisfy REQUIRED are dropped, not fatal.
+
+    `live`, if given, is a list that receives every parsed row the athlete's corrections left
+    standing, in the same (date, ts) order and BEFORE the MEASURES/REQUIRED gate and per_set() —
+    raw, as written. progress() needs exactly that and nothing narrower: see its comment."""
     if not LOG.exists():
         return [], 0, 0, 0
     parsed, skipped = [], 0
@@ -215,6 +219,9 @@ def entries():
     # that silently missed such a row would be the dangling-ref case, reported as an error, for a
     # row that is sitting right there.
     gone = superseded(parsed)
+    if live is not None:
+        live.extend(sorted((r for r in parsed if rid(r) not in gone),
+                           key=lambda r: (str(r.get("date", "")), str(r.get("ts", "")))))
     out, notes, retracted = [], 0, 0
     for r in parsed:
         if rid(r) in gone:
@@ -328,8 +335,182 @@ def volume(r):
     return round(float(r["sets"]) * float(r["reps"]) * float(kg), 1)
 
 
+# Per-lift progress: the small-multiples chart on the dashboard's Strength panel, one panel per lift.
+# The design is the coach's (agents/coach/lib/strength.py, approved by the athlete 2026-10-06) and
+# the rules here are that prototype's, computed once so the browser only draws.
+#
+# Why an estimated 1RM and not the load: on a held weight the reps rise for weeks (row, pulldown,
+# OHP flat on kg while the reps climbed), and a load line reads that as a stall. Epley folds reps
+# into one number on the kg axis. Epley assumes sets to failure and his mostly stop short, so the
+# absolute values UNDER-read — the panel says "trend, not a true max", and so does this.
+#
+# Read from the RAW live rows (entries(live=...)), not from the gated, per_set()-normalised ones,
+# for two measured reasons. (1) A sets_detail row — the 18 Sep OHP ramp, the 2 Oct squat with the
+# accidental 70 kg x5 — carries none of MEASURES (its load lives inside the list), so the gate
+# counts it as a note and the movement history never sees it. Those two days are the first OHP
+# point and the squat outlier. (2) per_set() turns a per-set rep list into its TOP set, which is
+# right for "best" and wrong here: the 30 Sep OHP [10, 10, 7] is a 9-rep effort, not a 10-rep one.
+# Superseded rows are already gone from `live`, so a correction applies here as everywhere else.
+#
+# (lift, title, predecessor, predecessor label, predecessor kg scale, unit). Order = the weights day.
+# The predecessor is the lift this one replaced, drawn grey in the same panel so the lineage reads;
+# the DB shoulder press is doubled because it was two dumbbells, against one barbell.
+PROGRESS = (
+    ("db-chest-press", "DB chest press (per dumbbell)", None, None, 1.0, "kg"),
+    ("back-squat", "Back squat", "goblet-squat", "goblet squat", 1.0, "kg"),
+    ("standing-barbell-calf-raise", "Standing calf raise", None, None, 1.0, "kg"),
+    ("barbell-overhead-press", "Overhead press", "db-shoulder-press", "DB press, both hands", 2.0, "kg"),
+    ("seated-row", "Seated row", None, None, 1.0, "kg"),
+    ("leg-curl-technogym-isotonic", "Leg curl", None, None, 1.0, "kg"),
+    ("lat-pulldown", "Lat pulldown", None, None, 1.0, "kg"),
+    ("plank", "Plank", None, None, 1.0, "s"),
+)
+# A sets_detail set this far below a working set's reps is not the working set: the 2 Oct squat
+# opened 70 kg x5 by plate miscalculation. Drawn apart, at its own Epley estimate, never joined.
+OUTLIER_REPS = 8
+
+
+def epley(kg, reps):
+    return kg * (1.0 + reps / 30.0)
+
+
+def _num(v, what):
+    """A float, or ValueError naming the field. bool is refused: this log's writer reaches for a bare
+    `true` when it lacks a field (see resolve()), and float(True) is a plausible 1.0."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValueError("%s is %r, not a number" % (what, v))
+    return float(v)
+
+
+def _reps(r):
+    """Reps for one row: clean_reps, else reps, else reps_approx; a per-set list is its MEAN (the
+    effort across the sets, not the best one). None when the row holds no count at all."""
+    for k in ("clean_reps", "reps", "reps_approx"):
+        v = r.get(k)
+        if v is None:
+            continue
+        if isinstance(v, list):
+            xs = [_num(x, k) for x in v if x is not None]
+            if xs:
+                return sum(xs) / len(xs)
+            continue
+        return _num(v, k)
+    return None
+
+
+def _bad(bad, r, e):
+    """Skip-and-count one unreadable row, once however many panels trip on it (a sets_detail row is
+    read for both its day point and its outliers)."""
+    if rid(r) in bad:
+        return
+    bad.add(rid(r))
+    errlog.skip("strength.py: progress row unreadable",
+                ValueError("%s: %s" % (e, json.dumps(r, ensure_ascii=False)[:200])))
+
+
+def _day_points(rows, ex, scale, unit, bad):
+    """One point per date for `ex`. Rows of a day merge in log order: the last load wins, and a later
+    row with reps but no load (an amendment) still supplies the count. A row that will not parse is
+    skipped and counted in `bad`, not allowed to take the day or the feed with it."""
+    days = OrderedDict()
+    for r in rows:
+        # A dateless row is the gate's to count (REQUIRED); here it simply has no day to land on.
+        if r.get("ex") == ex and r.get("date") is not None:
+            days.setdefault(r["date"], []).append(r)
+    out = []
+    for d, rs in days.items():
+        kg = reps = secs = None
+        for r in rs:
+            # Parsed whole, then committed: a row that fails half-way contributes nothing, rather
+            # than its load without its reps.
+            try:
+                if unit == "s":
+                    if r.get("secs") is not None:
+                        secs = _num(r["secs"], "secs")
+                    continue
+                k, n = None, _reps(r)
+                sd = r.get("sets_detail")
+                if sd:
+                    last = sd[-1]                    # the last set is the working set
+                    k = _num(last["kg"], "sets_detail kg")
+                    n = _num(last["reps"], "sets_detail reps") if last.get("reps") else None
+                elif load(r) is not None:
+                    k = _num(load(r), "kg")
+            except (ValueError, TypeError, KeyError, IndexError) as e:
+                _bad(bad, r, e)
+                continue
+            if k is not None:
+                kg = k
+            if n is not None:
+                reps = n
+        if unit == "s":
+            if secs is not None:
+                out.append({"date": d, "secs": secs})
+            continue
+        if kg is None:
+            continue
+        kg *= scale
+        p = {"date": d, "kg": round(kg, 2)}
+        if reps:                                   # no count -> the load step shows, no e1RM point
+            p["reps"] = round(reps, 2)
+            p["e1rm"] = round(epley(kg, reps), 1)
+        out.append(p)
+    return out
+
+
+def _outliers(rows, ex, bad):
+    seen, out = set(), []
+    for r in rows:
+        if r.get("ex") != ex or not r.get("sets_detail") or r.get("date") is None:
+            continue
+        try:
+            for st in r["sets_detail"]:
+                kg = _num(st["kg"], "sets_detail kg")
+                n = st.get("reps")
+                if n is None or kg <= 0:
+                    continue
+                n = _num(n, "sets_detail reps")
+                key = (r["date"], kg, n)            # the 18 Sep OHP ramp is logged twice, verbatim
+                if n < OUTLIER_REPS and key not in seen:
+                    seen.add(key)
+                    out.append({"date": r["date"], "kg": kg, "reps": n, "e1rm": round(epley(kg, n), 1)})
+        except (ValueError, TypeError, KeyError) as e:
+            _bad(bad, r, e)
+    return out
+
+
+def progress(rows):
+    """({lift: panel}, rows skipped). Lifts with nothing logged are left out, not drawn empty."""
+    bad, out = set(), {}
+    for ex, title, pre, pre_label, pre_scale, unit in PROGRESS:
+        pts = _day_points(rows, ex, 1.0, unit, bad)
+        if not pts:
+            continue
+        p = {"title": title, "unit": unit, "points": pts, "predecessor": None,
+             "outliers": [], "clean_from": None, "change_pct": None}
+        key = "secs" if unit == "s" else "e1rm"
+        v = [x[key] for x in pts if x.get(key) is not None]
+        if len(v) >= 2 and v[0]:
+            p["change_pct"] = round(100.0 * (v[-1] - v[0]) / v[0], 1)
+        if unit == "kg":
+            p["outliers"] = _outliers(rows, ex, bad)
+            # The rep definition tightened on this date (clean reps only), so a dip right after it
+            # is the ruler changing, not strength lost. The panel marks it.
+            cr = [str(r["date"]) for r in rows if r.get("ex") == ex and r.get("clean_reps")
+                  and r.get("date") is not None]
+            p["clean_from"] = min(cr) if cr else None
+            if pre:
+                pp = [x for x in _day_points(rows, pre, pre_scale, unit, bad) if x.get("e1rm")]
+                if pp:
+                    p["predecessor"] = {"ex": pre, "label": pre_label, "scale": pre_scale,
+                                        "points": pp}
+        out[ex] = p
+    return out, len(bad)
+
+
 def build():
-    rows, skipped, notes, retracted = entries()
+    live = []
+    rows, skipped, notes, retracted = entries(live)
     by_date = OrderedDict()
     movements = defaultdict(list)
 
@@ -399,6 +580,7 @@ def build():
                   "kind": "weighted" if weighted else ("timed" if timed else "bodyweight"),
                   "last": hist[-1] if hist else None}
 
+    prog, prog_bad = progress(live)
     return {"generated": int(time.time()),
             "count": len(sessions),
             "entries": len(rows),
@@ -424,7 +606,13 @@ def build():
             # Stated in the feed so the UI can label it honestly rather than implying kilograms.
             "volume_note": "volume load = sets x reps x kg; an index comparable only against itself",
             "sessions": sessions,
-            "movements": mv}
+            "movements": mv,
+            # Per-lift estimated-1RM series for the panel's small multiples; see PROGRESS.
+            "progress": prog,
+            "progress_note": "line = est. 1-rep max from weight x reps (Epley; trend, not a true max)",
+            # Rows a progress panel could not read, counted for the same reason `skipped` is.
+            # Those rows still reach the tables above if they pass the gate; this is the chart's count.
+            "progress_skipped": prog_bad}
 
 
 def main(argv):
@@ -433,9 +621,10 @@ def main(argv):
     out.parent.mkdir(parents=True, exist_ok=True)
     json.dump(data, open(out, "w"), separators=(",", ":"))
     print("strength: %d session(s), %d entries, %d movement(s), %d skipped, %d note/cardio row(s),"
-          " %d with no set count, %d superseded -> %s"
+          " %d with no set count, %d superseded, %d progress panel(s) (%d row(s) unreadable) -> %s"
           % (data["count"], data["entries"], len(data["movements"]), data["skipped"],
-             data["notes"], data["sets_unknown"], data["superseded"], out))
+             data["notes"], data["sets_unknown"], data["superseded"], len(data["progress"]),
+             data["progress_skipped"], out))
     return 0
 
 
