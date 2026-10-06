@@ -11,6 +11,9 @@ particular interest, and suggest only the good ones.
     bookscout library "<regex>"        matching titles in the operator's Audible library, JSON
     bookscout profile                  the library's taste profile (genres, authors, recent finishes)
     bookscout recent [N]               the last N reviewed books, with verdicts
+    bookscout table [--subject S] [--min-interest high|medium] [--audible] [--days N] [--json]
+                                       every recorded book as a table (latest verdict per book)
+    bookscout run --backfill N         judge Culture articles from the last N days of the index
 
 HOW ONE ARTICLE IS HANDLED
   1. Culture RSS via webscout's `feed` (one request a day; feeds are allowed traffic, see below).
@@ -44,6 +47,14 @@ RECORD = Path.home() / "projects/private-data/books/economist-culture.jsonl"
 STATE = Path.home() / ".local/state/bookscout/state.json"
 AUTH = Path.home() / ".config/claude-dev/audible/auth.json"
 MAX_SUGGEST = 2
+# What the operator said they want (2026-10-06): "all kinds of history, biographies and the best
+# polemics". Polemics only when the review is strong. Shown to the judge and in `profile`.
+STATED = ("all kinds of history (any period, any region), biographies and memoirs of consequential "
+          "people, and the BEST polemics (only when the review is strongly positive)")
+SUBJECTS = ["history", "biography", "memoir", "polemic", "politics", "economics", "science",
+            "technology", "nature", "health", "philosophy", "religion", "society", "arts", "music",
+            "food", "travel", "sport", "business", "war", "literary fiction", "genre fiction",
+            "poetry", "true crime"]
 BLOCK_BACKOFF_S = 24 * 3600
 AUDIBLE_PD = "https://www.audible.co.uk/pd/%s"
 
@@ -91,7 +102,7 @@ def profile():
     g = collections.Counter(x for r in t for x in r.get("genres") or [])
     a = collections.Counter(x for r in t for x in r.get("authors") or [])
     fin = sorted((r for r in t if r.get("finished")), key=lambda r: r.get("purchased") or "", reverse=True)
-    return {"titles": len(t), "finished": len(fin), "top_genres": g.most_common(25),
+    return {"stated_interests": STATED, "titles": len(t), "finished": len(fin), "top_genres": g.most_common(25),
             "top_authors": a.most_common(30),
             "recent_finished": ["%s — %s" % (r["title"], ", ".join(r.get("authors") or [])) for r in fin[:40]],
             "recent_purchases": ["%s — %s" % (r["title"], ", ".join(r.get("authors") or [])) for r in t[:25]]}
@@ -135,6 +146,23 @@ def culture_items(days):
     return out
 
 
+def index_items(days):
+    """Culture articles from the local Economist index (webscout search_articles), for backfill. The
+    index matches words in title/abstract only, so a few broad terms are unioned."""
+    import webscout
+    cut = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    seen, out = set(), []
+    for q in ("book", "books", "novel", "novels", "memoir", "biography", "history", "author",
+              "writer", "historian", "argues", "polemic", "read"):
+        r = json.loads(webscout.call("search_articles", {"query": q, "limit": 100}, timeout=120))
+        for h in r.get("hits") or []:
+            if h.get("section") == "culture" and h["date"] >= cut and h["url"] not in seen:
+                seen.add(h["url"])
+                out.append({"url": h["url"], "title": h["title"], "abstract": h.get("abstract") or "",
+                            "date": h["date"]})
+    return sorted(out, key=lambda a: a["date"])
+
+
 def review_text(url, st):
     """The article body, or None. One try, and none at all inside the block back-off."""
     if time.time() < st.get("blocked_until", 0):
@@ -172,23 +200,31 @@ Do this:
    best. Never guess silently.
 3. Search Audible for it (`bookscout audible "<title> <author>" --title "<title>" --author "<author>"`).
    match = "exact" only if title AND author agree; "likely"; or "none" (not on Audible UK).
-4. Sentiment of the REVIEW toward the book: positive | mixed | negative | unclear, with a <=20-word
-   note in your own words. On abstract alone be careful: "less of Agrippa than previous works" is mixed.
-5. 3-6 lowercase topic tags (e.g. "roman history", "biography", "neuroscience", "literary fiction").
-6. Interest for THIS listener from `bookscout profile` (and `library` for the author/series):
-   high | medium | low with a <=20-word reason that cites the library (an author they own, a genre they
-   finish). Already owned => interest "owned".
+4. Sentiment of the REVIEW toward the book: rave | positive | mixed | negative | unclear, with a
+   <=20-word note in your own words. On abstract alone be careful: "less of Agrippa than previous
+   works" is mixed, and most abstracts only support "unclear".
+5. Tags, two kinds:
+   - subjects: 1-3 from EXACTLY this list: {subjects}
+     A book arguing a case against something is "polemic" as well as its field.
+   - topics: 3-6 free lowercase tags, specific (e.g. "roman republic", "soviet gulag", "soil ecology").
+   - period and place when it is history or biography (e.g. "1st century BC", "Rome"); else null.
+6. Interest for THIS listener. Their stated interests: {stated}. Then their library, from `bookscout
+   profile` (and `library` for the author/series): high | medium | low with a <=20-word reason that
+   cites the stated interest or the library (an author they own, a genre they finish). A polemic is
+   "high" only with a rave. Already owned => interest "owned".
 
 Reply with ONLY minified JSON:
 {{"books":[{{"title":"","author":"","name_source":"text|abstract|title|inferred","asin":null,
 "audible_title":null,"runtime_min":null,"rating":null,"match":"exact|likely|none","sentiment":"",
-"sentiment_note":"","topics":[],"interest":"high|medium|low|owned","interest_reason":""}}]}}"""
+"sentiment_note":"","subjects":[],"topics":[],"period":null,"place":null,
+"interest":"high|medium|low|owned","interest_reason":""}}]}}"""
 
 
 def judge(art, text):
     import run
     body = ("Review text:\n" + text) if text else "(no review text: judge from title and abstract only)"
-    out = run.run_agent("bard-books", PROMPT.format(has_text=bool(text), body=body, **art), timeout=900)
+    out = run.run_agent("bard-books", PROMPT.format(has_text=bool(text), body=body, stated=STATED,
+                                                    subjects=", ".join(SUBJECTS), **art), timeout=900)
     i, j = out.find("{"), out.rfind("}")
     if i < 0:
         raise ValueError("no JSON in bard's answer: %r" % out[:200])
@@ -196,7 +232,7 @@ def judge(art, text):
 
 
 def worthy(b, has_text):
-    return (b.get("asin") and b.get("match") == "exact" and b.get("sentiment") == "positive"
+    return (b.get("asin") and b.get("match") == "exact" and b.get("sentiment") in ("rave", "positive")
             and b.get("interest") == "high"
             and (has_text or b.get("name_source") in ("abstract", "title")))
 
@@ -217,9 +253,11 @@ def send(text):
     subprocess.run(["/usr/bin/python3", "-c", code], input=text, text=True, check=True, timeout=60)
 
 
-def run_pass(days, dry):
+def run_pass(days, dry, backfill=0):
     st = load_state()
-    arts = [a for a in culture_items(days) if a["url"] not in st["seen"]]
+    src = index_items(backfill) if backfill else culture_items(days)
+    arts = [a for a in src if a["url"] not in st["seen"]]
+    quiet = bool(backfill)                       # a backfill fills the record; it never pings Telegram
     picks, n_books = [], 0
     for art in arts:
         text = review_text(art["url"], st) if not dry else None
@@ -244,7 +282,7 @@ def run_pass(days, dry):
                 picks.append((b, art))
         save_state(st)
     picks = picks[:MAX_SUGGEST]
-    if picks and not dry:
+    if picks and not dry and not quiet:
         send("From The Economist's culture pages, worth a listen:\n\n" +
              "\n\n".join(suggestion(b, a) for b, a in picks))
         st["suggested"] += [b["asin"] for b, _ in picks]
@@ -253,10 +291,59 @@ def run_pass(days, dry):
           % (len(arts), n_books, len(picks), " (dry run)" if dry else ""), flush=True)
 
 
+RANK = {"high": 0, "owned": 1, "medium": 2, "low": 3}
+
+
+def rows():
+    """Latest verdict per (book, author): a re-judged article supersedes its earlier record."""
+    if not RECORD.exists():
+        return []
+    best = {}
+    for ln in RECORD.read_text().splitlines():
+        r = json.loads(ln)
+        for b in r.get("books") or []:
+            k = ((b.get("title") or "").lower(), (b.get("author") or "").lower())
+            best[k] = {**b, "date": r["date"], "article": r["title"], "url": r["url"], "text": r["text"]}
+    return list(best.values())
+
+
+def table(subject=None, min_interest=None, audible=False, days=None, as_json=False):
+    rs = rows()
+    if subject:
+        rs = [b for b in rs if subject.lower() in [x.lower() for x in (b.get("subjects") or []) + (b.get("topics") or [])]]
+    if min_interest:
+        rs = [b for b in rs if RANK.get(b.get("interest"), 9) <= RANK[min_interest]]
+    if audible:
+        rs = [b for b in rs if b.get("asin") and b.get("match") in ("exact", "likely")]
+    if days:
+        cut = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+        rs = [b for b in rs if b["date"] >= cut]
+    rs.sort(key=lambda b: (RANK.get(b.get("interest"), 9), b["date"]), reverse=False)
+    if as_json:
+        return json.dumps(rs, ensure_ascii=False, indent=1)
+    if not rs:
+        return "No recorded books match."
+    def aud(b):
+        if not b.get("asin") or b.get("match") == "none":
+            return "-"
+        h = "%dh%02d" % divmod(b["runtime_min"], 60) if b.get("runtime_min") else ""
+        return " ".join(x for x in (h, ("★%s" % b["rating"]) if b.get("rating") else "",
+                                    "?" if b.get("match") == "likely" else "") if x) or "yes"
+    head = "| Book | Author | Subjects | Topics | Review | Interest | Audible | Reviewed |\n|---|---|---|---|---|---|---|---|"
+    lines = ["| %s | %s | %s | %s | %s%s | %s | %s | %s |" % (
+        b.get("audible_title") or b.get("title"), b.get("author"), ", ".join(b.get("subjects") or []),
+        ", ".join((b.get("topics") or [])[:3]), b.get("sentiment"), "" if b.get("text") else "*",
+        b.get("interest"), aud(b), b["date"]) for b in rs]
+    return head + "\n" + "\n".join(lines) + "\n\n* judged on the abstract only. Audible ? = likely match."
+
+
 def main():
     ap = argparse.ArgumentParser(prog="bookscout")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run"); r.add_argument("--dry", action="store_true"); r.add_argument("--days", type=int, default=10)
+    r.add_argument("--backfill", type=int, default=0)
+    t = sub.add_parser("table"); t.add_argument("--subject"); t.add_argument("--min-interest", choices=["high", "medium"])
+    t.add_argument("--audible", action="store_true"); t.add_argument("--days", type=int); t.add_argument("--json", action="store_true")
     a = sub.add_parser("audible"); a.add_argument("keywords", nargs="?", default="")
     a.add_argument("--title", default=""); a.add_argument("--author", default="")
     l = sub.add_parser("library"); l.add_argument("rx")
@@ -264,7 +351,9 @@ def main():
     rc = sub.add_parser("recent"); rc.add_argument("n", nargs="?", type=int, default=15)
     x = ap.parse_args()
     if x.cmd == "run":
-        return run_pass(x.days, x.dry)
+        return run_pass(x.days, x.dry, x.backfill)
+    if x.cmd == "table":
+        return print(table(x.subject, x.min_interest, x.audible, x.days, x.json))
     if x.cmd == "audible":
         out = audible_search(x.keywords, x.title, x.author)
     elif x.cmd == "library":
