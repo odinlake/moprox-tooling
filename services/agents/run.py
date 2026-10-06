@@ -23,6 +23,9 @@ AGENTS = {
     # The operator asked for this explicitly (2026-10-04): what is needed varies per book, so a
     # fixed script cannot do it. Never reached from Telegram; only docwatch calls it.
     "bard-curate": HOME / "projects/private-data/agents/bard",
+    # ...and for the operator's OWN listening (2026-10-06): bookscout's per-article judge. Read-only
+    # tools plus the bookscout verbs; never reached from Telegram.
+    "bard-books": HOME / "projects/private-data/agents/bard",
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -48,7 +51,8 @@ TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
 DRIVE_TOOL = "Bash(drive-put:*)"        # ...plus the one-verb Drive uploader (services/drive/drive-put)
 SHOPPING_TOOL = "Bash(shopping:*)"      # the household shopping list in HA (services/shopping)
-YOTO_TOOL = "Bash(yoto:*)"              # the ONE verb bard may run: player + playlist, nothing else
+YOTO_TOOL = "Bash(yoto:*)"              # bard's Yoto verb: player + playlist
+BOOKS_TOOL = "Bash(bookscout:*)"        # bard's books verb: Audible catalogue/library + review log
 THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
 # theming pushes feature BRANCHES and opens PRs, but never bypasses protections: deny force-push +
 # direct master/main pushes, the dangerous `gh` verbs (merge a PR, delete/archive a repo), and the
@@ -114,8 +118,12 @@ AGENT_FLAGS = {
     # does needs it and a children's speaker is not a place for improvisation.
     "bard": ["--model", "sonnet",
              "--permission-mode", "acceptEdits",
-             "--allowedTools", "Read,Grep,Glob,Edit,Write,%s,%s" % (YOTO_TOOL, CONVO_TOOL),
-             "--add-dir", str(SHARED_MEM)],   # bard-memory.md lives in the memory store; variadic: keep last
+             "--allowedTools", "Read,Grep,Glob,Edit,Write,%s,%s,%s" % (YOTO_TOOL, BOOKS_TOOL, CONVO_TOOL),
+             "--add-dir", str(SHARED_MEM), str(HOME / "projects/private-data/audible"),
+             str(HOME / "projects/private-data/books")],   # bard-memory.md lives in the memory store; variadic: keep last
+    "bard-books": ["--model", "sonnet",
+                   "--allowedTools", "Read,Grep,Glob,%s" % BOOKS_TOOL,
+                   "--add-dir", str(HOME / "projects/private-data/audible"), str(SHARED_MEM)],
     "bard-curate": ["--model", "sonnet",
                     "--dangerously-skip-permissions",
                     "--disallowedTools", CURATE_DENY,

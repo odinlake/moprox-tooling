@@ -19,7 +19,7 @@ from run import run_agent
 import tg, convo, tg_files
 
 DEV_INBOX = Path.home() / ".local/share/moprox/dev-requests.jsonl"
-ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming)\b[\s:,>\-]*", re.I)   # explicit address at the start
+ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming|bard)\b[\s:,>\-]*", re.I)   # explicit address at the start
 
 # The shopping list (services/shopping, 2026-10-05). Asking to SEE it is answered right here, with no
 # model call, because it is a lookup the operator wants in a second while standing in a shop.
@@ -91,18 +91,19 @@ def decide(rec):
     if SHOP_ANY.search(text): return "valet", "shopping list"
     last = convo.last_agent() or "coach"
     prompt = ("Route the operator's new Telegram message to ONE agent. Output ONLY "
-              '{"route":"coach|dev|steward|valet|theming","reason":"<short>"}.\n'
+              '{"route":"coach|dev|steward|valet|theming|bard","reason":"<short>"}.\n'
               "The most recent agent to speak was '%s' — if the new message reads as a continuation, "
               "affirmation, thanks, or short follow-up, route it THERE. Otherwise route by content: "
               "training / workouts / the plan / how a session went -> coach; homelab / dashboard / "
               "infra / code / 'the bot is broken' -> dev; the morning brief / news / markets / "
               "geopolitics / weather / 'more|less of X in the brief' -> valet; literary themes / the "
               "theme ontology / themeontology.org / stories & their themes / the theming repo -> "
-              "theming; questions about message routing or the agent setup itself -> steward."
+              "theming; entertainment for Mikael or the children -- books, audiobooks, Audible, what to "
+              "listen to or read next, the Yoto, stories -> bard; questions about message routing or the agent setup itself -> steward."
               "\n\nRecent conversation:\n%s\n\nNEW MESSAGE: %s"
               % (last, convo.transcript(12), text))
     d = _json(run_agent("steward", prompt, timeout=120)) or {}
-    route = d.get("route") if d.get("route") in ("coach", "dev", "steward", "valet", "theming") else last
+    route = d.get("route") if d.get("route") in ("coach", "dev", "steward", "valet", "theming", "bard") else last
     return route, d.get("reason", "steward judgement")
 
 # How an agent pulls conversation history on demand (it is NOT force-fed the transcript).
@@ -179,6 +180,12 @@ def handle(agent, rec):
             "theming (never master, never force) and say what you changed + that it awaits review. "
             "Reply concisely for Telegram, starting with #theming." % (text, HISTORY_NOTE), timeout=600)
         _reply("theming", reply, reply_to, started)
+    elif agent == "bard":
+        reply = run_agent("bard",
+            "Mikael sent you (#bard) this on Telegram:\n%r\n\n%s\n\nIt is about entertainment: his own "
+            "listening/reading (Audible, books, The Economist's reviews via `bookscout`) or the children's "
+            "Yoto. Act, then reply in a line or two, starting with #bard." % (text, HISTORY_NOTE), timeout=600)
+        _reply("bard", reply, reply_to, started)
     return agent
 
 def summarize_for_digest(old_text):

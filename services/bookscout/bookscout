@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stable command name for agents (Bash(bookscout:*)). Mirrors to ~/.local/bin/bookscout. Runs the
+# DEPLOYED tree under the audible venv (the `audible` package is not in the system python).
+exec /home/mikael/.local/share/moprox/audible-venv/bin/python /opt/moprox-tooling/services/bookscout/bookscout.py "$@"

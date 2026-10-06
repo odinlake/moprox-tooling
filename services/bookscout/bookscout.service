@@ -1,0 +1,16 @@
+# Economist Culture reviews -> books -> Audible -> conservative Telegram suggestions (#bard).
+# Source of truth: moprox-tooling/services/bookscout. Oneshot, driven by bookscout.timer.
+[Unit]
+Description=bookscout: Economist culture reviews checked against Audible
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+WorkingDirectory=/home/mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/mikael/.local/share/moprox/audible-venv/bin/python /opt/moprox-tooling/services/bookscout/bookscout.py run
+TimeoutStartSec=90min

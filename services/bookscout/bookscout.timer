@@ -1,0 +1,11 @@
+# Daily, late morning: Culture pieces land Thursday afternoon, plus odd ones midweek.
+[Unit]
+Description=bookscout daily pass
+
+[Timer]
+OnCalendar=*-*-* 11:20:00
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
