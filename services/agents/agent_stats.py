@@ -26,8 +26,15 @@ AGENT_DIRS = dict(_A)
 LEDGER_AGENTS = Path.home() / "projects/private-data/agents"   # icon home for agents run.py never launches
 
 
-def roster(rows):
-    return sorted(set(AGENT_DIRS) | {r.get("agent") for r in rows if r.get("agent")})
+def roster(rows, secs=30 * 86400):
+    """run.py's table, plus every agent the ledger saw inside the widest window on the panel.
+
+    Windowed, not all-history: an agent that is retired (or a name typed wrong once) would
+    otherwise keep a permanent zero row long after its last call. It ages out when its burn does.
+    """
+    cut = time.time() - secs
+    seen = {r.get("agent") for r in rows if r.get("agent") and (r.get("ts") or 0) >= cut}
+    return sorted(set(AGENT_DIRS) | seen)
 
 def _n(r, k):
     """Token counts, defensively. `r.get(k, 0)` returns None when the key EXISTS with a null value —
