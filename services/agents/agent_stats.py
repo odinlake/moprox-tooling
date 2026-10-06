@@ -57,7 +57,9 @@ def _icons():
     for a in AGENTS:
         try: out[a] = (Path.home() / ("projects/private-data/agents/%s/icon.svg" % a)).read_text().strip()
         except Exception as _e:
-            errlog.skip("agent_stats.py: agent icon", _e)
+            # total= so that losing EVERY icon (private-data unmounted, the agents/ dir renamed)
+            # reports at err instead of being one digit away from the routine two-missing warning.
+            errlog.skip("agent_stats.py: agent icon", _e, total=len(AGENTS))
             pass
     return out
 

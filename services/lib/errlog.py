@@ -23,6 +23,8 @@ USE
         except Exception as exc: skips.add(exc); continue
     skips.report(total=len(lines))                  # err-level IF anything was skipped
 
+    errlog.skip("parsing x", exc, total=len(rows))  # one-liner; total= is what reaches err level
+
     err("upload failed", exc)                       # one-off unexpected error
 """
 import atexit
@@ -84,15 +86,23 @@ class Skips:
         self.context = context
         self.n = 0
         self.first = None
+        self.total = None
 
-    def add(self, exc=None):
+    def add(self, exc=None, total=None):
         self.n += 1
         if self.first is None and exc is not None:
             self.first = exc
+        if total is not None:
+            self.total = total
 
     def report(self, total=None):
         if not self.n:
             return False
+        # Fall back to a denominator supplied per-record by add()/skip(). Without this, the only way
+        # to reach the err branch below was an explicit report(total=...), which the skip() API has
+        # no way to call — see the comment on skip().
+        if total is None:
+            total = self.total
         d = f" of {total}" if total else ""
         first = f" (first: {type(self.first).__name__}: {self.first})" if self.first else ""
         if total and self.n >= total:
@@ -109,12 +119,21 @@ class Skips:
 _registry = {}
 
 
-def skip(context, exc=None):
-    """Record a skipped record. Reported once at process exit, never per-record."""
+def skip(context, exc=None, *, total=None):
+    """Record a skipped record. Reported once at process exit, never per-record.
+
+    `total` is how many records the loop is iterating over, and it is the ONLY way a skip() site can
+    reach the err-level "ALL n of n unusable" report above — _report_all() calls report() with no
+    argument, so without a denominator every skip() site is pinned at warning however much of its
+    input failed. That is the exact shape this module was written to prevent: measured 2026-10-06,
+    agent_stats._icons() losing all 8 of 8 agent icons printed
+    `<4>agent_stats.py: agent icon: skipped 8 unusable record(s)`, which with the digit masked is
+    the same string as the live two-missing-icons warning the dashboard emits every 2 minutes.
+    Optional, so the ~30 existing sites keep working unchanged and opt in one at a time."""
     s = _registry.get(context)
     if s is None:
         s = _registry[context] = Skips(context)
-    s.add(exc)
+    s.add(exc, total)
 
 
 @atexit.register
