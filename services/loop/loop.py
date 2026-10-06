@@ -1245,6 +1245,43 @@ def refresh_repos():
                 RuntimeError(_clip(r.stderr or r.stdout, 200)))
 
 
+def retire_answered(led, cyc):
+    """Close the disputes this cycle's accepted claims answered, and say who closed them.
+
+    `led["disputed"]` had no removal path at all: an entry left only by ageing off the 50-slot ring.
+    So an objection that was answered, verified and published came back in the next prompt as open
+    work — while the accepted answer sat in the one digest section with no length bound and was the
+    first thing the byte slice destroyed. Measured at cycle 585: 13 of the 50 disputed entries were
+    already answered by a later accepted claim, 3 of the 6 on display were, and ONE objection
+    (c580 [check]) had been answered four times — cycles 581, 582 and 583 each published a separate
+    moprox-memory fact for the same two prongs, and 584 was disputed for restating them.
+
+    A disputed claim is published nowhere, so this moves rather than deletes: the entry goes to
+    `led["resolved"]` with the answering cycle recorded, and the digest shows it as one line. If the
+    match is wrong the agent can see the pairing and reopen it; nothing is lost either way.
+    """
+    import re as _re
+    fresh = [a for a in (led.get("accepted") or []) if a.get("cycle") == cyc]
+    if not fresh:
+        return []
+    named = set()
+    for a in fresh:
+        named |= {int(m) for m in _re.findall(r"(?:cycle[- ]|\bc)(\d{1,4})\b",
+                                             a.get("claim") or a.get("item") or "")}
+    keep, moved = [], []
+    for e in led.get("disputed") or []:
+        c = e.get("cycle")
+        if c in named and c < cyc:
+            e = dict(e, answered_by=cyc)
+            moved.append(e)
+        else:
+            keep.append(e)
+    if moved:
+        led["disputed"] = keep
+        led["resolved"] = (led.get("resolved") or []) + moved
+    return [e.get("cycle") for e in moved]
+
+
 def ledger_digest(led, budget=26000):
     """The prompt's view of the ledger — clipped per section, not by one slice off the top.
 
@@ -1291,22 +1328,28 @@ def ledger_digest(led, budget=26000):
 
     dis = list(led.get("disputed") or [])
 
-    def build(olen, n_old, clip_old, clip_acc, clip_dis, omitted):
+    def build(olen, n_old, clip_old, clip_acc, clip_dis, omitted, n_acc=None):
         # `disputed` sits ahead of the recoverable sections deliberately. It is the one thing in
         # here that exists nowhere else, and the last-resort slice below eats the tail — so the
         # tail must never be it. Until cycle 86 `disputed` was last, and cycle 86's own prompt was
         # cut 1649 chars short: it lost the whole newest dispute (c82) and never knew.
         old = dis[:-6]
+        acc = led.get("accepted") or []
         return {
             "_reading": "accepted claims are clipped to a line — the full fact is published as "
                         "moprox-memory/<slug>.md. disputed claims are published NOWHERE, so what "
-                        "is here is all there is; disputed_older is the same list, one line each.",
+                        "is here is all there is; disputed_older is the same list, one line each. "
+                        "`resolved` is a dispute a later accepted claim already answered: it is "
+                        "CLOSED work — read the named cycle's fact in moprox-memory before "
+                        "touching it.",
             "_omitted": omitted or "nothing — this digest is complete",
             "open": led.get("open") or [],
             "inflight": led.get("inflight"),
+            "resolved": ["c%s answered by c%s" % (e.get("cycle"), e.get("answered_by"))
+                         for e in (led.get("resolved") or [])[-12:]],
             "disputed": [entry(e, clip_dis, objs=2, olen=olen) for e in dis[-6:]],
             "tried": [entry(e, 300) for e in (led.get("tried") or [])[-20:]],
-            "accepted": [entry(e, clip_acc) for e in (led.get("accepted") or [])],
+            "accepted": [entry(e, clip_acc) for e in (acc if n_acc is None else acc[-n_acc:])],
             "disputed_older": [entry(e, clip_old) for e in old[-n_old:] if n_old],
         }
 
@@ -1327,13 +1370,30 @@ def ledger_digest(led, budget=26000):
     # ordered by cost as before — but inside a stage the search is exact. ~n_old json.dumps of a
     # 26 kB structure per stage, once per cycle: microseconds, and the thing being bought is the
     # only copy of a rejected claim.
+    #
+    # `accepted` was the one section with NO bound, and it is the one that grows every cycle. So
+    # once every rung above had been spent the fit fell through to the raw byte slice at the bottom,
+    # which eats the TAIL — and `accepted` is emitted in cycle order, so the bytes it destroyed were
+    # always the NEWEST findings: exactly the ones that retire the disputes printed above them.
+    # Measured at cycle 585 (200 accepted, newest c583): the digest rendered at 29858 chars, the
+    # slice cut `accepted` at c473, and all 36 entries from c474 on were absent — including c581,
+    # c582 and c583, the three published answers to the c580 objection the same digest was offering
+    # as open work. The same ledger at budget=200000 renders complete in 60245 chars.
+    # So `accepted` gets the same treatment disputed_older already had: keep the MOST that fits,
+    # newest first, exactly rather than in jumps, and name the loss in `_omitted`.
     n_old = len(dis[:-6])
+    n_acc_all = len(led.get("accepted") or [])
     stages = [(1600, 140, 160, 450), (1600, 140, 120, 450), (1200, 140, 120, 450),
               (900, 140, 90, 450), (600, 140, 60, 300), (400, 100, 60, 200)]
-    ladder = [(olen, n, clip_old, clip_acc, clip_dis)
+    ladder = [(olen, n, clip_old, clip_acc, clip_dis, None)
               for olen, clip_old, clip_acc, clip_dis in stages
               for n in range(n_old, -1, -1)]
-    for olen, n, clip_old, clip_acc, clip_dis in ladder:
+    # Last resort before the byte slice: hardest clipping, no disputed_older, and shed accepted
+    # claims from the OLD end one at a time. These are the only entries in the digest whose full
+    # text is published elsewhere, which is why they go last.
+    ladder += [(400, 0, 100, 60, 200, k) for k in range(n_acc_all - 1, -1, -1)]
+
+    def render(olen, n, clip_old, clip_acc, clip_dis, n_acc):
         omitted = []
         if n < n_old:
             omitted.append(f"disputed_older: {n_old - n} of {n_old} oldest entries dropped to fit "
@@ -1341,11 +1401,24 @@ def ledger_digest(led, budget=26000):
         if clip_acc < 160:
             omitted.append(f"accepted: claims clipped to {clip_acc} chars, not 160 — "
                            f"full text is moprox-memory/<slug>.md")
+        if n_acc is not None and n_acc < n_acc_all:
+            omitted.append(f"accepted: {n_acc_all - n_acc} of {n_acc_all} OLDEST entries dropped "
+                           f"to fit the digest budget ({budget} chars); the newest {n_acc} are "
+                           f"kept and every dropped one is published as moprox-memory/<slug>.md")
         if olen < 1600 or clip_dis < 450:
             omitted.append(f"disputed: claims clipped to {clip_dis} and objections to {olen} "
                            f"chars — objections are verbatim in "
                            f"{OBJECTIONS}/c<cycle>-<lens>.txt, the claims NOWHERE else")
-        s = json.dumps(build(olen, n, clip_old, clip_acc, clip_dis, omitted), indent=1)
+        return json.dumps(build(olen, n, clip_old, clip_acc, clip_dis, omitted, n_acc), indent=1)
+
+    # NOT fixed here, and measured rather than assumed: the accepted sweep runs only after n_old
+    # has already been swept to 0, so the ladder still sheds every only-copy disputed_older line
+    # BEFORE it sheds a single published accepted claim — the inversion of the priority stated
+    # above. At the live cycle-585 ledger the settled rung keeps 160 accepted and 0 of 44
+    # disputed_older, with 39 chars of slack; buying the 44 back costs ~78 accepted entries. That is
+    # a separate judgement about what a cycle should see, not this bug.
+    for olen, n, clip_old, clip_acc, clip_dis, n_acc in ladder:
+        s = render(olen, n, clip_old, clip_acc, clip_dis, n_acc)
         if len(s) <= budget:
             return s
     return s[:budget] + (f"\n… LEDGER DIGEST TRUNCATED at {budget} of {len(s)} chars even after "
@@ -1562,9 +1635,14 @@ def main():
     # A cycle that produced nothing is not a failure, but a run of them means back off.
     led["strikes"] = 0 if (accepted or rejected or disputed) else led.get("strikes", 0)
     led["inflight"] = None
+    closed = retire_answered(led, cyc)
+    if closed:
+        say(f"  → closed {len(closed)} answered dispute(s): "
+            + ", ".join(f"c{c}" for c in closed), 6, agent)
     led["tried"] = led.get("tried", [])[-200:]
     led["accepted"] = led.get("accepted", [])[-200:]
     led["disputed"] = led.get("disputed", [])[-50:]
+    led["resolved"] = led.get("resolved", [])[-30:]
     save_ledger(led)
 
     cost = (res or {}).get("total_cost_usd") or 0
