@@ -13,9 +13,21 @@ import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 import ledger   # local + pulled-from-other-hosts rows, `loop-analyst` folded into `analyst`
 STMT   = Path.home() / ".local/share/moprox/agent-statements.json"
-# Roster comes from run.py so it cannot drift from the one that actually invokes agents.
+# Roster comes from run.py so it cannot drift from the one that actually invokes agents...
 from run import AGENTS as _A
-AGENTS = sorted(_A)
+AGENT_DIRS = dict(_A)
+# ...but run.py is not the only thing that invokes agents, and this panel reports the LEDGER. The
+# loop harness (loop@<name>) writes its own rows and never touches run.py's table, so `burndown`
+# burned 295.5M tokens over 30d — 32.6% of the panel's own total — with no row to put them in and
+# no hint that anything was missing (measured 2026-10-06, cycle 577; the same class of silent drop
+# ledger.py's docstring records for `loop-analyst`, which was fixed by name and not by roster).
+# So: run.py's table UNION whatever the ledger actually contains. A new loop agent now appears on
+# the panel the first time it burns a token, instead of waiting for someone to notice it is absent.
+LEDGER_AGENTS = Path.home() / "projects/private-data/agents"   # icon home for agents run.py never launches
+
+
+def roster(rows):
+    return sorted(set(AGENT_DIRS) | {r.get("agent") for r in rows if r.get("agent")})
 
 def _n(r, k):
     """Token counts, defensively. `r.get(k, 0)` returns None when the key EXISTS with a null value —
@@ -29,7 +41,7 @@ def _n(r, k):
     return 0
 
 
-def window(rows, secs, stmts):
+def window(rows, secs, stmts, agents):
     cut = time.time() - secs
     by = {}
     for r in rows:
@@ -43,7 +55,7 @@ def window(rows, secs, stmts):
         d["ctx"] += _n(r, "in") + _n(r, "cache_read") + _n(r, "cache_write")
         d["ms"] += r.get("ms") or 0
     out = []
-    for a in AGENTS:
+    for a in agents:
         d = by.get(a, {"calls": 0, "tok": 0, "cr": 0, "ctx": 0, "ms": 0, "fails": 0})
         ok = max(d["calls"] - d["fails"], 1)
         out.append({"agent": a, "statement": (stmts.get(a) or {}).get("text", ""),
@@ -52,22 +64,28 @@ def window(rows, secs, stmts):
                     "avg_ms": round(d["ms"] / ok), "fails": d["fails"]})
     return out
 
-def _icons():
+def _icons(agents):
     out = {}
-    for a in AGENTS:
-        try: out[a] = (Path.home() / ("projects/private-data/agents/%s/icon.svg" % a)).read_text().strip()
+    for a in agents:
+        # The KEY is not the directory: `bard-curate` is the bard persona under a second set of
+        # permissions, so keying the path off the name looked for agents/bard-curate/ and warned
+        # every run, forever, about a directory that is never going to exist. Go through run.py's
+        # own table, which already says where each agent lives.
+        try: out[a] = (AGENT_DIRS.get(a) or LEDGER_AGENTS / a).joinpath("icon.svg").read_text().strip()
         except Exception as _e:
             # total= so that losing EVERY icon (private-data unmounted, the agents/ dir renamed)
             # reports at err instead of being one digit away from the routine two-missing warning.
-            errlog.skip("agent_stats.py: agent icon", _e, total=len(AGENTS))
+            errlog.skip("agent_stats.py: agent icon", _e, total=len(agents))
             pass
     return out
 
 def main():
     rows = ledger.rows()
     stmts = json.loads(STMT.read_text()) if STMT.exists() else {}
-    data = {"generated": int(time.time()), "icons": _icons(),
-            "windows": {"24h": window(rows, 86400, stmts), "30d": window(rows, 30 * 86400, stmts)}}
+    agents = roster(rows)
+    data = {"generated": int(time.time()), "icons": _icons(agents),
+            "windows": {"24h": window(rows, 86400, stmts, agents),
+                        "30d": window(rows, 30 * 86400, stmts, agents)}}
     out = Path(os.environ.get("OUT", "agents.json"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, separators=(",", ":")))
