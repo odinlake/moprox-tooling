@@ -33,7 +33,23 @@ mkdir -p "$(dirname "$LOG")"
 # up in journald and the incident queue with no reason at all — 13 consecutive failures whose cause
 # ("insufficient permission for adding an object", from a root-owned .git) was only in a file nobody
 # was watching. Repo rule: an unexpected error reaches the journal.
-exec > >(tee -a "$LOG") 2> >(tee -a "$LOG" >&2)
+#
+# ...but WAIT for the tees. bash does not wait for a process substitution, so the script could
+# reach `exit` with a line still unread in a tee's pipe — and this is a Type=oneshot unit, where
+# the main process exiting makes systemd (default KillMode=control-group) SIGKILL whatever is left
+# in the cgroup. The tee dies mid-copy and the line reaches NEITHER sink: not the journal, not
+# $LOG. It is a race, so it takes the LAST line most often and it takes it nondeterministically —
+# which is why `rebase-selfheal-half-resolved-goes-silent` could not explain a firing that failed
+# with no script line at all in the journal. The two sinks share the fault: both are downstream of
+# the same tee, so "it is at least in the log file" is not a fallback.
+# $! is the process substitution's pid (bash 4.4+) and such a pid is waitable. Closing the fds
+# first is what gives each tee its EOF; without that, wait blocks forever. `|| true` keeps the
+# drain cosmetic — a tee that was already reaped must not turn a successful deploy into a failure —
+# and the trap leaves $? alone, so die's exit 1 is still exit 1.
+exec > >(tee -a "$LOG"); tee_out=$!
+exec 2> >(tee -a "$LOG" >&2); tee_err=$!
+drain() { exec 1>&- 2>&-; wait "$tee_out" "$tee_err" 2>/dev/null || true; }
+trap drain EXIT
 say() { echo "$(date -Is) $*"; }
 # <3> is the syslog level prefix journald turns into PRIORITY=3, so failures are findable with
 # search_logs(priority=3) across the fleet.
