@@ -1249,25 +1249,34 @@ _CYC_RE = r"(?:cycle[- ]|\bc)(\d{1,4})\b"
 # An ANSWER names the cycle next to the word "objection" — "the cycle-580 [check] objection is
 # UPHELD", "Both cycle-540 objections are UPHELD". A bare cycle number is a CITATION and must not
 # close anything: claims cite earlier cycles constantly ("since c538 established wattbike.py writes
-# no log"), and on the live ledger 4 of the 14 bare-number pairings were citations of that kind —
-# one of them would have closed c584, whose objection nothing has answered.
+# no log"), and on the live ledger 4 of the 14 bare-number pairings were citations of that kind.
 _ANSWER_RE = [re.compile(a, re.S | re.I) for a in (
     _CYC_RE + r"(?:(?!" + _CYC_RE + r").){0,40}?objection",
     r"objection(?:(?!" + _CYC_RE + r").){0,40}?" + _CYC_RE,
 )]
+# ...and adjacency alone is not enough either, because a claim ABOUT this machinery discusses
+# objections in prose. Cycle 586's own claim contains "would have closed c584, whose objection
+# nothing has answered" — seven characters of separation — so the adjacency rule reads it as an
+# answer to c584, the one dispute that sentence exists to say is unanswered. The answering idiom is
+# always the claim's opening clause ("The cycle-580 [check] objection is UPHELD and ..."), so only
+# the opening is scanned. On the live 587 ledger every window in 120..400 gives the same answer:
+# all 10 confirmed answers matched, the c584 citation at char ~2600 dropped.
+_ANSWER_WINDOW = 240
 
 
 def answered_cycles(text):
     """The cycle numbers `text` answers an objection OF, as opposed to merely cites."""
     out = set()
     for rx in _ANSWER_RE:
-        for m in rx.finditer(text or ""):
+        for m in rx.finditer((text or "")[:_ANSWER_WINDOW]):
             out |= {int(g) for g in m.groups() if g}
     return out
 
 
 def retire_answered(led, cyc):
-    """Close every dispute some LATER accepted claim answered, and say who closed it.
+    """Close every dispute some LATER accepted claim answered, reopen the ones wrongly closed.
+
+    Returns (closed, reopened) cycle lists.
 
     `led["disputed"]` had no removal path at all: an entry left only by ageing off the 50-slot ring.
     So an objection that was answered, verified and published came back in the next prompt as open
@@ -1285,11 +1294,32 @@ def retire_answered(led, cyc):
     disputed entry against every accepted claim newer than it. Idempotent, and it backfills itself.
 
     A disputed claim is published nowhere, so this moves rather than deletes: the entry goes to
-    `led["resolved"]` with the answering cycle recorded, and the digest shows it as one line. If the
-    match is wrong the agent can see the pairing and reopen it; nothing is lost either way.
+    `led["resolved"]` with the answering cycle recorded, and the digest shows it as one line.
+
+    And the move is reversible, because the first two cuts of the rule both mis-filed live entries
+    and neither could take them back. At the end of cycle 586 the bare-number version closed c513,
+    c538, c579 and c584 off cycle 586's own claim — a claim written to enumerate those four as the
+    rule's false positives, which it did by printing the strings `c513<-c515` .. `c584<-c585`. The
+    descriptions of the bug were eaten by the bug, and because this function reads only
+    `led["disputed"]`, the fix that landed in the same cycle left them closed for ever. So each call
+    now re-derives every `resolved` entry too. Only POSITIVE disconfirmation reopens: the recorded
+    answerer must still be in `accepted` and must no longer qualify. An answerer that has aged off
+    the 200-slot ring is unprovable either way and the entry stays closed.
     """
     named = {a.get("cycle"): answered_cycles(a.get("claim") or a.get("item") or "")
              for a in (led.get("accepted") or []) if isinstance(a.get("cycle"), int)}
+    still, reopened = [], []
+    for e in led.get("resolved") or []:
+        by, c = e.get("answered_by"), e.get("cycle")
+        if by in named and c not in named[by] and not any(a > c and c in ns
+                                                          for a, ns in named.items()):
+            reopened.append({k: v for k, v in e.items() if k != "answered_by"})
+        else:
+            still.append(e)
+    if reopened:
+        led["resolved"] = still
+        led["disputed"] = sorted((led.get("disputed") or []) + reopened,
+                                 key=lambda e: e.get("cycle") or 0)
     keep, moved = [], []
     for e in led.get("disputed") or []:
         c = e.get("cycle")
@@ -1301,7 +1331,7 @@ def retire_answered(led, cyc):
     if moved:
         led["disputed"] = keep
         led["resolved"] = (led.get("resolved") or []) + moved
-    return [e.get("cycle") for e in moved]
+    return [e.get("cycle") for e in moved], [e.get("cycle") for e in reopened]
 
 
 def ledger_digest(led, budget=26000):
@@ -1657,10 +1687,13 @@ def main():
     # A cycle that produced nothing is not a failure, but a run of them means back off.
     led["strikes"] = 0 if (accepted or rejected or disputed) else led.get("strikes", 0)
     led["inflight"] = None
-    closed = retire_answered(led, cyc)
+    closed, reopened = retire_answered(led, cyc)
     if closed:
         say(f"  → closed {len(closed)} answered dispute(s): "
             + ", ".join(f"c{c}" for c in closed), 6, agent)
+    if reopened:
+        say(f"  → reopened {len(reopened)} wrongly-closed dispute(s): "
+            + ", ".join(f"c{c}" for c in reopened), 4, agent)
     led["tried"] = led.get("tried", [])[-200:]
     led["accepted"] = led.get("accepted", [])[-200:]
     led["disputed"] = led.get("disputed", [])[-50:]
