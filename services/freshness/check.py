@@ -123,29 +123,53 @@ def check_filename_period(lane, skips):
     A matching file whose basename carries no YYYY-MM-DD is counted into `skips` rather than
     ignored: it is a member of the archive this lane cannot see, and if it is the only one the lane
     breaches below on `newest is None`.
+
+    THE TIP IS NOT THE ARCHIVE. Reducing the periods to max() answers "has the archive grown",
+    which says nothing about its body: an archive with any number of missing middle periods reads
+    ok the moment one recent file lands. That is not hypothetical here —
+    `statements/halifax/2025-02-03.pdf -> 2025-04-03.pdf` is a 59-day step where the other 16
+    consecutive steps in that archive are 28..33 d, and the mail corpus carries a Halifax
+    "statement is ready" announcement on 2025-03-04 for the statement in between, which was never
+    filed (moprox-memory/statement-lanes-max-only-blind-to-holes). The lane has never reported it,
+    and this lane's own note in lanes.json already calls that hole "the class of thing this lane is
+    for". So the interior steps are compared too, against the SAME `max_age_h`: no second knob to
+    calibrate, and the threshold is conservative in the right direction, because an interior step
+    has no availability lag in it. On a monthly archive 56 d cannot be reached without a period
+    having been skipped, while the widest routine step observed on either card is 33 d.
     """
     paths = expand(lane["glob"])
     if not paths:
         return f"no files match {lane['glob']}"
-    newest, newest_in = None, None
+    periods = []
     for p in paths:
         found = ISO_DATE.findall(os.path.basename(p))
         if not found:
             skips.add(ValueError(f"{os.path.basename(p)} carries no YYYY-MM-DD period in its name"))
             continue
         t = parse_ts(max(found))
-        if t is not None and (newest is None or t > newest):
-            newest, newest_in = t, p
-    if newest is None:
+        if t is not None:
+            periods.append((t, os.path.basename(p)))
+    if not periods:
         return (f"no usable YYYY-MM-DD period in the name of any of {len(paths)} file(s) "
                 f"matching {lane['glob']}")
+    periods.sort()
+    limit = lane["max_age_h"]
+    newest, newest_in = periods[-1]
+    # Sorted by period, so consecutive pairs are consecutive covered periods whatever order the
+    # glob came back in, and whatever the two naming conventions do to lexical order.
+    holes = [f"{a_name} -> {b_name} ({(b - a) / HOUR / 24:.0f} d)"
+             for (a, a_name), (b, b_name) in zip(periods, periods[1:]) if (b - a) / HOUR > limit]
     age = (time.time() - newest) / HOUR
-    if age > lane["max_age_h"]:
-        return (f"newest covered period ends {datetime.fromtimestamp(newest, timezone.utc).date()}, "
-                f"{age:.1f} h ago (limit {lane['max_age_h']} h) — {os.path.basename(newest_in)} of "
-                f"{len(paths)} file(s); that is what the archive SAYS it covers, not when the files "
-                f"were written")
-    return None
+    parts = []
+    if age > limit:
+        parts.append(f"newest covered period ends "
+                     f"{datetime.fromtimestamp(newest, timezone.utc).date()}, {age:.1f} h ago "
+                     f"(limit {limit} h) — {newest_in} of {len(paths)} file(s); that is what the "
+                     f"archive SAYS it covers, not when the files were written")
+    if holes:
+        parts.append(f"{len(holes)} interior gap(s) wider than the same {limit} h limit, each one "
+                     f"at least one period the archive never filed: {'; '.join(holes)}")
+    return " | ".join(parts) or None
 
 
 def check_jsonl_newest(lane, skips):
