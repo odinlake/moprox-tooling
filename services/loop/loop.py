@@ -1245,8 +1245,29 @@ def refresh_repos():
                 RuntimeError(_clip(r.stderr or r.stdout, 200)))
 
 
+_CYC_RE = r"(?:cycle[- ]|\bc)(\d{1,4})\b"
+# An ANSWER names the cycle next to the word "objection" — "the cycle-580 [check] objection is
+# UPHELD", "Both cycle-540 objections are UPHELD". A bare cycle number is a CITATION and must not
+# close anything: claims cite earlier cycles constantly ("since c538 established wattbike.py writes
+# no log"), and on the live ledger 4 of the 14 bare-number pairings were citations of that kind —
+# one of them would have closed c584, whose objection nothing has answered.
+_ANSWER_RE = [re.compile(a, re.S | re.I) for a in (
+    _CYC_RE + r"(?:(?!" + _CYC_RE + r").){0,40}?objection",
+    r"objection(?:(?!" + _CYC_RE + r").){0,40}?" + _CYC_RE,
+)]
+
+
+def answered_cycles(text):
+    """The cycle numbers `text` answers an objection OF, as opposed to merely cites."""
+    out = set()
+    for rx in _ANSWER_RE:
+        for m in rx.finditer(text or ""):
+            out |= {int(g) for g in m.groups() if g}
+    return out
+
+
 def retire_answered(led, cyc):
-    """Close the disputes this cycle's accepted claims answered, and say who closed them.
+    """Close every dispute some LATER accepted claim answered, and say who closed it.
 
     `led["disputed"]` had no removal path at all: an entry left only by ageing off the 50-slot ring.
     So an objection that was answered, verified and published came back in the next prompt as open
@@ -1256,24 +1277,25 @@ def retire_answered(led, cyc):
     (c580 [check]) had been answered four times — cycles 581, 582 and 583 each published a separate
     moprox-memory fact for the same two prongs, and 584 was disputed for restating them.
 
+    The first cut of this (8effd77d) scanned only `cyc`'s OWN accepted claims, which closes nothing
+    that is already in the backlog: c581/c582/c583 ran before the code existed and no future claim
+    will name c513..c580 again, so all 14 would have aged off the ring still being offered as open
+    work. It never fired even once — the cycle that landed it was running the pre-fix interpreter,
+    and `resolved` was still absent from the ledger at c586. So the scan is retroactive: every
+    disputed entry against every accepted claim newer than it. Idempotent, and it backfills itself.
+
     A disputed claim is published nowhere, so this moves rather than deletes: the entry goes to
     `led["resolved"]` with the answering cycle recorded, and the digest shows it as one line. If the
     match is wrong the agent can see the pairing and reopen it; nothing is lost either way.
     """
-    import re as _re
-    fresh = [a for a in (led.get("accepted") or []) if a.get("cycle") == cyc]
-    if not fresh:
-        return []
-    named = set()
-    for a in fresh:
-        named |= {int(m) for m in _re.findall(r"(?:cycle[- ]|\bc)(\d{1,4})\b",
-                                             a.get("claim") or a.get("item") or "")}
+    named = {a.get("cycle"): answered_cycles(a.get("claim") or a.get("item") or "")
+             for a in (led.get("accepted") or []) if isinstance(a.get("cycle"), int)}
     keep, moved = [], []
     for e in led.get("disputed") or []:
         c = e.get("cycle")
-        if c in named and c < cyc:
-            e = dict(e, answered_by=cyc)
-            moved.append(e)
+        by = sorted(a for a, ns in named.items() if a > c and c in ns) if isinstance(c, int) else []
+        if by:
+            moved.append(dict(e, answered_by=by[0]))
         else:
             keep.append(e)
     if moved:
