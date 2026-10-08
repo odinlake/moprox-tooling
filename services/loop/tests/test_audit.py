@@ -153,6 +153,58 @@ check("a refutation followed by a trailing JSON note is not lost",
       objs == ["[check] the join drops 28 of 108", "[claim] the join drops 28 of 108"],
       objs[0][:110] if objs else "none")           # pre-b90d40d: read the note, returned None
 
+print("\n--- a verdict missing its last character is not a dead lens --------------")
+# Analyst cycle 603. Every parse death whose reply the archive kept (c440-check, c550-claim,
+# c571-claim, c601-check, c602-claim) is a COMPLETE refutation whose final `"` or `}` the skeptic
+# dropped; all five were recorded as "not audited on this lens — re-propose it unchanged", which is
+# the opposite of what happened. The exact shapes, verbatim from those replies:
+UNCLOSED = [
+    # closing quote omitted, so the final brace sits inside the string (c440/c550/c601/c602)
+    ('{"refuted": true, "defect": "the join drops 28 of 108.}', "the join drops 28 of 108."),
+    # cut off after the closing quote, no object brace (c571-claim)
+    ('{"refuted": true, "defect": "the join drops 28 of 108."', "the join drops 28 of 108."),
+    # cut off inside the string
+    ('{"refuted": true, "defect": "the join drops 28 of 108.', "the join drops 28 of 108."),
+]
+for raw, want in UNCLOSED:
+    objs = with_run(lambda *a, **k: Done(0, envelope("I read it.\n\n" + raw)))
+    check(f"recovered: {raw[-12:]!r}", objs == [f"[check] {want}", f"[claim] {want}"],
+          objs[0][:80] if objs else "none")
+# and the recovery must not invent a refutation out of a survival
+objs = with_run(lambda *a, **k: Done(0, envelope('{"refuted": false, "defect": "}')))
+check("an unclosed NON-refutation still publishes", objs == [], f"{len(objs)} objection(s)")
+# a reply with no verdict at all must stay dead — closers cannot manufacture one
+objs = with_run(lambda *a, **k: Done(0, envelope("I could not decide. Maybe {later}.")))
+check("closers do not manufacture a verdict",
+      len(objs) == 2 and all("LENS DID NOT COMPLETE" in o for o in objs),
+      objs[0][:110] if objs else "none")
+# the diagnostic names the verdict's own failure, not the leftmost brace in the reply (c601-check
+# reported `line 10 column 46`, which was `{lens[0]}` inside a quoted git diff on line 10)
+try:
+    loop._verdict('a diff line with {lens[0]} in it\n{"refuted" true, "defect": "d"}')
+    check("diagnostic points at the verdict", False, "parsed")
+except loop.LensFailed as exc:
+    # the verdict's own fault is a missing colon; the prose brace's would be "property name"
+    check("diagnostic points at the verdict, not the first brace in the prose",
+          "':' delimiter" in str(exc), str(exc)[:90])
+
+print("\n--- against the real archived dead-lens replies --------------------------")
+ARCHIVE = Path.home() / ".local/share/moprox/loop/analyst/objections"
+replies = sorted(ARCHIVE.glob("*-reply.txt")) if ARCHIVE.is_dir() else []
+if not replies:
+    print("SKIP  no reply archive on this host")
+else:
+    for p in replies:
+        try:
+            v = loop._verdict(p.read_text())
+        except loop.LensFailed as exc:
+            check(f"{p.name}: verdict recovered", False, str(exc)[:80])
+        else:
+            d = str(v.get("defect", "")).strip()
+            check(f"{p.name}: verdict recovered",
+                  v.get("refuted") is True and d.endswith("."),
+                  f"refuted={v.get('refuted')} defect={len(d)}ch")
+
 print("\n--- a dead lens keeps the reply that killed it ---------------------------")
 # The lens-death objection says only that the parse failed. Without the reply beside it, a model
 # that wrote a malformed verdict cannot be told from a parser that mangled a well-formed one, which

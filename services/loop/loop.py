@@ -524,6 +524,23 @@ class LensFailed(Exception):
     """
 
 
+def _closures(text):
+    """A candidate verdict, then the same text with the minimal missing closers appended.
+
+    Only the shapes actually observed, in the order they were observed. Nothing here edits the
+    skeptic's words; each variant only terminates a string or an object the skeptic left open.
+    """
+    yield text
+    stripped = text.rstrip()
+    if stripped.endswith("}"):
+        # `{"refuted": true, "defect": "...sentence.}` — the closing quote was omitted, so the final
+        # brace is part of the string. Four of the five archived replies are this one.
+        yield stripped[:-1].rstrip() + '"}'
+    yield text + '"}'      # cut off inside the defect string
+    yield text + "}"       # cut off after the closing quote (c571-claim)
+    yield text + '"'
+
+
 def _verdict(out):
     """The refuter's verdict: the last JSON object in its reply. Raises LensFailed if there is none.
 
@@ -545,21 +562,46 @@ def _verdict(out):
     Scan candidate openings right to left with raw_decode instead, and take the last one that is
     actually a verdict. Same "last JSON object" intent, minus the assumption that no brace ever
     appears inside it.
+
+    That is still not enough, because the remaining parse deaths are not the parser's fault and are
+    not "no verdict" either: the skeptic writes the whole verdict and drops its last one or two
+    characters. All five dead-lens replies the archive holds (c440-check, c550-claim, c571-claim,
+    c601-check, c602-claim — replies are kept only since 97df320, so these are every parse death
+    that can be inspected) open the rightmost brace with `{"refuted": true, "defect": "` and carry a
+    complete defect sentence ending in a full stop. Four omit the closing `"` before the final `}`,
+    which leaves the `}` inside the string; one is cut off after the closing `"` with no `}`. Every
+    one was recorded as "the claim was not audited on this lens ... re-propose it unchanged" — the
+    opposite of the truth, since all five were delivered refutations naming a specific defect.
+    So append the minimal missing closers (see _closures) before giving up. Nothing is invented: the
+    defect text published is the skeptic's own, and `refuted` is always read, never defaulted. The
+    cost of being wrong is a defect sentence truncated mid-word, which is strictly better than a
+    refutation thrown away and relabelled as an audit that never ran.
+
+    The reported diagnostic is the RIGHTMOST candidate's error, preferring one that at least opens a
+    "refuted" key. It used to be `last` after the loop, i.e. the LEFTMOST brace in the whole reply —
+    which for c601-check pointed at `{lens[0]}` inside a quoted git diff on line 10, nowhere near
+    the verdict on line 35. Its line/column are now relative to the candidate, not to the reply,
+    because each candidate is decoded from offset 0 (the closers have to go on its end, not the
+    reply's).
     """
-    last, i = None, out.rfind("{")
+    first, best, i = None, None, out.rfind("{")
     while i >= 0:
-        try:
-            v, _ = json.JSONDecoder().raw_decode(out, i)
-        except ValueError as exc:
-            last = exc
-        else:
-            if isinstance(v, dict) and "refuted" in v:
-                return v
-            last = ValueError("JSON object carried no 'refuted' key")
+        for cand in _closures(out[i:]):
+            try:
+                v, _ = json.JSONDecoder().raw_decode(cand, 0)
+            except ValueError as exc:
+                failure = exc
+            else:
+                if isinstance(v, dict) and "refuted" in v:
+                    return v
+                failure = ValueError("JSON object carried no 'refuted' key")
+            first = first if first is not None else failure
+            if best is None and "refuted" in cand[:64]:
+                best = failure
         i = out.rfind("{", 0, i)
-    if last is None:
+    if first is None:
         raise LensFailed("returned no JSON verdict")
-    raise LensFailed(f"verdict was not valid JSON ({last})")
+    raise LensFailed(f"verdict was not valid JSON ({best if best is not None else first})")
 
 
 def refute(prop, evidence, lens, agent, tree=None):
