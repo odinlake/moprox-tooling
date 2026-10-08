@@ -63,5 +63,19 @@ closed, reopened = loop.retire_answered(led2, 598)
 case("a disconfirmed closure reopens", set(reopened), {592})
 case("an unprovable closure stays closed", {e["cycle"] for e in led2["resolved"]}, {500})
 
+case("retire_and_say is idempotent — the second call closes nothing more",
+     loop.retire_and_say(led, 597, "test")[0], [])
+
+# --- the call ORDER in main(): a retirement must reach the prompt of the cycle that earns it.
+# retire_answered used to be called once, after the agent had already been handed the digest, so
+# every closure was one cycle late and a change to the rule was two (the cycle that lands it runs
+# the pre-fix interpreter). Source order is the cheapest pin that would actually catch a regression.
+src = (Path(__file__).resolve().parents[1] / "loop.py").read_text()
+body = src[src.index("\ndef main():"):]
+case("retire runs before the digest is built",
+     [body.index("retire_and_say(led, cyc, agent)") < body.index("ledger_digest(led)")], [True])
+case("and again after the cycle's own proposals are judged",
+     [body.count("retire_and_say(led, cyc, agent)")], [2])
+
 print("\n%d/%d passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

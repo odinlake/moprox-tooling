@@ -1368,6 +1368,18 @@ def retire_answered(led, cyc):
     return [e.get("cycle") for e in moved], [e.get("cycle") for e in reopened]
 
 
+def retire_and_say(led, cyc, agent):
+    """`retire_answered` plus its two log lines, because it is now called twice a cycle."""
+    closed, reopened = retire_answered(led, cyc)
+    if closed:
+        say(f"  → closed {len(closed)} answered dispute(s): "
+            + ", ".join(f"c{c}" for c in closed), 6, agent)
+    if reopened:
+        say(f"  → reopened {len(reopened)} wrongly-closed dispute(s): "
+            + ", ".join(f"c{c}" for c in reopened), 4, agent)
+    return closed, reopened
+
+
 def ledger_digest(led, budget=26000):
     """The prompt's view of the ledger — clipped per section, not by one slice off the top.
 
@@ -1561,6 +1573,15 @@ def main():
     led["cycle"] = led.get("cycle", 0) + 1
     cyc = led["cycle"]
     inflight = led.get("inflight")
+    # Retire BEFORE the digest, not only after the agent. The single end-of-cycle call meant a
+    # retirement could never reach the prompt of the cycle that earned it, and a change to the
+    # RULE took two cycles: the cycle that lands it is already running the pre-fix interpreter.
+    # That cost a real cycle — 599 was handed c592/c593/c596 as open disputed work, c596 carrying
+    # the lens-timeout objection "re-propose it unchanged", one cycle after c598's published fact
+    # said "c596 is superseded; do not re-propose it". retire_answered is idempotent and
+    # retroactive (it re-derives `resolved` every call), so running it twice a cycle costs nothing
+    # and the end-of-cycle call still closes whatever THIS cycle's own accepted claims answered.
+    retire_and_say(led, cyc, agent)
     save_ledger(led)
 
     say(f"▸ cycle {cyc} · budget ${spent:.2f}/${cap:.2f}"
@@ -1721,13 +1742,7 @@ def main():
     # A cycle that produced nothing is not a failure, but a run of them means back off.
     led["strikes"] = 0 if (accepted or rejected or disputed) else led.get("strikes", 0)
     led["inflight"] = None
-    closed, reopened = retire_answered(led, cyc)
-    if closed:
-        say(f"  → closed {len(closed)} answered dispute(s): "
-            + ", ".join(f"c{c}" for c in closed), 6, agent)
-    if reopened:
-        say(f"  → reopened {len(reopened)} wrongly-closed dispute(s): "
-            + ", ".join(f"c{c}" for c in reopened), 4, agent)
+    retire_and_say(led, cyc, agent)
     led["tried"] = led.get("tried", [])[-200:]
     led["accepted"] = led.get("accepted", [])[-200:]
     led["disputed"] = led.get("disputed", [])[-50:]
