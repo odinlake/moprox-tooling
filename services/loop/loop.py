@@ -82,11 +82,18 @@ SRC_MAX      = int(os.environ.get("LOOP_SRC_MAX", 40000))
 # answering an objection is a full increment while being shown two thirds of one.
 OBJ_MAX      = int(os.environ.get("LOOP_OBJ_MAX", 4000))
 # Attempts per lens before a death is final. A dead lens blocks (a01ce81, and rightly), but the
-# analyst objection archive holds 32 deaths over 27 cycles — 21 timeouts, 11 parse — and in 5 of
-# those cycles (c402 c416 c550 c600 c602) BOTH archived objections were deaths, so the cycle
-# produced no readable criticism at all and the agent was told to re-propose unchanged: a whole
-# cycle spent re-running a claim nobody had read. Retrying the lens costs at most one more refuter
-# run; not retrying costs a cycle. Retried ONLY when the dead lens said nothing inspectable (see
+# analyst objection archive holds 32 deaths over 27 cycles — 21 silent (timeout or non-zero exit),
+# 11 parse — and in 5 of those cycles BOTH archived objections were deaths. This comment used to
+# price the retry off that 5, which the cycle-609 audit refuted on two counts and correctly: the
+# retried class is the SILENT deaths, and only c600 has both of its deaths in it (c402 and c416 are
+# parse+parse, never retried; c550 and c602 are silent+parse and keep a final parse death). Worse,
+# c550 and c602 are the two cycles whose parse death left a reply on disk, and both replies are
+# delivered refutations — so those cycles were not short of readable criticism, only of a parser
+# that could read it, which is _closures' job and not this knob's. The retry's warrant is therefore
+# n=1 on the archive: one cycle in 27 that the retry would have converted from blocked to audited.
+# It is kept because the cost is bounded and asymmetric — at most one more refuter run against a
+# whole cycle — not because the measured harm was large. Retried ONLY when the dead lens said
+# nothing inspectable (see
 # adversarial) — worst case 2 lenses x 2 timeouts = 1680 s, which still fits loop@.service's
 # TimeoutStartSec=7200 beside HARD_MAX_S=5400.
 LENS_TRIES   = int(os.environ.get("LOOP_LENS_TRIES", 2))
@@ -698,10 +705,11 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
     (cheap, the claim and its verifier are already written); the cost of failing open is an estate
     fact that says it was audited twice and was not.
 
-    "Cheap" was asserted, never measured, and it is not cheap: a re-proposal is a whole cycle, and
-    5 of the 27 death cycles in the analyst archive had BOTH lenses die, so the cycle was blocked
-    without one readable sentence of criticism to answer. So a silent death is retried first
-    (LENS_TRIES) — see the loop body for why only a silent one.
+    "Cheap" was asserted, never measured, and it is not cheap: a re-proposal is a whole cycle. 5 of
+    the 27 death cycles in the analyst archive had BOTH lenses die, but only one of those (c600) is
+    a cycle this retry would have rescued — see LENS_TRIES for the cross-tab and for why the other
+    four are a parser problem, not a retry problem. So a silent death is retried first (LENS_TRIES)
+    — see the loop body for why only a silent one.
 
     Each objection is also written to disk verbatim, for the same reason verifiers are: the ledger
     is a bounded digest, and a disputed claim is published nowhere else, so the ledger's copy of the
@@ -1468,8 +1476,30 @@ def ledger_digest(led, budget=26000):
         text was recovered from the refuters' own transcripts and written to OBJECTIONS, so this
         lookup is what makes that repair visible. Only substitutes when the archived text really is
         the same objection, extended.
+
+        A lens-death objection gets one further step. Its text says the claim "was not audited on
+        this lens ... re-propose it unchanged", and for every death whose reply survives on disk that
+        is the opposite of the truth: all five archived replies (c440-check, c550-claim, c571-claim,
+        c601-check, c602-claim) are delivered refutations, `{"refuted": true}` with a named defect,
+        lost to a verdict missing its last character or two. _closures/d423a221 made that shape
+        parse, but only for deaths captured AFTER it landed — the five already in the archive keep
+        their synthetic text and keep instructing the agent to re-propose a claim a skeptic had in
+        fact refuted. So re-run _verdict over the reply here: the recovery is retroactive, it costs
+        one read per death, and it needs no rewrite of the ledger. Nothing is invented — the defect
+        shown is the skeptic's own sentence and `refuted` is read, never assumed. A reply that still
+        does not parse, or that carries `refuted: false`, leaves the death notice exactly as it was.
         """
         name = o.split("]", 1)[0].lstrip("[") if o.startswith("[") else ""
+        if o.startswith(f"[{name}] LENS DID NOT COMPLETE"):
+            try:
+                v = _verdict((OBJECTIONS / f"c{cyc}-{name}-reply.txt").read_text())
+            except (OSError, LensFailed):
+                v = None
+            defect = str((v or {}).get("defect", "")).strip()
+            if v and v.get("refuted") and defect:
+                return _clip(f"[{name}] RECOVERED from the dead lens's archived reply — its verdict "
+                             f"was unparseable when captured, but parses now, and it is a "
+                             f"refutation, not a missing audit: {defect}", olen)
         try:
             full = (OBJECTIONS / f"c{cyc}-{name}.txt").read_text().strip()
         except OSError:

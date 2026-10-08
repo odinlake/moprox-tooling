@@ -276,6 +276,39 @@ with_run(lambda *a, **k: Done(1, "", "Invalid API key"))
 check("a lens that died before replying writes no reply file",
       not list((tmp / "objections").glob("c0-*-reply.txt")))
 
+print("\n--- the digest recovers a dead lens's archived refutation ----------------")
+# _closures fixed the capture path, but only for deaths captured after it landed. The deaths already
+# in the archive keep their synthetic "not audited ... re-propose it unchanged" text, which is the
+# opposite of what their replies say. ledger_digest re-parses the reply instead.
+(tmp / "objections").mkdir(exist_ok=True)
+DEATH = ("LENS DID NOT COMPLETE — the claim was not audited on this lens (verdict was not valid "
+         "JSON (x)). This is not a defect in the claim: re-propose it unchanged.")
+
+
+def digest_objection(reply, death=DEATH, lens="claim"):
+    p = tmp / "objections" / f"c7-{lens}-reply.txt"
+    p.write_text(reply) if reply is not None else p.unlink(missing_ok=True)
+    led = {"open": [], "tried": [], "accepted": [],
+           "disputed": [{"cycle": 7, "claim": "c", "objections": [f"[{lens}] {death}"]}]}
+    return json.loads(loop.ledger_digest(led))["disputed"][0]["objections"][0]
+
+
+o = digest_objection('{"refuted": true, "defect": "LEG2 divides by the wrong denominator.}')
+check("a recoverable death is shown as the refutation it was",
+      "RECOVERED" in o and "LEG2 divides by the wrong denominator." in o, o[:100])
+check("and it does not keep telling the agent to re-propose unchanged",
+      "re-propose it unchanged" not in o, o[:100])
+o = digest_objection('{"refuted": false, "defect": "}')
+check("a recovered NON-refutation leaves the death notice alone", o.endswith(DEATH), o[-60:])
+o = digest_objection("I could not decide. Maybe {later}.")
+check("an unrecoverable reply leaves the death notice alone", o.endswith(DEATH), o[-60:])
+o = digest_objection(None)
+check("a death with no reply on disk leaves the death notice alone", o.endswith(DEATH), o[-60:])
+o = digest_objection('{"refuted": true, "defect": "d."}', death="a real, substantive objection.")
+check("a live objection is never overwritten by a stray reply file",
+      o == "[claim] a real, substantive objection.", o[:80])
+(tmp / "objections" / "c7-claim-reply.txt").unlink()
+
 print("\n--- refute() itself distinguishes the three outcomes ---------------------")
 real = subprocess.run
 try:
