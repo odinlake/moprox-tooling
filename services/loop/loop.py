@@ -81,6 +81,15 @@ SRC_MAX      = int(os.environ.get("LOOP_SRC_MAX", 40000))
 # says what the defect MEANS for the claim — fell entirely in the discarded tail. The agent is told
 # answering an objection is a full increment while being shown two thirds of one.
 OBJ_MAX      = int(os.environ.get("LOOP_OBJ_MAX", 4000))
+# Attempts per lens before a death is final. A dead lens blocks (a01ce81, and rightly), but the
+# analyst objection archive holds 32 deaths over 27 cycles — 21 timeouts, 11 parse — and in 5 of
+# those cycles (c402 c416 c550 c600 c602) BOTH archived objections were deaths, so the cycle
+# produced no readable criticism at all and the agent was told to re-propose unchanged: a whole
+# cycle spent re-running a claim nobody had read. Retrying the lens costs at most one more refuter
+# run; not retrying costs a cycle. Retried ONLY when the dead lens said nothing inspectable (see
+# adversarial) — worst case 2 lenses x 2 timeouts = 1680 s, which still fits loop@.service's
+# TimeoutStartSec=7200 beside HARD_MAX_S=5400.
+LENS_TRIES   = int(os.environ.get("LOOP_LENS_TRIES", 2))
 
 # Server-level MCP grants: `mcp__<server>` allows every tool that server exposes. Naming tools
 # individually is how the analyst ended up with 2 of the estate's 11 servers and a job
@@ -689,6 +698,11 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
     (cheap, the claim and its verifier are already written); the cost of failing open is an estate
     fact that says it was audited twice and was not.
 
+    "Cheap" was asserted, never measured, and it is not cheap: a re-proposal is a whole cycle, and
+    5 of the 27 death cycles in the analyst archive had BOTH lenses die, so the cycle was blocked
+    without one readable sentence of criticism to answer. So a silent death is retried first
+    (LENS_TRIES) — see the loop body for why only a silent one.
+
     Each objection is also written to disk verbatim, for the same reason verifiers are: the ledger
     is a bounded digest, and a disputed claim is published nowhere else, so the ledger's copy of the
     objection was the only copy — and it was cut at 300 chars.
@@ -698,12 +712,26 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
     objections = []
     for lens in (CHANGE_LENSES if prop.get("patch") else LENSES):
         reply = None
-        try:
-            d = refute(prop, evidence, lens, agent, tree=tree)
-        except LensFailed as exc:
-            d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on this lens "
-                 f"({exc}). This is not a defect in the claim: re-propose it unchanged.")
-            reply = getattr(exc, "reply", None)
+        for attempt in range(1, max(1, LENS_TRIES) + 1):
+            try:
+                d = refute(prop, evidence, lens, agent, tree=tree)
+            except LensFailed as exc:
+                d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on this lens "
+                     f"({exc}). This is not a defect in the claim: re-propose it unchanged.")
+                reply = getattr(exc, "reply", None)
+                # Retry ONLY a lens that said nothing inspectable — timeout, non-zero exit, empty
+                # stdout. There the skeptic refuted nothing and endorsed nothing, so re-running it
+                # is a re-run, not an override. A lens that DID speak and could not be parsed even
+                # after _closures is final: its reply may carry a real refutation nobody can read,
+                # and a retry that came back "no objection" would publish over it. That is the
+                # a01ce81 fail-open in a new costume, so the dividing line is whether there are
+                # words on disk, not whether the failure feels transient.
+                # A dead credential is silent too, and it will be just as dead 420 s later.
+                if not reply and not AUTH_DEAD.search(str(exc)) and attempt < max(1, LENS_TRIES):
+                    say(f"  ↻ refute[{lens[0]}] died ({exc}) and said nothing — retry "
+                        f"{attempt + 1}/{max(1, LENS_TRIES)}", 6, agent)
+                    continue
+            break
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
         if reply:
             # Next to the objection it caused, for the same reason the objection is kept at all: a

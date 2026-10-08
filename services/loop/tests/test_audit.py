@@ -90,16 +90,70 @@ for label, fn, symptom in PROP_DEAD:
 print("\n--- a lens that dies is NOT scored as a lens that approved ---------------")
 # The exact confusion of cycle 378: one lens dies, the other looks and approves. Before the fix
 # both produced None and the claim published as "audited by two independent skeptics".
+# The first lens dies on EVERY attempt (LENS_TRIES retries a silent death), so what is pinned here
+# is the final verdict of a lens that never completed, not the first timeout.
 calls = {"n": 0}
 def one_dies(*a, **k):
     calls["n"] += 1
-    if calls["n"] == 1:
+    if calls["n"] <= loop.LENS_TRIES:
         raise subprocess.TimeoutExpired(cmd="claude", timeout=420)
     return Done(0, verdict(False))
 objs = with_run(one_dies)
 check("one dead + one approving is not a clean audit", len(objs) == 1, f"{len(objs)} objection(s)")
 check("and the surviving lens is not the one blocking",
       bool(objs) and objs[0].startswith("[check]"), objs[0][:60] if objs else "none")
+
+print("\n--- a silent death is retried; a death that SPOKE is final ---------------")
+# Analyst cycle 609. Failing closed on a dead lens is right, but the stated cost ("one re-proposal,
+# cheap") is a whole cycle, and in 5 of the 27 death cycles in the analyst archive (c402 c416 c550
+# c600 c602) both lenses died, so the claim was blocked with zero readable criticism to answer.
+# A lens that produced no words refuted nothing and endorsed nothing, so re-running it is a re-run.
+# A lens that DID speak and could not be parsed is final: retrying risks publishing an approval
+# over an unread refutation, which is the a01ce81 fail-open again.
+calls = {"n": 0}
+def dies_then_approves(*a, **k):
+    calls["n"] += 1
+    if calls["n"] == 1:          # first lens, first attempt: timeout, no reply
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=420)
+    return Done(0, verdict(False))
+objs = with_run(dies_then_approves)
+check("a silent death retried into an approval is a clean audit", objs == [],
+      f"{len(objs)} objection(s), {calls['n']} refuter runs")
+check("and the retry cost exactly one extra run", calls["n"] == 3, f"{calls['n']} runs")
+
+calls = {"n": 0}
+def speaks_then_approves(*a, **k):
+    calls["n"] += 1
+    if calls["n"] == 1:          # unparseable, but the skeptic left words behind
+        return Done(0, envelope("I read it and I object: {refuted: yes,}"))
+    return Done(0, verdict(False))
+objs = with_run(speaks_then_approves)
+check("a death that spoke is NOT retried away", len(objs) == 1, f"{len(objs)} objection(s)")
+check("and it is the lens that spoke which blocks",
+      bool(objs) and objs[0].startswith("[check]") and "LENS DID NOT COMPLETE" in objs[0],
+      objs[0][:70] if objs else "none")
+check("and no retry was spent on it", calls["n"] == 2, f"{calls['n']} runs")
+
+calls = {"n": 0}
+def retry_speaks(*a, **k):
+    calls["n"] += 1
+    if calls["n"] == 1:
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=420)
+    if calls["n"] == 2:          # the retry delivers the refutation the timeout never did
+        return Done(0, verdict(True, "the join drops 28 of 108"))
+    return Done(0, verdict(False))
+objs = with_run(retry_speaks)
+check("a retry that refutes is the verdict that counts",
+      objs == ["[check] the join drops 28 of 108"], objs[0][:70] if objs else "none")
+
+calls = {"n": 0}
+def auth_dead(*a, **k):
+    calls["n"] += 1
+    return Done(1, "", "Invalid API key · Please run /login")
+objs = with_run(auth_dead)
+check("a dead credential is silent but not retried", calls["n"] == 2, f"{calls['n']} runs")
+check("and still blocks both lenses",
+      len(objs) == 2 and all("LENS DID NOT COMPLETE" in o for o in objs), f"{len(objs)}")
 
 print("\n--- the two verdict paths still behave ----------------------------------")
 objs = with_run(lambda *a, **k: Done(0, verdict(False)))
