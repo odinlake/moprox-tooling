@@ -1246,13 +1246,39 @@ def refresh_repos():
 
 
 _CYC_RE = r"(?:cycle[- ]|\bc)(\d{1,4})\b"
+_CYC_NC = r"(?:[Cc]ycle[- ]|\b[Cc])\d{1,4}\b"          # same thing, no capture, case-explicit
+_CYC_ALL = re.compile(r"(?:[Cc]ycle[- ]|\b[Cc])(\d{1,4})\b")
+# A citation may CHAIN several cycles — "the cycle-592 and cycle-593 objections", "LEG2 of
+# c592/c593". The negative lookahead below forbids an intervening cycle reference, so before this
+# pattern existed only the LAST cycle of a chain was ever read as answered (measured cycle 597:
+# "cycle-592 and cycle-593 objections are UPHELD" retired [593] alone).
+_CYC_CHAIN = _CYC_NC + r"(?:[\s,;/&+]{0,4}(?:and|or)?[\s,;/&+]{0,4}" + _CYC_NC + r")*"
 # An ANSWER names the cycle next to the word "objection" — "the cycle-580 [check] objection is
 # UPHELD", "Both cycle-540 objections are UPHELD". A bare cycle number is a CITATION and must not
 # close anything: claims cite earlier cycles constantly ("since c538 established wattbike.py writes
 # no log"), and on the live ledger 4 of the 14 bare-number pairings were citations of that kind.
 _ANSWER_RE = [re.compile(a, re.S | re.I) for a in (
-    _CYC_RE + r"(?:(?!" + _CYC_RE + r").){0,40}?objection",
-    r"objection(?:(?!" + _CYC_RE + r").){0,40}?" + _CYC_RE,
+    _CYC_CHAIN + r"(?:(?!" + _CYC_NC + r").){0,40}?objection",
+    r"objection(?:(?!" + _CYC_NC + r").){0,40}?" + _CYC_CHAIN,
+)]
+# A dispute can also be closed by SUPERSESSION rather than rebuttal: showing the whole question
+# unidentifiable, so the objection has no subject left. That answer never contains the word
+# "objection" and so was invisible to the rule — c595 disposed of c592/c593 with "LEG2 of c592/c593
+# is therefore UNIDENTIFIED", both stayed in `disputed`, and the digest went on offering them as
+# open work while c595's published fact said "do not re-derive it and do not refine it".
+# Two guards keep this from eating prose ABOUT disputes, which is the failure mode _ANSWER_WINDOW
+# exists for: the verb must be one of three dispositions, and it must be UPPERCASE — the analyst's
+# own idiom for a verdict ("is WITHDRAWN", "is therefore UNIDENTIFIED"). Lower-case discussion of
+# the same words does not close anything. Case-sensitive compile, and scanned over the WHOLE claim,
+# because a supersession is argued mid-claim, not in the opening clause (c595: char 329).
+# The third guard is the gap: it may not cross a sentence end. Without it c363's "...WITHDRAWN. But
+# that gap is untestable by c359" reads as c363 answering c359 — the verb belongs to another
+# subject entirely. Inert on the live ledger (c359 is not disputed), but it is the same adjacency
+# failure that cost _ANSWER_WINDOW its first cut, and a verdict and its subject share a clause.
+_SUP_GAP = r"(?:(?!" + _CYC_NC + r")[^.!?\n]){0,40}?"
+_SUPERSEDE_RE = [re.compile(a, re.S) for a in (
+    _CYC_CHAIN + _SUP_GAP + r"(?:WITHDRAWN|SUPERSEDED|UNIDENTIFIED)",
+    r"(?:WITHDRAWN|SUPERSEDED|UNIDENTIFIED)" + _SUP_GAP + _CYC_CHAIN,
 )]
 # ...and adjacency alone is not enough either, because a claim ABOUT this machinery discusses
 # objections in prose. Cycle 586's own claim contains "would have closed c584, whose objection
@@ -1265,11 +1291,19 @@ _ANSWER_WINDOW = 240
 
 
 def answered_cycles(text):
-    """The cycle numbers `text` answers an objection OF, as opposed to merely cites."""
-    out = set()
-    for rx in _ANSWER_RE:
-        for m in rx.finditer((text or "")[:_ANSWER_WINDOW]):
-            out |= {int(g) for g in m.groups() if g}
+    """The cycle numbers `text` answers an objection OF, as opposed to merely cites.
+
+    Two idioms, two scopes: a rebuttal ("the cycle-580 objection is UPHELD") is the claim's opening
+    clause and is read only there; a supersession ("LEG2 of c592/c593 is UNIDENTIFIED") is argued
+    wherever the argument lands and is read over the whole claim, at the price of demanding an
+    uppercase disposition verb. Every cycle number inside a match counts, so a chained citation
+    retires all of the cycles it names.
+    """
+    t, out = text or "", set()
+    for rxs, scope in ((_ANSWER_RE, t[:_ANSWER_WINDOW]), (_SUPERSEDE_RE, t)):
+        for rx in rxs:
+            for m in rx.finditer(scope):
+                out |= {int(g) for g in _CYC_ALL.findall(m.group(0))}
     return out
 
 
