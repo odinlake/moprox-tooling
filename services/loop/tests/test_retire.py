@@ -66,6 +66,32 @@ case("an unprovable closure stays closed", {e["cycle"] for e in led2["resolved"]
 case("retire_and_say is idempotent — the second call closes nothing more",
      loop.retire_and_say(led, 597, "test")[0], [])
 
+# --- answered_elsewhere: the one-hop blind spot. c610 was answered at c612, c612's own objection
+# was answered at c615, c615 was accepted — and the rule still cannot close c610, so the digest
+# must at least say so rather than offer it as untouched work.
+led3 = {"accepted": [{"cycle": 615, "claim": "The cycle-612 [claim] objection is UPHELD."}],
+        "disputed": [{"cycle": 610, "claim": "a"}, {"cycle": 609, "claim": "b"},
+                     {"cycle": 611, "claim": "untouched"}],
+        "resolved": [{"cycle": 612, "claim": "The cycle-610 [claim] objection is UPHELD.",
+                      "answered_by": 615}]}
+pend = loop.answered_elsewhere(led3)
+case("a two-link chain is annotated, not closed", set(pend), {610})
+case("the chain names the accepted terminus",
+     ["c615 — ACCEPTED" in pend[610][0]], [True])
+case("retire_answered still leaves it open",
+     set(loop.retire_answered(led3, 616)[0]), set())
+dig = __import__("json").loads(loop.ledger_digest(led3))
+case("the digest carries it on the disputed entry",
+     [e.get("already_answered_by") for e in dig["disputed"] if e["cycle"] == 610],
+     [pend[610]])
+case("and says nothing about a dispute nobody answered",
+     [e.get("already_answered_by") for e in dig["disputed"] if e["cycle"] == 611], [None])
+# an answer that is itself still disputed is reported as such, not as settled
+led3["resolved"] = []
+led3["disputed"].append({"cycle": 612, "claim": "The cycle-610 [claim] objection is UPHELD."})
+case("an unaccepted, unanswered answer is flagged as still disputed",
+     [loop.answered_elsewhere(led3)[610]], [["c612 (itself still disputed)"]])
+
 # --- the call ORDER in main(): a retirement must reach the prompt of the cycle that earns it.
 # retire_answered used to be called once, after the agent had already been handed the digest, so
 # every closure was one cycle late and a change to the rule was two (the cycle that lands it runs

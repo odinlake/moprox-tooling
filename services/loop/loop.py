@@ -1459,6 +1459,46 @@ def retire_answered(led, cyc):
     return [e.get("cycle") for e in moved], [e.get("cycle") for e in reopened]
 
 
+def answered_elsewhere(led):
+    """{dispute cycle: ["c612 (itself disputed, …)"]} — answers the retirement rule cannot act on.
+
+    `retire_answered` is ONE HOP: it closes a dispute only when a claim in `accepted` names it. An
+    answer that was itself disputed is invisible to it — and stays invisible after that answer's own
+    objection has been answered and accepted. c610's objection was answered at c612; c612 was
+    disputed on the provenance of its evidence, not on its figure; c615 answered c612 and WAS
+    accepted; and c610 was still handed to cycle 616 as open work, which is precisely the harm
+    8effd77d/5b299a9c were built to stop, recurring in a shape they do not cover.
+
+    Measured on the analyst ledger at cycle 616: 30 of the 48 disputed entries had been answered by
+    a later claim and the rule had closed NONE of them (no accepted claim names any of the 30); 9
+    sat in a complete two-link chain ending in an accepted claim — c513←c514←c515, c535←c536←c537,
+    c539←c540←c541, c544←c545←c546, c556←c557←c558, c569←c571←c572, c579←c580←c581, c603←c604←c605,
+    c610←c612←c615 — and 2 of the 6 disputes on display (c603, c610) were in it.
+
+    This ANNOTATES rather than retires, deliberately. Closing a two-link chain automatically would
+    be unsound: the objection against the intermediate may have destroyed the very leg that answered
+    the earlier dispute, and only reading that objection tells you which. The defect being repaired
+    is a dispute that reads as untouched when a cycle has already spent itself on it, not a dispute
+    that is open.
+    """
+    acc = {a.get("cycle") for a in (led.get("accepted") or [])}
+    res = {e.get("cycle"): e.get("answered_by") for e in (led.get("resolved") or [])}
+    later = sorted((e.get("cycle"), answered_cycles(e.get("claim") or e.get("item") or ""))
+                   for src in ("disputed", "resolved") for e in (led.get(src) or [])
+                   if isinstance(e.get("cycle"), int))
+    out = {}
+    for e in led.get("disputed") or []:
+        c = e.get("cycle")
+        for a, named in later:
+            if isinstance(c, int) and a > c and c in named:
+                by = res.get(a)
+                where = ("itself still disputed" if not by else
+                         f"itself disputed, then answered by c{by}"
+                         f"{' — ACCEPTED, read its fact' if by in acc else ', also unaccepted'}")
+                out.setdefault(c, []).append(f"c{a} ({where})")
+    return out
+
+
 def retire_and_say(led, cyc, agent):
     """`retire_answered` plus its two log lines, because it is now called twice a cycle."""
     closed, reopened = retire_answered(led, cyc)
@@ -1520,7 +1560,9 @@ def ledger_digest(led, budget=26000):
         stem = _clip(o, len(o)).rstrip("…")
         return _clip(full if full.startswith(stem) else o, olen)
 
-    def entry(e, claim, objs=0, olen=1600):
+    pend = answered_elsewhere(led)
+
+    def entry(e, claim, objs=0, olen=1600, pending=False):
         d = {"cycle": e.get("cycle")}
         # `item` is the change agent's equivalent of a claim, one line saying what was done.
         # Without this fallback a landed fix appears in the digest as a bare cycle number.
@@ -1535,6 +1577,9 @@ def ledger_digest(led, budget=26000):
         if objs:
             d["objections"] = [objection(e.get("cycle"), o, olen)
                                for o in (e.get("objections") or [])[:objs]]
+        # A dispute some later cycle already answered must not read as untouched work.
+        if pending and pend.get(e.get("cycle")):
+            d["already_answered_by"] = pend[e["cycle"]]
         return d
 
     dis = list(led.get("disputed") or [])
@@ -1552,16 +1597,19 @@ def ledger_digest(led, budget=26000):
                         "is here is all there is; disputed_older is the same list, one line each. "
                         "`resolved` is a dispute a later accepted claim already answered: it is "
                         "CLOSED work — read the named cycle's fact in moprox-memory before "
-                        "touching it.",
+                        "touching it. `already_answered_by` on a disputed entry means a later "
+                        "cycle DID answer that objection but was not itself accepted, so the "
+                        "retirement rule could not close it: read that cycle (and, if it is "
+                        "named, the accepted claim that answered IT) before spending this one.",
             "_omitted": omitted or "nothing — this digest is complete",
             "open": led.get("open") or [],
             "inflight": led.get("inflight"),
             "resolved": ["c%s answered by c%s" % (e.get("cycle"), e.get("answered_by"))
                          for e in (led.get("resolved") or [])[-12:]],
-            "disputed": [entry(e, clip_dis, objs=2, olen=olen) for e in dis[-6:]],
+            "disputed": [entry(e, clip_dis, objs=2, olen=olen, pending=True) for e in dis[-6:]],
             "tried": [entry(e, 300) for e in (led.get("tried") or [])[-20:]],
             "accepted": [entry(e, clip_acc) for e in (acc if n_acc is None else acc[-n_acc:])],
-            "disputed_older": [entry(e, clip_old) for e in old[-n_old:] if n_old],
+            "disputed_older": [entry(e, clip_old, pending=True) for e in old[-n_old:] if n_old],
         }
 
     # Fit by discarding named material in a fixed order, cheapest loss first, and SAYING what went.
