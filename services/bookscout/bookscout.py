@@ -76,6 +76,20 @@ def library():
     return json.loads(LIBRARY.read_text())["titles"]
 
 
+def owned_asins():
+    """The asins already in the library, or None if the library could not be read.
+
+    worthy() uses this instead of trusting the judge's `interest: "owned"` string. None means
+    "cannot certify", and worthy() then admits nothing: an unreadable library must not quietly
+    reinstate the possibility of suggesting the operator a book off their own shelf."""
+    try:
+        return {t["asin"] for t in library()}
+    except Exception as exc:
+        errlog.err("bookscout: cannot read the Audible library at %s, so no suggestion can be "
+                   "certified unowned — none will be made this pass" % LIBRARY, exc)
+        return None
+
+
 def audible_search(keywords="", title="", author="", n=5):
     owned = {t["asin"] for t in library()}
     q = {k: v for k, v in (("keywords", keywords), ("title", title), ("author", author)) if v}
@@ -231,8 +245,15 @@ def judge(art, text):
     return json.loads(out[i:j + 1]).get("books") or []
 
 
-def worthy(b, has_text):
-    return (b.get("asin") and b.get("match") == "exact" and b.get("sentiment") in ("rave", "positive")
+def worthy(b, has_text, owned):
+    """`owned` is owned_asins(): a set of asins, or None for "could not be read".
+
+    Ownership is checked here and not left to `interest == "high"`. The judge is told to answer
+    `interest: "owned"` for a book the operator already has, so until now the docstring's "not
+    already owned" was one token of model output deep -- `Flesh` (B0DKG91X7C) is in the library
+    and is recorded exact/positive/title, i.e. every other conjunct already satisfied."""
+    return (b.get("asin") and owned is not None and b["asin"] not in owned
+            and b.get("match") == "exact" and b.get("sentiment") in ("rave", "positive")
             and b.get("interest") == "high"
             and (has_text or b.get("name_source") in ("abstract", "title")))
 
@@ -255,6 +276,7 @@ def send(text):
 
 def run_pass(days, dry, backfill=0):
     st = load_state()
+    owned = owned_asins()                        # once per pass, not once per book
     src = index_items(backfill) if backfill else culture_items(days)
     arts = [a for a in src if a["url"] not in st["seen"]]
     quiet = bool(backfill)                       # a backfill fills the record; it never pings Telegram
@@ -278,7 +300,7 @@ def run_pass(days, dry, backfill=0):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         st["seen"][art["url"]] = {"ts": rec["ts"], "text": bool(text), "books": len(books)}
         for b in books:
-            if worthy(b, bool(text)) and b["asin"] not in st["suggested"]:
+            if worthy(b, bool(text), owned) and b["asin"] not in st["suggested"]:
                 picks.append((b, art))
         save_state(st)
     picks = picks[:MAX_SUGGEST]
