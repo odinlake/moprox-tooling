@@ -16,6 +16,14 @@ WHAT IT ASKS FOR AND WHY
 SCOPE: metadata only. The same credential can download and decrypt the audio; this deliberately
 does not, and nothing here should grow that ability by accident.
 
+TWO OUTPUT FILES, ONE EACH FOR CONTENT AND FOR THE CLOCK
+  library.json  the library itself, {count, titles} and nothing else. Rewritten ONLY when the
+                library changed, so its mtime means something to the search service (which
+                reindexes 820 KB on every mtime change) and a commit of it means the library moved.
+  fetched.json  {fetched, count, changed} — written every run. This is the freshness evidence:
+                "library.json is old" and "nobody has fetched since Tuesday" are different
+                failures, and only this file can tell them apart.
+
   --full   ignore the stored high-water mark and re-fetch the whole library
 """
 import argparse
@@ -31,12 +39,15 @@ from datetime import datetime, timezone
 import audible
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 from tokenlock import token_lock
 
 AUTH_FILE = pathlib.Path(os.environ.get(
     "AUDIBLE_DIR", pathlib.Path.home() / ".config/claude-dev/audible")) / "auth.json"
 OUT = pathlib.Path.home() / "projects/private-data/audible"
 LIBRARY = OUT / "library.json"
+STAMP = OUT / "fetched.json"
+LIBRARY_KEYS = {"count", "titles"}        # library.json holds CONTENT only; the clock lives in STAMP
 PAGE_SIZE = 250           # NOT the documented 1000 max: a full page with synopses is a big payload
                           # and the first live run timed out. Smaller pages, more of them.
 POLITE_S = 1.0
@@ -160,16 +171,44 @@ def main():
     rows = [compact(i) for i in raw]
     rows.sort(key=lambda r: (r.get("purchased") or "", r.get("title") or ""), reverse=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "fetched": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "count": len(rows),
-        "titles": rows,
-    }
-    tmp = LIBRARY.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(LIBRARY)          # atomic: the search service reads this file on mtime change
+    payload = {"count": len(rows), "titles": rows}
+    now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+    # The clock used to live INSIDE library.json, so an identical library still produced a new
+    # 820 KB blob every day: 23 of the 63 daily commits over 2026-08-07..10-09 differed in nothing
+    # but `fetched`, each one a full rewrite plus a search-service reindex carrying no information.
+    # Write the file only when the library actually changed, and keep the clock in STAMP so a
+    # no-op day costs one small line. A library.json commit now MEANS the library moved.
+    changed, why = True, "no existing file"
+    if LIBRARY.exists():
+        try:
+            old = json.loads(LIBRARY.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:          # unreadable: say so loudly, then rewrite it
+            errlog.err(f"audible: {LIBRARY} unreadable, rewriting it from this fetch", exc)
+            old = None
+            why = "existing file unreadable"
+        if isinstance(old, dict):
+            if set(old) != LIBRARY_KEYS:
+                why = f"schema {sorted(set(old))} -> {sorted(LIBRARY_KEYS)}"
+            elif old != payload:          # whole payload, so a stale `count` cannot survive either
+                why = "library differs"
+            else:
+                changed, why = False, "identical"
+        elif old is not None:
+            why = f"existing file is {type(old).__name__}, not an object"
+
+    if changed:
+        tmp = LIBRARY.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(LIBRARY)      # atomic: the search service reads this file on mtime change
+    stamp = STAMP.with_suffix(".json.tmp")
+    stamp.write_text(json.dumps({"fetched": now, "count": len(rows), "changed": changed},
+                                ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    stamp.replace(STAMP)
+
     with_syn = sum(1 for r in rows if r["synopsis"])
-    print(f"[audible] {len(rows)} titles -> {LIBRARY} ({with_syn} with a synopsis)", flush=True)
+    verb = f"-> {LIBRARY}" if changed else f"unchanged, {LIBRARY.name} untouched"
+    print(f"[audible] {len(rows)} titles {verb} ({with_syn} with a synopsis; {why})", flush=True)
 
 
 if __name__ == "__main__":
