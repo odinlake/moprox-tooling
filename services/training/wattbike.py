@@ -29,8 +29,11 @@ the day Wattbike closes the anonymous read.
 
 Nothing here raises: every failure path returns a line for the prompt and lets the read proceed.
 """
-import json, os, re, subprocess, threading, time, urllib.error, urllib.request
+import datetime, json, os, re, subprocess, sys, threading, time, urllib.error, urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
 
 BOX      = os.environ.get("WATTBIKE_BOX", "agent@10.10.10.8")
 SSH_KEY  = os.environ.get("WATTBIKE_SSH_KEY", str(Path.home() / ".ssh/claude-dev-ops"))
@@ -50,6 +53,13 @@ KEYS_RE = re.compile(r'parse:\s*\{[^}]*?appId:\s*"([A-Za-z0-9]+)"[^}]*?jsKey:\s*
                      r'[^}]*?apiUrl:\s*"([^"]+)"', re.S)
 UA = {"User-Agent": "Mozilla/5.0"}
 HTTP_S = 60
+LIMIT  = 200                                                # the Hub's own page cap, not ours
+
+# The anonymous (phone-app-unpaired) recovery pass. See _anonymous_pass.
+MATCH_S     = int(os.environ.get("WATTBIKE_MATCH_S", "60"))      # same ride iff within this
+WINDOW_PAD_S = int(os.environ.get("WATTBIKE_WINDOW_PAD_S", "180"))  # half-width of a serial query
+LOOKBACK_D  = int(os.environ.get("WATTBIKE_LOOKBACK_D", "45"))   # how far back to bother asking
+MAX_WINDOWS = int(os.environ.get("WATTBIKE_MAX_WINDOWS", "12"))  # queries per run; a hit is loud
 
 
 def _get(url, data=None, headers=None):
@@ -97,6 +107,152 @@ def _files_of(s):
             yield ext, local, e
 
 
+def _query(api, app, jsk, where):
+    """One RideSession page. Returns (http_status, results_or_None)."""
+    body = {"_method": "GET", "_ApplicationId": app, "_JavaScriptKey": jsk,
+            "_ClientVersion": "js1.11.1", "include": "sessionSummary", "order": "startDate",
+            "limit": LIMIT, "where": where}
+    st, b = _get(api + "/classes/RideSession", data=json.dumps(body).encode(),
+                 headers={"Content-Type": "text/plain"})
+    try:
+        return st, json.loads(b.decode("utf-8", "replace")).get("results")
+    except ValueError:
+        return st, None
+
+
+def _parse_date(epoch):
+    return {"__type": "Date",
+            "iso": datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+                           .strftime("%Y-%m-%dT%H:%M:%S.000Z")}
+
+
+def _hub_start(s):
+    """Epoch seconds of a RideSession's startDate, or None if it has none we can read."""
+    try:
+        iso = ((s.get("startDate") or {}).get("iso") or "").replace("Z", "+00:00")
+        return datetime.datetime.fromisoformat(iso).timestamp() if iso else None
+    except Exception:
+        return None
+
+
+def _polar_indoor_starts(polar_in):
+    """[(polar_id, epoch_start)] for every INDOOR_CYCLING exercise on disk, newest first."""
+    out = []
+    for p in sorted(Path(polar_in).glob("exercise_*.json")):
+        try:
+            s = (json.loads(p.read_text()) or {}).get("summary") or {}
+            if s.get("detailed_sport_info") != "INDOOR_CYCLING":
+                continue
+            t = (datetime.datetime.fromisoformat(s["start_time"])
+                 - datetime.timedelta(minutes=s.get("start_time_utc_offset") or 0)
+                 ).replace(tzinfo=datetime.timezone.utc).timestamp()
+            out.append((s.get("id") or p.stem.split("_", 1)[-1], t))
+        except Exception as e:
+            errlog.skip("wattbike: polar exercise %s" % p.name, e)
+    return sorted(out, key=lambda r: -r[1])
+
+
+def _serial_windows(starts, pad=None):
+    """One NARROW window per unmatched ride: [(lo, hi)] aligned with `starts`.
+
+    Deliberately not one min..max span over the unmatched set. The serial is a shared commercial
+    gym bike (38 sessions in 17 days on 28002545, mostly other riders), the Hub answers with at
+    most LIMIT rows ascending and offers no skip, and the rides we can never match do not leave the
+    set -- so a span wide enough to cover them crosses the cap and pages the NEWEST ride out, which
+    reads as "absent" rather than "unknown". A +/-pad window around one start cannot reach the cap,
+    and if it ever does, _anonymous_pass treats that page as truncated instead of conclusive.
+    """
+    pad = WINDOW_PAD_S if pad is None else pad
+    return [(t - pad, t + pad) for (_pid, t) in starts]
+
+
+def _stored_rows(dest):
+    """Rows already in the index, INCLUDING summary-only ones an earlier run recovered.
+
+    The live user-pointer query cannot return those -- they have no user pointer, which is the
+    whole reason they needed recovering -- so without reading them back the set of unmatched Polar
+    rides never shrinks and every run re-asks the Hub about every ride it has already claimed.
+    """
+    p = Path(dest) / "sessions.json"
+    try:
+        return json.loads(p.read_text()) or []
+    except FileNotFoundError:
+        return []                                    # bootstrapping an empty store
+    except Exception as e:
+        errlog.err("wattbike: %s is unreadable, so rides already recovered will be asked about "
+                   "again" % p, e)
+        return []
+
+
+def _anonymous_pass(api, app, jsk, rows, polar_in, stored=(), now=None):
+    """Recover rides the monitor uploaded with the phone app UNPAIRED. Returns (new_rows, note).
+
+    Those RideSessions carry `associated: false` and no `user` key at all, so pull()'s user-pointer
+    query -- the only query this module made until 2026-10-07 -- structurally cannot return them;
+    the estate was missing the 2026-09-22 and 2026-09-28 indoor rides for that reason alone
+    (analyst, moprox-memory/wattbike-hub-anonymous-uploads-serial-route). They ARE reachable by the
+    bike's serial, but the serial is not identity: it is a gym bike other people ride. So a
+    candidate is accepted only when it is the UNIQUE Hub record within MATCH_S of an INDOOR_CYCLING
+    start Polar gave us. Recovery is summary-only on purpose -- the per-second file an anonymous
+    record names 404s on the files route -- so the stored row carries wattbike_recovered and no
+    sessionData, and nothing downstream may read it as a full-fidelity ride.
+
+    Every give-up path here is loud and none of them is allowed to lose the user pass's result.
+    """
+    now = time.time() if now is None else now
+    serials = sorted({(s.get("wattbikeDevice") or {}).get("serialNumber") for s in rows}
+                     - {None, ""})
+    if not serials:
+        return [], ""
+    have = [t for t in (_hub_start(s) for s in list(rows) + list(stored)) if t is not None]
+    unmatched = [(pid, t) for (pid, t) in _polar_indoor_starts(polar_in)
+                 if 0 <= now - t <= LOOKBACK_D * 86400
+                 and not any(abs(t - h) <= MATCH_S for h in have)]
+    notes = []
+    if len(unmatched) > MAX_WINDOWS:
+        # Newest first, so a ceiling hit drops the rides nobody is about to read -- but it is still
+        # a gap in coverage and it is not allowed to be silent.
+        errlog.err("wattbike: %d unpaired Polar indoor rides within %dd exceeds the %d-window "
+                   "per-run ceiling, so the %d oldest were not asked about"
+                   % (len(unmatched), LOOKBACK_D, MAX_WINDOWS, len(unmatched) - MAX_WINDOWS))
+        notes.append("%d unpaired over window ceiling, not asked"
+                     % (len(unmatched) - MAX_WINDOWS))
+        unmatched = unmatched[:MAX_WINDOWS]
+    found = []
+    for (pid, t), (lo, hi) in zip(unmatched, _serial_windows(unmatched)):
+        cands, truncated = [], False
+        for ser in serials:
+            st, got = _query(api, app, jsk,
+                             {"wattbikeDevice.serialNumber": ser,
+                              "startDate": {"$gte": _parse_date(lo), "$lte": _parse_date(hi)}})
+            if st != 200 or got is None:
+                errlog.err("wattbike: serial window for Polar %s on %s returned HTTP %s"
+                           % (pid, ser, st))
+                notes.append("%s: serial query HTTP %s" % (pid, st))
+                truncated = True                 # the window is unresolved, not empty
+                continue
+            if len(got) >= LIMIT:
+                errlog.err("wattbike: serial window %s..%s on %s came back at the %d-row cap, so "
+                           "the page is a truncated prefix and Polar %s cannot be resolved from it"
+                           % (_parse_date(lo)["iso"], _parse_date(hi)["iso"], ser, LIMIT, pid))
+                notes.append("%s: window truncated at %d" % (pid, LIMIT))
+                truncated = True
+                continue
+            cands += [c for c in got
+                      if _hub_start(c) is not None and abs(_hub_start(c) - t) <= MATCH_S]
+        if len(cands) == 1 and not truncated:
+            c = dict(cands[0])
+            c["wattbike_recovered"] = {"polar_id": pid, "route": "serial+window",
+                                       "dt_s": round(_hub_start(cands[0]) - t, 2),
+                                       "summary_only": True}
+            found.append(c)
+            notes.append("%s: recovered %s summary-only" % (pid, c.get("objectId")))
+        elif not truncated:
+            notes.append("%s: %d hub candidate(s) within %ds, not claimed"
+                         % (pid, len(cands), MATCH_S))
+    return found, "; ".join(notes)
+
+
 def pull(dest=None):
     """Fetch every session for the stored user and every sessionData file we do not hold.
 
@@ -113,19 +269,29 @@ def pull(dest=None):
     if not m:
         raise RuntimeError("bundle no longer exposes parse:{appId,jsKey,apiUrl} (HTTP %s)" % st)
     app, jsk, api = m.groups()
-    body = {"_method": "GET", "_ApplicationId": app, "_JavaScriptKey": jsk,
-            "_ClientVersion": "js1.11.1", "include": "sessionSummary", "order": "startDate",
-            "limit": 200,
-            "where": {"user": {"__type": "Pointer", "className": "_User", "objectId": uid}}}
-    st, b = _get(api + "/classes/RideSession", data=json.dumps(body).encode(),
-                 headers={"Content-Type": "text/plain"})
-    try:
-        rows = json.loads(b.decode("utf-8", "replace")).get("results")
-    except ValueError:
-        rows = None
+    st, rows = _query(api, app, jsk,
+                      {"user": {"__type": "Pointer", "className": "_User", "objectId": uid}})
     if st != 200 or not rows:
         raise RuntimeError("RideSession query returned HTTP %s with %s results"
                            % (st, 0 if not rows else len(rows)))
+
+    # The user pointer cannot see an upload made with the app unpaired; ask by serial as well.
+    polar_in = Path(os.environ.get("WATTBIKE_POLAR_IN")
+                    or (dest.parent / "polar" / "incoming"))
+    stored = _stored_rows(dest)
+    try:
+        recovered, anon_note = _anonymous_pass(api, app, jsk, rows, polar_in, stored=stored)
+    except Exception as e:
+        # The user pass already succeeded; losing it because the recovery pass broke would be a
+        # regression. Loud, then carry on with what we have.
+        errlog.err("wattbike: anonymous recovery pass failed, user-associated rides unaffected", e)
+        recovered, anon_note = [], "anonymous pass failed: %s" % type(e).__name__
+    # The index below is rewritten wholesale from the user query, which by construction cannot
+    # return a row recovered earlier -- so carry those forward or the first write after a recovery
+    # drops the ride again, and this time silently, because _anonymous_pass now counts it as held.
+    live = {r.get("objectId") for r in rows}
+    kept = [s for s in stored if "wattbike_recovered" in s and s.get("objectId") not in live]
+    rows = list(rows) + kept + recovered
 
     (dest / "raw").mkdir(parents=True, exist_ok=True)
     new, missed = [], []
@@ -146,6 +312,10 @@ def pull(dest=None):
     # the files it points at.
     (dest / "sessions.json").write_text(json.dumps(rows, indent=1) + "\n")
     note = "%d sessions, %d new files" % (len(rows), len(new))
+    if recovered:
+        note += ", %d summary-only recovered by serial" % len(recovered)
+    if anon_note:
+        note += " [anon: %s]" % anon_note
     if missed:
         note += ", %d unreadable: %s" % (len(missed), ",".join(missed[:6]))
     return len(rows), len(new), note
