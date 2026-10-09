@@ -91,16 +91,18 @@ OBJ_MAX      = int(os.environ.get("LOOP_OBJ_MAX", 4000))
 # delivered refutations — so those cycles were not short of readable criticism, only of a parser
 # that could read it, which is _closures' job and not this knob's.
 #
-# That gave n=1, and n=1 was wrong too: it counted only cycles where BOTH ARCHIVED objections are
-# deaths, and a lens that raises no objection writes no file (see the `if d:` below), so the filter
-# could not see a cycle where one lens died and the other passed the claim. The journal can — it
-# logs every refute outcome, "no objection" included — and over c26..c611 it gives the same 27
-# death cycles and the same 21/11 split as the archive, plus the population the archive hid: 15
-# cycles were disputed with no substantive objection at all, 10 of those have every death in the
-# retried silent class, and in 9 of the 10 the OTHER lens explicitly raised no objection, so a
-# silent timeout was the whole reason the cycle did not publish (c524 c526 c529 c530 c548 c549
-# c563 c592 c596; c600 is the both-dead tenth). So the retry's warrant is 10 of 27 death cycles,
-# not 1 — those ten cost $22.64 of journalled cycle spend and returned 0 accepted between them.
+# That gave n=1, and n=1 was wrong too — but NOT because the archive could not see the rest, as
+# this comment claimed at c612 and the cycle-612 audit correctly refuted. The filter was wrong:
+# "both ARCHIVED objections are deaths" is met in the silent class by c600 alone, and a lens that
+# raises no objection writes no file (see the `if d:` below), so the ABSENCE of a sibling file is
+# itself the record that the other lens let the claim stand. Filter instead on "every archived
+# objection in this cycle is a death whose parenthetical is a silent one" and the archive alone
+# returns all ten: c524 c526 c529 c530 c548 c549 c563 c592 c596 (one file each — the other lens
+# passed) plus c600 (both dead). The journal agrees exactly and adds only that the pass is recorded
+# positively rather than inferred from absence; over c26..c611 it gives the same 27 death cycles
+# and the same 21/11 split, and shows 15 cycles disputed with no substantive objection at all. So
+# the retry's warrant is 10 of 27 death cycles, not 1 — those ten cost $22.64 of journalled cycle
+# spend and returned 0 accepted between them.
 # Whether a completed retry would then have found nothing is of course unknown; what is measured is
 # that it was the only blocker. Retried ONLY when the dead lens said nothing inspectable (see
 # adversarial) — worst case 2 lenses x 2 timeouts = 1680 s, which still fits loop@.service's
@@ -717,8 +719,9 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
     "Cheap" was asserted, never measured, and it is not cheap: a re-proposal is a whole cycle. 10
     of the 27 death cycles in the analyst journal were disputed by a silent death alone — in 9 of
     them the other lens had already passed the claim — so the retry is worth attempting on far more
-    than the n=1 the objection archive could see; see LENS_TRIES for the cross-tab, for why the
-    archive undercounted, and for why the parse deaths are a parser problem, not a retry problem.
+    than the n=1 the first cross-tab reported; see LENS_TRIES for the cross-tab, for the archive
+    filter that also returns all ten, and for why the parse deaths are a parser problem, not a
+    retry problem.
     So a silent death is retried first (LENS_TRIES) — see the loop body for why only a silent one.
 
     Each objection is also written to disk verbatim, for the same reason verifiers are: the ledger
