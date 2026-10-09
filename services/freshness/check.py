@@ -207,7 +207,25 @@ def check_jsonl_newest(lane, skips):
     return None
 
 
+OPERATORS = ("equals", "matches", "notnull", "at_least")
+
+
 def _match(rec, spec):
+    """Does one record satisfy one predicate? Raises on a predicate this checker cannot read.
+
+    An unreadable spec used to fall off the end and return False for every record, which is not a
+    non-match, it is "this lane is not being evaluated" wearing a non-match's clothes — and it is
+    silent in the direction that matters. In a `where` clause every record is filtered out, `total`
+    lands under `min_records`, check_jsonl_fraction returns None and the lane prints `ok`: one
+    mistyped key switches a calibrated lane off for good with no journal record anywhere. The
+    `require` and `predicate` positions fail the other way, into a confidently wrong breach —
+    "N record(s) present, none of them carrying data" — whose named cause is the data.
+
+    The main loop already applies exactly this discipline one level up: an unrecognised lane `kind`
+    is an err-level line saying the lane is NOT being checked. Raising here routes an unrecognised
+    operator into the same handler, so a config typo reaches the journal at err level and names the
+    lane instead of being absorbed into an `ok`.
+    """
     # `any_of` first: a composite spec names no field of its own.
     if "any_of" in spec:
         return any(_match(rec, s) for s in spec["any_of"])
@@ -223,7 +241,8 @@ def _match(rec, spec):
             return float(v) >= float(spec["at_least"])
         except (TypeError, ValueError):
             return False
-    return False
+    raise ValueError(f"predicate {sorted(spec)} names no operator this checker knows "
+                     f"({'/'.join(OPERATORS)}/any_of) — the lane is NOT being evaluated")
 
 
 def check_jsonl_fraction(lane, skips):
