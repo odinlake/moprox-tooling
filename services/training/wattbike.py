@@ -200,8 +200,16 @@ def _anonymous_pass(api, app, jsk, rows, polar_in, stored=(), now=None):
     Every give-up path here is loud and none of them is allowed to lose the user pass's result.
     """
     now = time.time() if now is None else now
-    serials = sorted({(s.get("wattbikeDevice") or {}).get("serialNumber") for s in rows}
-                     - {None, ""})
+    # The serial whitelist is the ONLY handle on identity this route has, so where it comes from
+    # sets the route's reach. Taken from `rows` alone it is the set of bikes some PAIRED ride has
+    # been seen on, which makes an unpaired ride's recoverability hang on an unrelated LATER ride
+    # happening to pair on the same bike: the 2026-09-22 ride was on 28002287, whose first paired
+    # ride was 2026-10-05, so that hole was structurally unreachable here for 12.98 d and then
+    # recovered on the first attempt (analyst, 2026-10-09). Rows recovered earlier carry their
+    # serial, so fold `stored` in too. A ride that is both the first-ever use of a bike AND
+    # unpaired still cannot be reached by this route at all -- that is the residual gap.
+    serials = sorted({(s.get("wattbikeDevice") or {}).get("serialNumber")
+                      for s in list(rows) + list(stored)} - {None, ""})
     if not serials:
         return [], ""
     have = [t for t in (_hub_start(s) for s in list(rows) + list(stored)) if t is not None]
