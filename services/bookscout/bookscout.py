@@ -245,17 +245,51 @@ def judge(art, text):
     return json.loads(out[i:j + 1]).get("books") or []
 
 
-def worthy(b, has_text, owned):
+def _norm(s):
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", (s or "").lower().replace("’", "'")).split())
+
+
+def named_in(art, b):
+    """Does the ARTICLE name this book? Returns "title", "abstract" or None.
+
+    Provenance computed from the article instead of asked of the judge. The Economist puts a book
+    title in typographic quotes, so the question is decidable: the main title (everything before a
+    ':') appearing as a quoted span in the article's own title or abstract.
+
+    This replaces `name_source` in the gate below. Measured over the 56 book entries of the
+    2026-10-09 record -- where `text` is false on all 128 articles, so the provenance conjunct is
+    the only thing standing between an abstract-only verdict and Telegram -- it reproduces the
+    judge's `title` (3/3, each quoted in the article title and in no abstract) and `abstract`
+    (10/10) labels exactly, including WHICH of the two, and returns None on 38 of the 40
+    `inferred`. It disagrees on 5: 3 labelled `text`, a provenance the judge cannot have had, and
+    2 labelled `inferred` -- and in all 5 the abstract does quote the title. None of the 5 flips
+    this gate today (no entry in the record passes all four non-provenance conjuncts), so this is
+    the same verdicts from a field that cannot contradict its own input.
+    See moprox-memory/bookscout-provenance-is-computable.
+    """
+    main = _norm((b.get("title") or "").split(":")[0])
+    if not main:
+        return None
+    for field in ("title", "abstract"):
+        if main in [_norm(q) for q in re.findall(r'[“"]([^“”"]+)[”"]', art.get(field) or "")]:
+            return field
+    return None
+
+
+def worthy(b, art, has_text, owned):
     """`owned` is owned_asins(): a set of asins, or None for "could not be read".
 
     Ownership is checked here and not left to `interest == "high"`. The judge is told to answer
     `interest: "owned"` for a book the operator already has, so until now the docstring's "not
     already owned" was one token of model output deep -- `Flesh` (B0DKG91X7C) is in the library
-    and is recorded exact/positive/title, i.e. every other conjunct already satisfied."""
+    and is recorded exact/positive/title, i.e. every other conjunct already satisfied.
+
+    Provenance is likewise computed (`named_in`) and not taken from the judge's `name_source`,
+    which stays in the record as description only."""
     return (b.get("asin") and owned is not None and b["asin"] not in owned
             and b.get("match") == "exact" and b.get("sentiment") in ("rave", "positive")
             and b.get("interest") == "high"
-            and (has_text or b.get("name_source") in ("abstract", "title")))
+            and (has_text or named_in(art, b) is not None))
 
 
 def suggestion(b, art):
@@ -300,7 +334,7 @@ def run_pass(days, dry, backfill=0):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         st["seen"][art["url"]] = {"ts": rec["ts"], "text": bool(text), "books": len(books)}
         for b in books:
-            if worthy(b, bool(text), owned) and b["asin"] not in st["suggested"]:
+            if worthy(b, art, bool(text), owned) and b["asin"] not in st["suggested"]:
                 picks.append((b, art))
         save_state(st)
     picks = picks[:MAX_SUGGEST]
