@@ -265,11 +265,27 @@ regen() {
   if [ ! -f "$REPO/$out" ]; then
     stale="absent"
   else
+    # EVERY newer input is named, not just the first. The loop used to `break`, which made the
+    # reason on the `regenerated ...` line first-match-in-declaration-order rather than the cause:
+    # with inputs declared `statements mail`, a firing where both were newer logged `(statements
+    # newer)` and the mail half was unrecoverable from the journal. That is not cosmetic — it was
+    # measured against this very line. Over 2026-10-05..09 the gate fired 9 times and the log read
+    # 5 `(statements newer)` + 4 `(mail newer)`, and the 5 was used to call statements the MAJORITY
+    # cause; at 2026-10-05T09:02:32Z mail was independently newer too (mail last written 05:06:31Z,
+    # out still the 2026-09-04 9502cee copy because claude-dev had not pulled dc33ef9), so the real
+    # split is 4 statements-only / 4 mail-only / 1 both, and recovering that took a by-hand
+    # reconstruction of two mtimes from git and a third service's journal. One extra find per
+    # remaining input — each still -print -quit, so each is cheap — buys attribution directly.
+    #
+    # The single-cause strings are unchanged (`statements newer`, `mail newer`, `absent`); only the
+    # both-newer case is new, and it reads `statements newer, mail newer`. A journal grep for the
+    # bracketed form `(mail newer)` therefore still misses a both-newer firing — grep `mail newer`.
     for d in $ins; do
       [ -e "$REPO/$d" ] || continue
-      # -print -quit: stop at the FIRST newer input rather than walking a 50k-file mail archive.
+      # -print -quit: stop at the FIRST newer FILE under this input rather than walking a 50k-file
+      # mail archive. This bounds the cost per input; it is the loop, not the find, that now runs on.
       if [ -n "$(find "$REPO/$d" -newer "$REPO/$out" -print -quit 2>/dev/null)" ]; then
-        stale="$d newer"; break
+        stale="${stale:+$stale, }$d newer"
       fi
     done
   fi
