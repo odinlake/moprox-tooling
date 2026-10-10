@@ -23,7 +23,7 @@ The flow is yoto.dev/myo/uploading-to-cards, verbatim: GET uploadUrl -> PUT the 
 Needs the user:content:manage scope (yoto.py auth). Linking the playlist to a physical MYO card is
 done once in the Yoto app; there is no API for that step.
 """
-import hashlib, json, os, random, re, sys, time, urllib.request, urllib.error
+import hashlib, json, os, random, re, sys, time, urllib.error, urllib.parse, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yoto
 from mutagen.id3 import ID3
@@ -58,7 +58,10 @@ def title_of(path):
 
 def upload(path, tok):
     sha = hashlib.sha256(open(path, "rb").read()).hexdigest()
-    up = req("GET", "/media/transcode/audio/uploadUrl?sha256=%s&filename=%s" % (sha, os.path.basename(path)), tok)["upload"]
+    # The name goes in a query string: unquoted, "The Jungle Book.mp3" was an invalid URL and the
+    # upload died before it started (2026-09-29).
+    name = urllib.parse.quote(os.path.basename(path), safe="")
+    up = req("GET", "/media/transcode/audio/uploadUrl?sha256=%s&filename=%s" % (sha, name), tok)["upload"]
     if up.get("uploadUrl"):                       # absent when the server already holds this sha
         urllib.request.urlopen(urllib.request.Request(up["uploadUrl"], data=open(path, "rb").read(), method="PUT",
                                headers={"Content-Type": "audio/mpeg"}), timeout=600).read()
