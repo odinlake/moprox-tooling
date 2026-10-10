@@ -252,14 +252,24 @@ def check_jsonl_fraction(lane, skips):
     too FEW records satisfy the predicate — the degradation every other lane in this file watches
     for. `max_fraction` is a CEILING and breaches when too MANY do.
 
-    The ceiling exists because lanes.json's own notifications note asked for it and could not have
-    it. The amex-alert-detail lane was a floor ("at least half of Amex alerts must carry an
-    amount"); it did catch the 2026-08-06 changepoint, and then it had to be deleted on 2026-08-15
-    because the bare state is permanent and a floor held under a permanent breach fires forever.
-    The question left over — "tell me if the amounts come BACK" — was inexpressible here, because
-    every operator this checker had could only fire on a condition getting worse. A recovery nobody
-    is watching for is noticed by whoever happens to look, which for the Amex lane was nobody for
-    57 days.
+    The ceiling exists because lanes.json's own notifications note asked for it. The
+    amex-alert-detail lane was a floor ("at least half of Amex alerts must carry an amount"); it
+    did catch the 2026-08-06 changepoint, and then it had to be deleted on 2026-08-15 because the
+    bare state is permanent and a floor held under a permanent breach fires forever. Nothing
+    watched for the amounts coming BACK in the 56 days from then to 2026-10-10.
+
+    That gap was an UNCONFIGURED LANE, not a missing operator, and the claim first committed here
+    that the recovery was "inexpressible" with the old operator set is withdrawn. Breach direction
+    is a property of the QUANTITY a lane measures, not of the operators: wherever the degraded
+    state has a positive signature, a FLOOR on that signature already fires on recovery. It does
+    here — post-changepoint, 320 of 326 Amex alerts are the one literal sentence "There was a
+    transaction on your card ending with 11005." Measured 2026-10-10 against check.py at
+    989309f6^, before `max_fraction` existed: the same where/window/min_records with
+    predicate {matches: "There was a transaction"} and min_fraction 0.90 returns None on the live
+    corpus and returns "only 10/85 (12%) ... (floor 90%)" when the 85 pre-changepoint alerts are
+    replayed into the window. The ceiling's real value is the case that lane does NOT have — where
+    "degraded" is the ABSENCE of a pattern and nothing positive names it, so there is no floor to
+    put a threshold on — plus saying what it means in the direction a reader expects.
 
     Neither bound present is a config error, not an empty lane: it would compute a fraction and
     compare it against nothing, i.e. print `ok` forever. It raises, for the reason _match raises.
