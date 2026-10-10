@@ -262,8 +262,8 @@ def check_jsonl_fraction(lane, skips):
     that the recovery was "inexpressible" with the old operator set is withdrawn. Breach direction
     is a property of the QUANTITY a lane measures, not of the operators: wherever the degraded
     state has a positive signature, a FLOOR on that signature already fires on recovery. It does
-    here — post-changepoint, 320 of 326 Amex alerts are the one literal sentence "There was a
-    transaction on your card ending with 11005." Measured 2026-10-10 against check.py at
+    here — of the 325 Amex alerts logged between the changepoint and 2026-10-10T11:00Z, 319 are the
+    one literal sentence "There was a transaction on your card ending with 11005." Against check.py at
     989309f6^, before `max_fraction` existed: the same where/window/min_records with
     predicate {matches: "There was a transaction"} and min_fraction 0.90 returns None on the live
     corpus and returns "only 10/85 (12%) ... (floor 90%)" when the 85 pre-changepoint alerts are
