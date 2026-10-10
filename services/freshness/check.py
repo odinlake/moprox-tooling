@@ -267,7 +267,17 @@ def check_jsonl_fraction(lane, skips):
     989309f6^, before `max_fraction` existed: the same where/window/min_records with
     predicate {matches: "There was a transaction"} and min_fraction 0.90 returns None on the live
     corpus and returns "only 10/85 (12%) ... (floor 90%)" when the 85 pre-changepoint alerts are
-    replayed into the window. The ceiling's real value is the case that lane does NOT have — where
+    replayed into the window.
+
+    That floor is a recovery detector but NOT the same detector, and the difference is a false-fire
+    band: the two quantities dissociate. Of the 6 non-bare alerts in those 325, only 4 carry an
+    amount — the monthly "statement is ready" notice is non-bare and amount-free — so a 336 h window
+    can hold 3 non-bare against at most 2 amount-bearing (measured maxima over all 51 such windows).
+    Run on real rows, the floor therefore breaches on the routine monthly trio alone at every
+    n = 20..29 while the ceiling stays silent, and min_records 20 does not cover it. Real traffic has
+    never been that quiet — the smallest 336 h window in the whole Amex corpus is n=32, three alerts
+    above the band — which is exactly why a sweep of the observed windows finds neither form firing.
+    The ceiling's real value is the case that lane does NOT have — where
     "degraded" is the ABSENCE of a pattern and nothing positive names it, so there is no floor to
     put a threshold on — plus saying what it means in the direction a reader expects.
 
