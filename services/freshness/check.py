@@ -246,7 +246,27 @@ def _match(rec, spec):
 
 
 def check_jsonl_fraction(lane, skips):
-    """Of the records in the window that match `where`, what fraction satisfy `predicate`?"""
+    """Of the records in the window that match `where`, what fraction satisfy `predicate`?
+
+    A lane sets `min_fraction`, `max_fraction`, or both. `min_fraction` is a FLOOR and breaches when
+    too FEW records satisfy the predicate — the degradation every other lane in this file watches
+    for. `max_fraction` is a CEILING and breaches when too MANY do.
+
+    The ceiling exists because lanes.json's own notifications note asked for it and could not have
+    it. The amex-alert-detail lane was a floor ("at least half of Amex alerts must carry an
+    amount"); it did catch the 2026-08-06 changepoint, and then it had to be deleted on 2026-08-15
+    because the bare state is permanent and a floor held under a permanent breach fires forever.
+    The question left over — "tell me if the amounts come BACK" — was inexpressible here, because
+    every operator this checker had could only fire on a condition getting worse. A recovery nobody
+    is watching for is noticed by whoever happens to look, which for the Amex lane was nobody for
+    57 days.
+
+    Neither bound present is a config error, not an empty lane: it would compute a fraction and
+    compare it against nothing, i.e. print `ok` forever. It raises, for the reason _match raises.
+    """
+    if "min_fraction" not in lane and "max_fraction" not in lane:
+        raise ValueError("a jsonl_fraction lane must set min_fraction (floor), max_fraction "
+                         "(ceiling) or both — the lane is NOT being evaluated")
     paths = expand(lane["glob"])
     if not paths:
         return f"no files match {lane['glob']}"
@@ -263,9 +283,13 @@ def check_jsonl_fraction(lane, skips):
     if total < lane.get("min_records", 1):
         return None                     # too little traffic to judge; not a breach
     frac = good / total
-    if frac < lane["min_fraction"]:
+    floor, ceiling = lane.get("min_fraction"), lane.get("max_fraction")
+    if floor is not None and frac < floor:
         return (f"only {good}/{total} ({frac:.0%}) of matching records in the last "
-                f"{lane['window_h']} h satisfy the predicate (floor {lane['min_fraction']:.0%})")
+                f"{lane['window_h']} h satisfy the predicate (floor {floor:.0%})")
+    if ceiling is not None and frac > ceiling:
+        return (f"{good}/{total} ({frac:.0%}) of matching records in the last "
+                f"{lane['window_h']} h satisfy the predicate, ABOVE the ceiling {ceiling:.0%}")
     return None
 
 
