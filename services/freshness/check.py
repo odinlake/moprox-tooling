@@ -522,9 +522,18 @@ def may_raise(argv=()):
     (moprox-memory/lane-stale-row-from-a-fixture-run: "run `check.py --dry` when developing a lane")
     was prose with nothing enforcing it, and the second run broke it 28 days later.
 
-    So the sink's trust is now structural: only the installed unit raises. `--live` is the explicit
-    override for a deliberate out-of-band run. An unreadable cgroup raises anyway — losing the only
-    lane detector is a worse failure than one stray incident, so the unknown case fails OPEN.
+    So within THIS file the trust is structural: only the installed unit raises. `--live` is the
+    explicit override for a deliberate out-of-band run. An unreadable cgroup raises anyway — losing
+    the only lane detector is a worse failure than one stray incident, so the unknown case fails OPEN.
+
+    What this gate does NOT do is make the sink's lane-stale queue trustworthy, because the sink
+    keys that kind off MESSAGE_ID alone: not the unit, not the priority, not the message shape, and
+    not whether UNIT=lane-<name> names a lane that exists. 201 of the 228 lane-stale records logview
+    holds for claude-loop are a demonstration — incidents lane-probe-a17ae1e3354b (200) and
+    lane-probe-f6cc488e06e3 (1), emitted 2026-09-13 by loop@burndown.service through `logger`,
+    ident `logger`, PRIORITY info, messages `burst <hex> N`, scored 8 and acked `noise`. Nothing
+    reachable from this repo can gate that: the sink is logview's server, which lives on the
+    monitoring host and is not in moprox-tooling.
     """
     if "--dry" in argv:
         return False
