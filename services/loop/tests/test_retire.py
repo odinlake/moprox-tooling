@@ -34,6 +34,13 @@ case("supersession mid-claim", A("x" * 400 + "LEG2 of c592/c593 is therefore UNI
      {592, 593})
 case("withdrawal", A("c593's LEG2 is WITHDRAWN as an anchoring artefact."), {593})
 case("supersession", A("c596 is SUPERSEDED and must not be re-proposed. c595 says why."), {596})
+# c635 (accepted, published) voided a three-cycle sub-argument in a verb the list did not carry, so
+# the rebuttal path retired c634 off the opening clause and c632/c633 stayed on display for 15 cycles.
+case("void — the fourth verb, chained, mid-claim",
+     A("Both cycle-634 objections are CONCEDED in full, and the three-cycle cadence sub-argument "
+       "they sit inside (c632/c633/c634) is VOID: the variable was never a sampling rate."),
+     {632, 633, 634})
+case("lower-case void does not close", A("c632's cadence leg is void on its own terms"), set())
 
 # --- what must NOT close a dispute
 case("bare citation", A("since c538 established wattbike.py writes no log, nothing changed"), set())

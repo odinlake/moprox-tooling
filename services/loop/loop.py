@@ -1358,7 +1358,7 @@ _ANSWER_RE = [re.compile(a, re.S | re.I) for a in (
 # is therefore UNIDENTIFIED", both stayed in `disputed`, and the digest went on offering them as
 # open work while c595's published fact said "do not re-derive it and do not refine it".
 # Two guards keep this from eating prose ABOUT disputes, which is the failure mode _ANSWER_WINDOW
-# exists for: the verb must be one of three dispositions, and it must be UPPERCASE — the analyst's
+# exists for: the verb must be one of four dispositions, and it must be UPPERCASE — the analyst's
 # own idiom for a verdict ("is WITHDRAWN", "is therefore UNIDENTIFIED"). Lower-case discussion of
 # the same words does not close anything. Case-sensitive compile, and scanned over the WHOLE claim,
 # because a supersession is argued mid-claim, not in the opening clause (c595: char 329).
@@ -1366,10 +1366,23 @@ _ANSWER_RE = [re.compile(a, re.S | re.I) for a in (
 # that gap is untestable by c359" reads as c363 answering c359 — the verb belongs to another
 # subject entirely. Inert on the live ledger (c359 is not disputed), but it is the same adjacency
 # failure that cost _ANSWER_WINDOW its first cut, and a verdict and its subject share a clause.
+#
+# VOID is the fourth verb because the vocabulary is the analyst's and it drifted. c635 — accepted and
+# published — opens "Both cycle-634 objections are CONCEDED" and then rules "the three-cycle cadence
+# sub-argument they sit inside (c632/c633/c634) is VOID". The opening clause retired c634 through the
+# objection-adjacency path; the supersession of c632 and c633 matched no verb, so both were still on
+# display as open work 15 cycles later, against a published fact saying the question they belong to
+# does not exist. Adding VOID changes the reading of exactly ONE claim on the whole ledger (c635:
+# {634} -> {632,633,634}) — measured over accepted/disputed/resolved/tried at cycle 650 — and a scan
+# for other all-caps tokens sitting a clause away from an unanswered disputed cycle turns up only
+# "cycle 584 was then DISPUTED" and "STILL matches c584", both prose about disputes, both correctly
+# ignored. So the verb list is a closed vocabulary that needs auditing when the idiom moves, not a
+# general rule: widen it only against a measured delta.
 _SUP_GAP = r"(?:(?!" + _CYC_NC + r")[^.!?\n]){0,40}?"
+_SUP_VERB = r"(?:WITHDRAWN|SUPERSEDED|UNIDENTIFIED|VOID)"
 _SUPERSEDE_RE = [re.compile(a, re.S) for a in (
-    _CYC_CHAIN + _SUP_GAP + r"(?:WITHDRAWN|SUPERSEDED|UNIDENTIFIED)",
-    r"(?:WITHDRAWN|SUPERSEDED|UNIDENTIFIED)" + _SUP_GAP + _CYC_CHAIN,
+    _CYC_CHAIN + _SUP_GAP + _SUP_VERB,
+    _SUP_VERB + _SUP_GAP + _CYC_CHAIN,
 )]
 # ...and adjacency alone is not enough either, because a claim ABOUT this machinery discusses
 # objections in prose. Cycle 586's own claim contains "would have closed c584, whose objection
