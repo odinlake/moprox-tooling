@@ -99,6 +99,28 @@ led3["disputed"].append({"cycle": 612, "claim": "The cycle-610 [claim] objection
 case("an unaccepted, unanswered answer is flagged as still disputed",
      [loop.answered_elsewhere(led3)[610]], [["c612 (itself still disputed)"]])
 
+# --- and the annotation itself used to be one hop: a chain of three or more links read "itself
+# still disputed" at its head — a dead end — even when its terminus was accepted. Live shape at
+# cycle 655: c645←c646←c647←c648, c648 closed by the accepted c649.
+led4 = {"accepted": [{"cycle": 649, "claim": "The cycle-648 [claim] objection is CONCEDED."}],
+        "disputed": [{"cycle": 645, "claim": "a"}, {"cycle": 646, "claim": "b"},
+                     {"cycle": 647, "claim": "The cycle-646 [check] objection is CONCEDED."}],
+        "resolved": [{"cycle": 648, "claim": "The cycle-647 [check] objection is CONCEDED.",
+                      "answered_by": 649}]}
+led4["disputed"][1]["claim"] = "The cycle-645 [claim] objection is CONCEDED."
+pend4 = loop.answered_elsewhere(led4)
+case("a three-link chain names its accepted terminus and the path to it",
+     [pend4[645]],
+     [["c646 (itself disputed → c647 → c648, then answered by c649 — ACCEPTED, read its fact)"]])
+case("the one-hop reading is unchanged for a direct answerer",
+     [pend4[647]],
+     [["c648 (itself disputed, then answered by c649 — ACCEPTED, read its fact)"]])
+case("and a chain with no closed terminus is still a dead end",
+     [loop.answered_elsewhere({"accepted": [], "disputed": led4["disputed"], "resolved": []})[645]],
+     [["c646 (itself still disputed)"]])
+case("retire_answered closes nothing off a chain",
+     set(loop.retire_answered(led4, 655)[0]), set())
+
 # --- the call ORDER in main(): a retirement must reach the prompt of the cycle that earns it.
 # retire_answered used to be called once, after the agent had already been handed the digest, so
 # every closure was one cycle late and a change to the rule was two (the cycle that lands it runs

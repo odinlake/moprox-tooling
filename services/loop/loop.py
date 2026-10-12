@@ -1472,6 +1472,33 @@ def retire_answered(led, cyc):
     return [e.get("cycle") for e in moved], [e.get("cycle") for e in reopened]
 
 
+def _answer_chain(a, res, acc, answerers, limit=12):
+    """Shortest forward path from disputed cycle `a` to a dispute some later claim CLOSED.
+
+    Returns (path, answered_by) where `path` ends at the closed cycle, or (None, None). Breadth
+    first, so the annotation names the nearest terminus; a terminus whose answerer is ACCEPTED
+    wins over a nearer one that is not, because that is the only kind the reader can go and read.
+    """
+    first, seen, frontier = (None, None), {a}, [(a, ())]
+    for _ in range(limit):
+        nxt = []
+        for node, path in frontier:
+            for b in answerers.get(node, ()):
+                if b in seen:
+                    continue
+                seen.add(b)
+                if b in res:
+                    if res[b] in acc:
+                        return path + (b,), res[b]
+                    first = first[0] and first or (path + (b,), res[b])
+                else:
+                    nxt.append((b, path + (b,)))
+        if not nxt:
+            break
+        frontier = nxt
+    return first
+
+
 def answered_elsewhere(led):
     """{dispute cycle: ["c612 (itself disputed, …)"]} — answers the retirement rule cannot act on.
 
@@ -1493,20 +1520,36 @@ def answered_elsewhere(led):
     the earlier dispute, and only reading that objection tells you which. The defect being repaired
     is a dispute that reads as untouched when a cycle has already spent itself on it, not a dispute
     that is open.
+
+    The annotation itself was one hop too (cycle 650 named this as a separate, unfixed defect): a
+    direct answerer that was still disputed read "itself still disputed", a dead end, even when the
+    chain BEYOND it ended in an accepted claim. So the walk is transitive — annotation only, nothing
+    is retired by it. Measured on the live ledger at cycle 655: 22 of 46 disputed entries read as
+    dead ends under the one-hop annotation and 13 of those 22 reach an accepted terminus, including
+    3 of the 6 the digest actually displays: c630←c631←c632←c635, c646←c647←c648←c649, and c645 at
+    four hops. The reading of the other 33 annotated entries is unchanged and none loses a terminus.
     """
     acc = {a.get("cycle") for a in (led.get("accepted") or [])}
     res = {e.get("cycle"): e.get("answered_by") for e in (led.get("resolved") or [])}
     later = sorted((e.get("cycle"), answered_cycles(e.get("claim") or e.get("item") or ""))
                    for src in ("disputed", "resolved") for e in (led.get(src) or [])
                    if isinstance(e.get("cycle"), int))
+    answerers = {}
+    for a, named in later:
+        for c in named:
+            if a > c:
+                answerers.setdefault(c, []).append(a)
     out = {}
     for e in led.get("disputed") or []:
         c = e.get("cycle")
         for a, named in later:
             if isinstance(c, int) and a > c and c in named:
-                by = res.get(a)
+                by, hops = res.get(a), ""
+                if not by:
+                    path, by = _answer_chain(a, res, acc, answerers)
+                    hops = "".join(f" → c{x}" for x in (path or ()))
                 where = ("itself still disputed" if not by else
-                         f"itself disputed, then answered by c{by}"
+                         f"itself disputed{hops}, then answered by c{by}"
                          f"{' — ACCEPTED, read its fact' if by in acc else ', also unaccepted'}")
                 out.setdefault(c, []).append(f"c{a} ({where})")
     return out
@@ -1613,7 +1656,9 @@ def ledger_digest(led, budget=26000):
                         "touching it. `already_answered_by` on a disputed entry means a later "
                         "cycle DID answer that objection but was not itself accepted, so the "
                         "retirement rule could not close it: read that cycle (and, if it is "
-                        "named, the accepted claim that answered IT) before spending this one.",
+                        "named, the accepted claim that answered IT) before spending this one. An "
+                        "arrow chain (`→ c647 → c648`) is the same thing several hops out: every "
+                        "cycle on the path argued it; start at the ACCEPTED one.",
             "_omitted": omitted or "nothing — this digest is complete",
             "open": led.get("open") or [],
             "inflight": led.get("inflight"),
