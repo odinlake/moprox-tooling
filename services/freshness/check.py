@@ -11,8 +11,13 @@ Exit status is 0 even when lanes are stale: the breach IS the output, and failin
 would raise a second, duplicate incident for the checker itself. A non-zero exit here means the
 checker is broken, which is a different thing and should look different.
 
-    check.py            evaluate and log breaches
+    check.py            evaluate; log breaches ONLY when running as freshness.service
     check.py --dry      evaluate and print; log nothing
+    check.py --live     evaluate and log breaches whatever unit this is — deliberate, and it puts
+                        records in the operator's queue that nothing downstream can tell from real
+
+A breach raised by hand is a real incident at the sink: see `may_raise` for the two times that has
+happened and why the default is now the unit check rather than the operator's memory.
 """
 import glob as globmod
 import json, os, re, socket, subprocess, sys, time
@@ -25,6 +30,7 @@ import errlog
 
 LANES = Path(__file__).resolve().parent / "lanes.json"
 MSGID_LANE_STALE = "6d0a9d7d5f1c4a3b8e2c74f0a1b93e55"     # must match logview/server.py
+OWN_UNIT = "freshness.service"                            # must match freshness.service
 HOUR = 3600.0
 
 # Estate services sit on 10.10.10.0/24, which `no_proxy` names in CIDR form. curl parses that and
@@ -488,8 +494,54 @@ def journal_send(fields):
         sock.close()
 
 
-def raise_incident(lane, detail):
-    """Log a journal record the sink aggregates as a lane-stale incident."""
+def raising_unit():
+    """Which systemd unit this process belongs to, read from its own cgroup.
+
+    The unit name; `""` for a process in no unit at all (a login shell); `None` when the cgroup
+    cannot be read. Handles cgroup v1's `N:ctl:/path` lines as well as v2's `0::/path`.
+    """
+    try:
+        txt = Path("/proc/self/cgroup").read_text()
+    except Exception:
+        return None
+    for line in txt.splitlines():
+        for part in reversed(line.rsplit(":", 1)[-1].split("/")):
+            if part.endswith((".service", ".scope")):
+                return part
+    return ""
+
+
+def may_raise(argv=()):
+    """Should a breach found right now become a real estate incident?
+
+    A lane-stale record is indistinguishable at the sink from a production one, so any hand-run of
+    this file lands in the operator's queue and stays there. It has happened twice, both times on
+    `claude-loop`, which has never had a freshness unit installed: 25 synthetic `localnews` records
+    on 2026-09-10 from a lane's differential test, and 2 `statements-*` records on 2026-10-10 from
+    an agent evaluating a lane it had just edited. The rule written after the first
+    (moprox-memory/lane-stale-row-from-a-fixture-run: "run `check.py --dry` when developing a lane")
+    was prose with nothing enforcing it, and the second run broke it 28 days later.
+
+    So the sink's trust is now structural: only the installed unit raises. `--live` is the explicit
+    override for a deliberate out-of-band run. An unreadable cgroup raises anyway — losing the only
+    lane detector is a worse failure than one stray incident, so the unknown case fails OPEN.
+    """
+    if "--dry" in argv:
+        return False
+    if "--live" in argv:
+        return True
+    unit = raising_unit()
+    return unit is None or unit == OWN_UNIT
+
+
+def raise_incident(lane, detail, argv=None):
+    """Log a journal record the sink aggregates as a lane-stale incident.
+
+    Returns True if the record was sent. The gate lives here and not only in `main()` because this
+    is the single choke point every caller — including a future fixture — has to come through.
+    """
+    if not may_raise(sys.argv[1:] if argv is None else argv):
+        return False
     msg = f"lane {lane['name']} STALE: {detail}"
     if lane.get("note"):
         msg += f" | {lane['note']}"
@@ -511,10 +563,11 @@ def raise_incident(lane, detail):
             # The whole point is that a degraded lane becomes visible; if we cannot say so, say THAT.
             errlog.err(f"freshness: could not raise the incident for lane {lane['name']} ({detail})",
                        exc2)
+    return True
 
 
 def main():
-    dry = "--dry" in sys.argv[1:]
+    live = may_raise(sys.argv[1:])
     skips = errlog.Skips("freshness: reading lane files")
     try:
         cfg = json.loads(LANES.read_text())
@@ -538,10 +591,14 @@ def main():
         if detail:
             breaches += 1
             print(f"STALE  {lane['name']}: {detail}")
-            if not dry:
-                raise_incident(lane, detail)
+            raise_incident(lane, detail)
         else:
             print(f"ok     {lane['name']}")
+
+    if not live:
+        print(f"NOT RAISING: this process is in {raising_unit()!r}, not {OWN_UNIT!r}, so nothing "
+              f"above was logged to the journal and no incident was opened. Pass --live to raise "
+              f"from here on purpose.")
 
     # Say the skipped lines out loud, once. This object was constructed above and then never
     # reported, so even with the call site above fixed a corrupt lane file would have been counted
