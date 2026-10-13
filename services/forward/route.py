@@ -26,11 +26,13 @@ ADDR = re.compile(r"^\s*[@#]?(steward|coach|dev|valet|theming|bard)\b[\s:,>\-]*"
 # Anchored on purpose: "add milk to the shopping list" must NOT match; that goes to valet below.
 # "shop X, Y and Z" adds; "clear shop" blanks the list (operator, 2026-10-06). Instant, no model.
 # "shop" must be a whole word, so "shopping list" never lands here.
+# "list shop" / "shop list" SHOW the list (operator, 2026-10-13); GET is tested before ADD, so
+# "shop list" no longer adds an item called "list".
 SHOP_ADD = re.compile(r"^\s*shop\b[\s:,\-]+(\S.*)$", re.I | re.S)
 SHOP_CLEAR = re.compile(r"^\s*(?:clear|empty|blank|reset)\s+(?:the\s+)?shop(?:ping)?(?:\s+list)?\s*[.!]*\s*$"
                         r"|^\s*shop(?:ping)?(?:\s+list)?\s+(?:clear|empty|done)\s*[.!]*\s*$", re.I)
 SHOP_GET = re.compile(
-    r"^\s*shop\s*[?.!]*\s*$|^\s*(?:(?:get|show|send|give|view|see|read|check|what'?s on|whats on|what is on)\s+)?(?:me\s+)?"
+    r"^\s*(?:shop|list\s+shop|shop\s+list)\s*[?.!]*\s*$|^\s*(?:(?:list|get|show|send|give|view|see|read|check|what'?s on|whats on|what is on)\s+)?(?:me\s+)?"
     r"(?:the\s+|my\s+|our\s+)?(?:shopping|grocery|groceries)(?:\s+list)?"
     r"(?:\s+(?:please|pls|now))?\s*[?.!]*\s*$"
     r"|^\s*(?:(?:visa|skicka|ge mig)\s+)?(?:inköpslistan?|handlingslistan?)\s*[?.!]*\s*$", re.I)
