@@ -52,6 +52,10 @@ def parse_ts(v):
     if isinstance(v, (int, float)):
         return float(v if v < 1e11 else v / 1000.0)
     s = str(v).strip()
+    # Technogym writes `2026-10-06 12:11:45 +01:00` — a space before the offset, which is not
+    # ISO 8601 and which fromisoformat rejects on older interpreters (3.13 happens to accept it).
+    # Closing it here rather than in one caller: every lane reading a vendor clock wants it.
+    s = re.sub(r"(?<=\d) (?=[+-]\d{2}:?\d{2}$)", "", s)
     try:
         d = datetime.fromisoformat(s)
         return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
@@ -213,7 +217,7 @@ def check_jsonl_newest(lane, skips):
     return None
 
 
-OPERATORS = ("equals", "matches", "notnull", "at_least")
+OPERATORS = ("equals", "matches", "notnull", "at_least", "nonempty")
 
 
 def _match(rec, spec):
@@ -242,6 +246,11 @@ def _match(rec, spec):
         return v is not None and re.search(spec["matches"], str(v)) is not None
     if "notnull" in spec:
         return (v is not None) == bool(spec["notnull"])
+    if "nonempty" in spec:
+        # `notnull` cannot see a hollow record: technogym writes `"activities": []` for a session
+        # whose cardio detail came back empty, and an empty list is not null. Truthiness, so it
+        # also rejects "", {}, 0 — all of which are a field present and carrying nothing.
+        return bool(v) == bool(spec["nonempty"])
     if "at_least" in spec:
         try:
             return float(v) >= float(spec["at_least"])
@@ -365,6 +374,66 @@ def check_json_newest(lane, skips):
     return None
 
 
+def check_json_dir_newest(lane, skips):
+    """Age of the newest record in a DIRECTORY of one-record-per-file JSON — data only, if asked.
+
+    `newest_file` cannot do this job, for two separate reasons, and `technogym/cardio/*.json` has
+    now been bitten by both:
+
+    - It reads **mtime**, and these archives are git-tracked. On the box that wrote the file mtime
+      happens to track arrival; on any fresh clone every mtime becomes the checkout time, so the
+      lane reads ok forever (and `statements/` showed the mirror-image failure — see
+      moprox-memory/finance-statements-stale-dropped-a-month). The record's own `startedOn` is the
+      only clock the data sets.
+    - It counts a file, not a measurement. Technogym writes `{"sport": "", "activities": []}` when
+      a session's cardio detail comes back empty, and the fetcher never revisits an id it has
+      written, so a hollow record is permanent AND resets this lane's clock. Three of them
+      (idCr 1122/1123/1124, 2026-09-28..10-06) kept the lane green while the archive gained no
+      data at all — the published census is
+      moprox-memory/technogym-hollow-records-not-treadmill-population.md.
+
+    `json_newest` is the sibling for one document holding a list; this is the sibling for one
+    directory holding many documents. Same `require` vocabulary as `jsonl_newest`.
+    """
+    paths = expand(lane["glob"])
+    if not paths:
+        return f"no files match {lane['glob']}"
+    require = lane.get("require")
+    newest, newest_in, read, kept = None, None, 0, 0
+    for p in paths:
+        try:
+            doc = json.loads(Path(p).read_text())
+        except Exception as exc:
+            # As in check_json_newest: one unreadable member must not decide the lane for the
+            # others, and must not be silent. If it was the only one the lane breaches below.
+            errlog.err(f"freshness: cannot read {p}", exc)
+            continue
+        read += 1
+        if not isinstance(doc, dict):
+            return (f"{os.path.basename(p)} holds {type(doc).__name__}, not one JSON object — "
+                    f"the archive's shape is not what this lane was written against")
+        if require and not _match(doc, require):
+            continue
+        kept += 1
+        t = parse_ts(doc.get(lane["field"]))
+        if t is not None and (newest is None or t > newest):
+            newest, newest_in = t, p
+    if newest is None:
+        if require and read and not kept:
+            return (f"{read} file(s) present, none of them carrying data — no record satisfies "
+                    f"`require` in {lane['glob']}")
+        return (f"no usable '{lane['field']}' value in {read} readable file(s) "
+                f"of {len(paths)} matching {lane['glob']}")
+    age = (time.time() - newest) / HOUR
+    if age > lane["max_age_h"]:
+        what = "newest record carrying data" if require else "newest record"
+        return (f"{what} is {age:.1f} h old (limit {lane['max_age_h']} h) — "
+                f"{os.path.basename(newest_in)} at "
+                f"{datetime.fromtimestamp(newest, timezone.utc).isoformat(timespec='seconds')}"
+                f"{f'; {read - kept} of {read} file(s) carry no data' if require else ''}")
+    return None
+
+
 def check_json_stamp(lane, skips):
     """Age of a derived artifact's OWN generation stamp.
 
@@ -450,6 +519,7 @@ KINDS = {"newest_file": check_newest_file,
          "jsonl_newest": check_jsonl_newest,
          "jsonl_fraction": check_jsonl_fraction,
          "json_newest": check_json_newest,
+         "json_dir_newest": check_json_dir_newest,
          "json_stamp": check_json_stamp,
          "http_json_newest": check_http_json_newest}
 
