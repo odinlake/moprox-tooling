@@ -121,6 +121,59 @@ case("and a chain with no closed terminus is still a dead end",
 case("retire_answered closes nothing off a chain",
      set(loop.retire_answered(led4, 655)[0]), set())
 
+# --- the verifier-equality rule: the only path that can close a dispute whose every objection is
+# an un-audited lens death. The harness's own advice for one is "re-propose it unchanged", and a
+# verbatim re-proposal names no cycle and carries no verb, so prose can never close it. Live shape
+# at cycle 666: c563→c564 and c660→c661, each a byte-identical verify, each re-proposal accepted and
+# published, neither retired (103 and 6 cycles on, over 206 idempotent re-runs).
+import tempfile                                                                  # noqa: E402
+tmp = Path(tempfile.mkdtemp())
+(tmp / "objections").mkdir()
+loop.OBJECTIONS = tmp / "objections"
+DEATH = ("LENS DID NOT COMPLETE — the claim was not audited on this lens (timed out after 420s). "
+         "This is not a defect in the claim: re-propose it unchanged.")
+V = "import json\nprint(json.load(open('x'))['n'])\n"
+
+
+def death_led(verify=V, objs=("check", "claim"), accepted_verify=V, claim="rewritten claim"):
+    return {"accepted": [{"cycle": 661, "claim": claim, "verify": accepted_verify}],
+            "disputed": [{"cycle": 660, "claim": "original", "verify": verify,
+                          "objections": [f"[{n}] {DEATH}" for n in objs]}],
+            "resolved": []}
+
+
+led5 = death_led()
+case("a lens-death dispute closes on a byte-identical later verifier",
+     set(loop.retire_answered(led5, 667)[0]), {660})
+case("the closure records the mechanism, because the claim never mentions the dispute",
+     [e.get("how") for e in led5["resolved"]], [loop._VERIFY_EQ])
+case("and it is idempotent — the re-derivation does not reopen what it just closed",
+     set(loop.retire_answered(led5, 668)[1]), set())
+dig5 = __import__("json").loads(loop.ledger_digest(led5))
+case("the digest explains the closure rather than naming a claim that is silent on it",
+     ["IS this claim, re-proposed" in r for r in dig5["resolved"]], [True])
+
+case("a CHANGED verifier does not close — a corrected check is a different claim (c548/c549)",
+     set(loop.retire_answered(death_led(verify=V + "# one char\n"), 667)[0]), set())
+case("nor does equality alone, when a skeptic did name a defect",
+     set(loop.retire_answered(
+         {"accepted": [{"cycle": 661, "claim": "x", "verify": V}],
+          "disputed": [{"cycle": 660, "claim": "o", "verify": V,
+                        "objections": ["[check] LEG2 divides by the wrong denominator."]}],
+          "resolved": []}, 667)[0]), set())
+case("an empty verifier is not a match, however many disputes carry one",
+     set(loop.retire_answered(death_led(verify="", accepted_verify=""), 667)[0]), set())
+# c601's [check] reply parses to a real refutation even though its [claim] lens also died, so ONE
+# recovered objection disqualifies the whole entry: it was audited, and the audit refuted it.
+(tmp / "objections" / "c660-check-reply.txt").write_text(
+    '{"refuted": true, "defect": "LEG2 divides by the wrong denominator.}')
+case("one recovered reply disqualifies the entry even when the other lens really did die",
+     set(loop.retire_answered(death_led(), 667)[0]), set())
+case("unaudited() is what sees the difference",
+     [loop.unaudited(death_led()["disputed"][0]),
+      loop.unaudited(death_led(objs=("claim",))["disputed"][0])], [False, True])
+(tmp / "objections" / "c660-check-reply.txt").unlink()
+
 # --- the call ORDER in main(): a retirement must reach the prompt of the cycle that earns it.
 # retire_answered used to be called once, after the agent had already been handed the digest, so
 # every closure was one cycle late and a change to the rule was two (the cycle that lands it runs

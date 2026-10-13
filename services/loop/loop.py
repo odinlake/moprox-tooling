@@ -1394,6 +1394,61 @@ _SUPERSEDE_RE = [re.compile(a, re.S) for a in (
 _ANSWER_WINDOW = 240
 
 
+def death_defect(cyc, o):
+    """The defect a dead lens's ARCHIVED REPLY carries, or "" if it carries none.
+
+    A lens-death objection is synthetic: the harness wrote it because the skeptic produced no
+    parseable verdict. But for five of the deaths on the live archive the reply is on disk and does
+    parse now — a delivered refutation lost to a verdict missing its last character. So "this lens
+    died" and "nobody refuted this claim" are NOT the same statement, and every rule that treats a
+    death as an un-audited claim has to ask this question first. `ledger_digest.objection` asks it
+    to rewrite the notice; `retire_answered` asks it to refuse to close a real refutation. Both read
+    `refuted` and the skeptic's own sentence; neither invents either.
+    """
+    name = o.split("]", 1)[0].lstrip("[") if o.startswith("[") else ""
+    if not o.startswith(f"[{name}] LENS DID NOT COMPLETE"):
+        return ""
+    try:
+        v = _verdict((OBJECTIONS / f"c{cyc}-{name}-reply.txt").read_text())
+    except (OSError, LensFailed):
+        return ""
+    defect = str((v or {}).get("defect", "")).strip()
+    return defect if v and v.get("refuted") and defect else ""
+
+
+def unaudited(e):
+    """True if NO skeptic ever named a defect in `e` — every objection is an unrecovered death.
+
+    The harness's own advice for such an entry is "re-propose it unchanged", which is why this is a
+    distinct category rather than a flavour of refutation: the claim was never tested, so the
+    correct next move is the same claim again, and a verbatim re-proposal is exactly what the prose
+    rule in `answered_cycles` cannot read (see `_VERIFY_EQ` below). One recovered objection is
+    enough to disqualify: c601's [check] reply parses to a refutation even though its [claim] lens
+    also died, so c601 IS audited and must not be closed as if it were not.
+    """
+    objs = e.get("objections") or []
+    return (bool(objs) and all("LENS DID NOT COMPLETE" in o for o in objs)
+            and not any(death_defect(e.get("cycle"), o) for o in objs))
+
+
+# A dispute whose every objection is an unrecovered lens death can never be retired by prose,
+# because the harness's advice for it defeats the prose rule by construction: a claim re-proposed
+# UNCHANGED names no cycle beside the word "objection" and carries no disposition verb — c564's
+# claim IS c563's claim, byte for byte. Measured at cycle 666: 7 such entries, c563 and c660 each
+# re-proposed and ACCEPTED (c564, c661) and neither retired, 103 and 6 cycles on, over 206
+# idempotent re-runs. Adding a verb cannot help (c650's problem, not this one) — the answering claim
+# says nothing about the dispute at all.
+#
+# So key on the VERIFIER instead, which the ledger stores on both sides. Over all 304
+# (dead dispute x later accepted) pairs on that ledger exactly 2 share a byte-identical `verify`
+# (c563->c564, c660->c661, both accepted and published) and the next-best non-identical similarity
+# is 0.1094, so equality is the whole separation and no ratio threshold is needed. Byte equality
+# also cannot fire on a re-proposal that CHANGED its check (c549 says in its own text that it
+# re-proposed c548 "on a corrected check, NOT unchanged") — that case stays open, by design, because
+# a changed check is a changed claim and the skeptics never saw either.
+_VERIFY_EQ = "verifier byte-identical to a later accepted claim"
+
+
 def answered_cycles(text):
     """The cycle numbers `text` answers an objection OF, as opposed to merely cites.
 
@@ -1414,7 +1469,9 @@ def answered_cycles(text):
 def retire_answered(led, cyc):
     """Close every dispute some LATER accepted claim answered, reopen the ones wrongly closed.
 
-    Returns (closed, reopened) cycle lists.
+    Returns (closed, reopened) cycle lists. Two rules: the PROSE one below (`answered_cycles`), and
+    `_VERIFY_EQ` for the one class of dispute prose cannot reach — an entry no skeptic ever audited,
+    re-proposed unchanged and then accepted. See `answers()`.
 
     `led["disputed"]` had no removal path at all: an entry left only by ageing off the 50-slot ring.
     So an objection that was answered, verified and published came back in the next prompt as open
@@ -1446,14 +1503,38 @@ def retire_answered(led, cyc):
     """
     named = {a.get("cycle"): answered_cycles(a.get("claim") or a.get("item") or "")
              for a in (led.get("accepted") or []) if isinstance(a.get("cycle"), int)}
+    veq = {}
+    for a in led.get("accepted") or []:
+        v = a.get("verify")
+        if isinstance(a.get("cycle"), int) and isinstance(v, str) and v.strip():
+            veq.setdefault(v, set()).add(a["cycle"])
+
+    def answers(a, e):
+        """HOW accepted cycle `a` answers disputed entry `e` — "prose", `_VERIFY_EQ`, or "" for not.
+
+        One predicate for both directions, because the reopen pass re-derives every closure and a
+        rule it cannot see is a rule that unfiles its own work on the next call. It returns the
+        mechanism rather than a bool because a verifier-equality closure is the one kind whose
+        answering claim never mentions the dispute, so the digest has to say so.
+        """
+        c = e.get("cycle")
+        if c in named.get(a, ()):
+            return "prose"
+        v = e.get("verify")
+        if isinstance(v, str) and v.strip() and a in veq.get(v, ()) and unaudited(e):
+            return _VERIFY_EQ
+        return ""
+
     still, reopened = [], []
     for e in led.get("resolved") or []:
         by, c = e.get("answered_by"), e.get("cycle")
-        if by in named and c not in named[by] and not any(a > c and c in ns
-                                                          for a, ns in named.items()):
-            reopened.append({k: v for k, v in e.items() if k != "answered_by"})
+        how = answers(by, e) if by in named else None
+        if by in named and not how and not any(a > c and answers(a, e) for a in named):
+            reopened.append({k: v for k, v in e.items() if k not in ("answered_by", "how")})
+        elif how == _VERIFY_EQ:
+            still.append(dict(e, how=how))
         else:
-            still.append(e)
+            still.append({k: v for k, v in e.items() if k != "how"} if how else e)
     if reopened:
         led["resolved"] = still
         led["disputed"] = sorted((led.get("disputed") or []) + reopened,
@@ -1461,9 +1542,10 @@ def retire_answered(led, cyc):
     keep, moved = [], []
     for e in led.get("disputed") or []:
         c = e.get("cycle")
-        by = sorted(a for a, ns in named.items() if a > c and c in ns) if isinstance(c, int) else []
+        by = sorted(a for a in named if a > c and answers(a, e)) if isinstance(c, int) else []
         if by:
-            moved.append(dict(e, answered_by=by[0]))
+            moved.append(dict(e, answered_by=by[0], **({"how": _VERIFY_EQ}
+                                                       if answers(by[0], e) == _VERIFY_EQ else {})))
         else:
             keep.append(e)
     if moved:
@@ -1599,16 +1681,11 @@ def ledger_digest(led, budget=26000):
         does not parse, or that carries `refuted: false`, leaves the death notice exactly as it was.
         """
         name = o.split("]", 1)[0].lstrip("[") if o.startswith("[") else ""
-        if o.startswith(f"[{name}] LENS DID NOT COMPLETE"):
-            try:
-                v = _verdict((OBJECTIONS / f"c{cyc}-{name}-reply.txt").read_text())
-            except (OSError, LensFailed):
-                v = None
-            defect = str((v or {}).get("defect", "")).strip()
-            if v and v.get("refuted") and defect:
-                return _clip(f"[{name}] RECOVERED from the dead lens's archived reply — its verdict "
-                             f"was unparseable when captured, but parses now, and it is a "
-                             f"refutation, not a missing audit: {defect}", olen)
+        defect = death_defect(cyc, o)   # shared with retire_answered, which must refuse to close
+        if defect:                      # a dispute a skeptic really did refute
+            return _clip(f"[{name}] RECOVERED from the dead lens's archived reply — its verdict "
+                         f"was unparseable when captured, but parses now, and it is a "
+                         f"refutation, not a missing audit: {defect}", olen)
         try:
             full = (OBJECTIONS / f"c{cyc}-{name}.txt").read_text().strip()
         except OSError:
@@ -1662,7 +1739,11 @@ def ledger_digest(led, budget=26000):
             "_omitted": omitted or "nothing — this digest is complete",
             "open": led.get("open") or [],
             "inflight": led.get("inflight"),
-            "resolved": ["c%s answered by c%s" % (e.get("cycle"), e.get("answered_by"))
+            "resolved": ["c%s answered by c%s%s" % (e.get("cycle"), e.get("answered_by"),
+                                                    " (%s — so that claim does not mention this "
+                                                    "dispute; it IS this claim, re-proposed after "
+                                                    "an un-audited lens death)" % e["how"]
+                                                    if e.get("how") else "")
                          for e in (led.get("resolved") or [])[-12:]],
             "disputed": [entry(e, clip_dis, objs=2, olen=olen, pending=True) for e in dis[-6:]],
             "tried": [entry(e, 300) for e in (led.get("tried") or [])[-20:]],
