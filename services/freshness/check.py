@@ -53,8 +53,10 @@ def parse_ts(v):
         return float(v if v < 1e11 else v / 1000.0)
     s = str(v).strip()
     # Technogym writes `2026-10-06 12:11:45 +01:00` — a space before the offset, which is not
-    # ISO 8601 and which fromisoformat rejects on older interpreters (3.13 happens to accept it).
-    # Closing it here rather than in one caller: every lane reading a vendor clock wants it.
+    # ISO 8601. The 3.13 we run on accepts it, so this is hygiene against an interpreter that does
+    # not rather than a fix for an observed break; UNVERIFIED on any other version. It is here and
+    # not in one caller because every lane reading a vendor clock wants it, and the failure mode it
+    # guards is the silent one — an unparseable stamp is `None`, which reads as "no usable value".
     s = re.sub(r"(?<=\d) (?=[+-]\d{2}:?\d{2}$)", "", s)
     try:
         d = datetime.fromisoformat(s)
