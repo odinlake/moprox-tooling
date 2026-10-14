@@ -159,13 +159,28 @@ def fetch_detail(s, uid, tok, cult, idcr):
 
 
 def fetch_cardio(s, tok, cult, analytics_id, facility_id):
+    """The per-second series for one activity, or {} if it DEFINITIVELY carries none.
+
+    Same rule as fetch_detail: a failure must not be returned as an absence. An `errors` envelope
+    used to come back as None and a 5xx or an HTML error page died on `.json()`; either way the
+    caller's `if cd:` dropped it and the session was stored with `activities: []` — a record
+    indistinguishable from one that genuinely had no cardio (there are three such, and they are
+    real: moprox-memory/technogym-hollow-records-not-treadmill-population), written with nothing
+    at err level, and permanent, because the next scheduled walk starts at max(seen)+1.
+    """
     r = s.get(f"{SVC}/Training/CardioLog/{analytics_id}/Details", timeout=30,
               params={"facilityId": facility_id, "token": tok, "AppId": APP_ID, "_c": cult},
               headers={"Accept": "application/json"})
-    b = r.json()
+    if r.status_code != 200:
+        raise Indeterminate(f"cardio {analytics_id}: HTTP {r.status_code}: {r.text[:200]!r}")
+    try:
+        b = r.json()
+    except ValueError as exc:
+        raise Indeterminate(f"cardio {analytics_id}: unparseable 200 reply: "
+                            f"{r.text[:200]!r}") from exc
     if b.get("errors"):
-        return None
-    return b.get("data", {})
+        raise Indeterminate(f"cardio {analytics_id}: API errors: {b['errors']}")
+    return b.get("data") or {}
 
 
 def _changepoints(samples, idx, ndp=1, tol=0.05):
@@ -340,6 +355,13 @@ def main():
             seen.add(idcr); ok += 1
             sp = sum(len(a["speed_kph"]) for a in rec["activities"])
             print(f"  [{ok}/{len(todo)}] {ymd} idCr={idcr}: {len(rec['activities'])} activity, {sp} speed pts", flush=True)
+        except Indeterminate as exc:
+            # The API answered badly for THIS session. Storing it anyway files the failure as
+            # `activities: []`, which reads as "no cardio was performed" and cannot be corrected
+            # later: the next walk resumes past it. Leave it unstored and OUT of `seen`, so the
+            # newest id is retried on the next run and --backfill reaches any other.
+            errlog.err(f"technogym: idCr {idcr} NOT stored — cardio detail unreadable, so an "
+                       f"empty session cannot be distinguished from a failed fetch", exc)
         except Exception as exc:  # keep going; a bad session shouldn't abort the run
             print(f"  ! idCr={idcr} failed: {exc}", flush=True)
         time.sleep(POLITE_S)
