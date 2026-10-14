@@ -1,0 +1,10 @@
+[Unit]
+Description=Post the crash-risk chart mid-week
+[Timer]
+# Operator, 2026-10-14: mid-week, not Monday (Monday already carries the watchdog roundup).
+# 09:00 Wednesday: FRED's weekly stress indices (Thursday/Friday releases) and Tuesday's close are in.
+OnCalendar=Wed *-*-* 09:00:00
+Persistent=true
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target

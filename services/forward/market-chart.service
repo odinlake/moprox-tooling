@@ -1,0 +1,13 @@
+# Weekly crash-risk chart to the operator's Telegram (as #valet). Triggered by market-chart.timer.
+# Install to /etc/systemd/system/.
+[Unit]
+Description=moprox weekly crash-risk chart (FRED + Yahoo, 8 panels -> Telegram)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/forward/market_chart.py
+TimeoutStartSec=300
