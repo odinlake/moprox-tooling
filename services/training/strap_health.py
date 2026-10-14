@@ -35,8 +35,10 @@ THE PREDICTOR THAT ACTUALLY WORKS IS USE, NOT SIGNAL
 """
 import json, statistics as st, sys, time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))           # sport.py sits alongside this file
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import errlog  # noqa: E402  — no silent swallows; see services/lib/errlog.py
+import sport   # noqa: E402  — run | ride | strength | other: the estate's one sport authority
 
 DATA    = Path.home() / "projects/private-data/polar"
 LOG     = DATA / "strap-health.jsonl"          # one record per session, append-only
@@ -44,6 +46,7 @@ BATTERY = DATA / "battery-changes.json"        # [{"date": "YYYY-MM-DD", "note":
 SPEC_HOURS = 400                               # H10 rated battery life
 SETTLE_S   = 300                               # first 5 min: strap wetting/settling, not failure
 STEADY     = (600, 2400)                       # 10:00-40:00, the window that is genuinely steady
+CALIBRATED = "run"                             # the ONLY regime the thresholds above were measured in
 
 
 def _num(x):
@@ -144,14 +147,38 @@ def load_log():
     return out
 
 
-def record(date, values):
-    """Analyse a session, append it to the log (idempotent per date), and return (rec, level, msg)."""
+def record(date, values, sport_label):
+    """Analyse a session, append it to the log (idempotent per date), and return (rec, level, msg).
+
+    `rec` is None when the session was NOT analysed, and only a `run` is. Every threshold above was
+    measured over 115 all-treadmill sessions, and `jumps5` turns out to be determined by the SPORT
+    rather than by the strap: on strength work it fires in 12 of 14 sessions against the docstring's
+    1-in-115, the split is total within the same day on the same strap at the same charge (11/11
+    strength vs 0/11 cardio over the 11 paired dates), and `repeat_pct` separates disjointly. A
+    failing battery is monotone in time and use and is shared by two sessions on one day; this is
+    neither. The cost was paid: the only non-ok verdict the estate has raised since 2026-09-01 came
+    off the 2026-09-10 STRENGTH_TRAINING trace and reached coach as a top-line "say this to Mikael"
+    STRAP BATTERY instruction. See moprox-memory/strap-jumps5-is-a-sport-artefact.md.
+
+    Scoring a non-run against a treadmill calibration is not evidence about the strap, so it is
+    REPORTED and not analysed — never silently dropped — and the level returned is the strap's state
+    as last MEASURED, over the run sessions in the log. Recalibrating per sport is the alternative
+    and n=14 cannot support it. `sport_label` is required on purpose: there is no default that is
+    safe, since guessing `run` resurrects this bug and guessing anything else disables the lane.
+    """
     recs = load_log()
-    rec = analyse(values); rec["date"] = date[:10]
-    if not any(r.get("date") == rec["date"] for r in recs):
-        LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(LOG, "a") as f: f.write(json.dumps(rec) + "\n")
-        recs.append(rec)
+    kind = sport.kind(sport_label)
+    rec = None
+    if kind == CALIBRATED:
+        rec = analyse(values); rec["date"] = date[:10]
+        if not any(r.get("date") == rec["date"] for r in recs):
+            LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(LOG, "a") as f: f.write(json.dumps(rec) + "\n")
+            recs.append(rec)
+    else:
+        print("strap: %s not analysed — %r is a %s session and every threshold here is %s-calibrated;"
+              " verdict stands on the %d session(s) already measured"
+              % (date[:10], sport_label, kind, CALIBRATED, len(recs)))
     changes = json.loads(BATTERY.read_text()) if BATTERY.exists() else []
     level, msg = verdict(recs, changes)
     return rec, level, msg

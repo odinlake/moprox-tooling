@@ -227,10 +227,11 @@ def post_session(ex, hr, wb=None):
         print("polar: receipt failed (continuing to coach): %s" % e)
     # Strap health before the read: a dropout second is not physiology, and coach must not fit a
     # curve through it or explain it as fatigue. See services/training/strap_health.py for what the
-    # trace can and cannot show (it detects the failure; it does not promise to predict it).
+    # trace can and cannot show (it detects the failure; it does not promise to predict it) — it
+    # needs the sport because it only judges a run, so `_srec` comes back None for a ride or a lift.
     strap_line = ""
     try:
-        _srec, _slevel, _smsg = strap_health.record(ex.get("start_time") or "", hr)
+        _srec, _slevel, _smsg = strap_health.record(ex.get("start_time") or "", hr, sport.ex_label(ex))
         if _slevel != "ok":
             strap_line = ("\n\nSTRAP HEALTH (%s): %s\nSay this to Mikael IN THE POST — one clear "
                           "line, at the top if the level is 'replace', and do NOT read the affected "
