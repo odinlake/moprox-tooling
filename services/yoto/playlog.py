@@ -286,6 +286,12 @@ def _segments(c, t0, t1):
 
 
 SHUFFLE_SUFFIX = " (shuffle)"
+MUTE_BLIP = 3                 # the player itself reports volume 0 for 0.1-2 s at every chapter change
+                              # and start (MQTT events, 2026-10-14): a mute between tracks, not a person
+
+
+def _blip(s, e, vol):
+    return vol == 0 and e - s < MUTE_BLIP
 
 
 def _attribution(c):
@@ -335,7 +341,7 @@ def _tidy(segs, album_of):
         else:
             p = {"s": s, "e": e, "state": st, "title": title, "album": album, "_v": {}}
             out.append(p)
-        if vol is not None:
+        if vol is not None and not _blip(s, e, vol):
             p["_v"][vol] = p["_v"].get(vol, 0) + e - s
     for p in out:
         v = p.pop("_v")
@@ -377,7 +383,7 @@ def stats(days=30):
     last_play = None                                # (title, album, end)
     last_end = None
     for s, e, st, _, _, vol in segs:                # time at each volume: the raw rows, unmerged
-        if st == "playing" and vol is not None:
+        if st == "playing" and vol is not None and not _blip(s, e, vol):
             vols[vol] = vols.get(vol, 0) + e - s
     for s, e, _, title, album in play:
         dur = e - s
