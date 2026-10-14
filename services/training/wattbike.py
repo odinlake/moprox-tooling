@@ -261,6 +261,34 @@ def _anonymous_pass(api, app, jsk, rows, polar_in, stored=(), now=None):
     return found, "; ".join(notes)
 
 
+def force_coverage(path):
+    """(curves, revolutions) over one .wbs file, or None if it holds no revolutions we can read.
+
+    polar.force is per-revolution and NOT present on every revolution, and how often it is missing
+    is a property of the BIKE, not of the format: measured 1836/3810 = 48.19% on serial 28002287's
+    2026-10-05 ride against 99.83..99.98% on the five from 28002545 (analyst, 2026-10-11). The loss
+    is interleaved rather than a tail and the curve-less revolutions carry power, cadence and
+    balance normally, so nothing about the file's size or its other series reveals it. Any
+    per-stroke aggregate -- PES, curve shape, recomputed balance -- therefore has a denominator
+    that must be reported with it, or it silently describes half a ride as the whole one.
+    """
+    path = Path(path)
+    try:
+        doc = json.loads(path.read_text())
+    except Exception as e:
+        errlog.skip("wattbike: force coverage unreadable %s" % path.name, e)
+        return None
+    curves = revs = 0
+    for lap in ((doc or {}).get("laps") or []):
+        for d in ((lap or {}).get("data") or []):
+            if not isinstance(d, dict):
+                continue
+            revs += 1
+            if ((d.get("polar") or {}).get("force") or "").strip():
+                curves += 1
+    return (curves, revs) if revs else None
+
+
 def pull(dest=None):
     """Fetch every session for the stored user and every sessionData file we do not hold.
 
@@ -320,6 +348,16 @@ def pull(dest=None):
     # the files it points at.
     (dest / "sessions.json").write_text(json.dumps(rows, indent=1) + "\n")
     note = "%d sessions, %d new files" % (len(rows), len(new))
+    # Measured, not assumed: the coach is handed per-stroke instructions, so every .wbs this run
+    # landed reports how many of its revolutions actually carry a curve. Scoped to the new files
+    # because the note describes this pull, and re-parsing the whole archive costs 2.7 MB a ride.
+    cover = []
+    for name in sorted(n for n in new if n.endswith(".wbs")):
+        got = force_coverage(dest / "raw" / name)
+        if got:
+            cover.append("%s %d/%d (%.2f%%)" % ((name[:-4],) + got + (100.0 * got[0] / got[1],)))
+    if cover:
+        note += ", force curves per revolution: %s" % "; ".join(cover)
     if recovered:
         note += ", %d summary-only recovered by serial" % len(recovered)
     if anon_note:
