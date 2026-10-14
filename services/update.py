@@ -98,6 +98,26 @@ def training_fp():
     fb = POLAR_RAW.parent.parent / "fitbit"                  # Fitbit deliberate workouts (2022-23 gap)
     if fb.exists():
         files += sorted(f for f in fb.glob("exercise_*.json") if f.is_file())
+    # Four more private-data inputs the builder reads and this fingerprint could not see until
+    # 2026-10-14. Census and causal proof: moprox-memory/training-fingerprint-blind-inputs.md —
+    # mutating athlete.json ALONE (build.py:54; its lt1_hr/lt2_hr are copied verbatim into
+    # published sessions.json and also re-tune the classifier) rewrites 758 of 758 comparable
+    # session records against a byte-identical fingerprint, and emptying technogym/cardio
+    # (technogym_join.py:24) takes spd_src=technogym from 26 sessions to 0. not-mine.json is the
+    # operator's exclusion list and outranks every heuristic (technogym_join.py:35);
+    # indooractivities.json is the per-ACTIVITY clock, without which every non-first activity in a
+    # multi-activity session is mis-dated by a median 2543 s (technogym_join.py:28).
+    # Filtered on is_file() rather than stat'ed, so an absent input is not an error:
+    # private-data/training/speed-overrides.json (build.py:123, the operator's authoritative speed
+    # corrections) has never existed, and must start counting the day it does.
+    pd = POLAR_RAW.parent.parent
+    files += [f for f in (pd / "agents/coach/athlete.json",
+                          pd / "technogym/indooractivities.json",
+                          pd / "technogym/not-mine.json",
+                          pd / "training/speed-overrides.json") if f.is_file()]
+    tg = pd / "technogym/cardio"
+    if tg.exists():
+        files += sorted(f for f in tg.rglob("*.json") if f.is_file())
     return hashlib.sha1("|".join(f"{f}:{f.stat().st_size}:{f.stat().st_mtime_ns}" for f in files).encode()).hexdigest()
 
 def staged_changes(wt):
