@@ -1,0 +1,10 @@
+[Unit]
+Description=Check markets for upheaval every 20 minutes
+[Timer]
+# "Tell me asap" (operator, 2026-10-14). Around the clock, because Tokyo and the US close while
+# London sleeps; each signal posts once per market day per tier, so frequency costs no noise.
+OnCalendar=*:00/20
+Persistent=true
+RandomizedDelaySec=60
+[Install]
+WantedBy=timers.target

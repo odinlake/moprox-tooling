@@ -8,7 +8,7 @@ overnight commits to the operator's repos/orgs by anyone who isn't the operator 
 Both runs (this and the 16:15 review) append any MCAS school announcement/message not yet reported
 (services/mcas/mcas.py), after the agent's text, so the agent's layout rules never eat it.
 """
-import datetime, email.utils, json, subprocess, sys, time, urllib.parse, urllib.request
+import datetime, email.utils, json, os, subprocess, sys, time, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 # siblings from THIS tree, not ~/projects — see the note in services/forward/polar_fetch.py
@@ -141,8 +141,13 @@ def morning():
     prompt = (
         "Compose Mikael's morning brief as THREE compact blocks, in this order, each opening with a "
         "bold lead-in and separated by a SINGLE newline (no blank lines):\n"
-        "1) GENERAL NEWS — top overnight item + 1-2 inlined 'Also' items (from DATA.news), your usual "
-        "geopolitics/markets bias.\n"
+        "1) FOREIGN AFFAIRS — EVERY day, the single most significant foreign-affairs / geopolitical "
+        "story (from DATA.news.world): one item, bold lead-in + inline link. NOTHING ELSE from the news "
+        "unless it is TRULY important: something history will remember, or that directly changes "
+        "Mikael's day or money. Routine markets, earnings, UK politics and business news do NOT qualify "
+        "(operator, 2026-10-14: 'apart from that no news unless it's something truly important'; "
+        "market upheaval reaches him separately, the moment it happens). Most days that means ONE item "
+        "and no 'Also'.\n"
         "2) LOCAL CONDITIONS — the weather, putting DATA.weather.icon immediately before the condition "
         "word; mention rain ONLY if likely in the 07:30-09:00 window — folded with any SERIOUS local "
         "event (DATA.local). Add the day's repo line here if DATA.repos has any.\n"
@@ -209,16 +214,20 @@ def review():
     print("valet review: sent (%d chars, localnews=%s, mcas=%d)" % (len(msg), bool(ln), len(items)))
 
 LN_STATE = Path.home() / ".local/state/valet-localnews-sent.json"
+LN_MINSIG = int(os.environ.get("VALET_LOCALNEWS_MINSIG", "4"))
 
 def localnews_para():
-    """New (unsent) local-news items from the reader (crimes/incidents/council/events, minsig 3)."""
+    """New (unsent) local-news items from the reader, significance 4+ only: serious crime or danger
+    nearby, notable incidents. Council business and local events (3) were too chatty for a daily
+    afternoon message (operator, 2026-10-14: "be more conservative")."""
     try:
-        items = json.loads(_get("http://10.10.10.8:8004/api/brief?hours=26&minsig=3", timeout=15))
+        items = json.loads(_get("http://10.10.10.8:8004/api/brief?hours=26&minsig=%d" % LN_MINSIG,
+                                timeout=15))
     except Exception:
         return None
     try: sent = set(json.load(open(LN_STATE)))
     except Exception: sent = set()
-    new = [i for i in items if i["id"] not in sent][:5]
+    new = [i for i in items if i["id"] not in sent][:3]
     if not new:
         return None
     lines = ["📍 *Local*"]

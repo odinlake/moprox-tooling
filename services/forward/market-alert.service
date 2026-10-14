@@ -1,0 +1,13 @@
+# Financial-upheaval alert to the operator's Telegram (as #valet), SILENT unless a hard threshold trips.
+# Triggered by market-alert.timer. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox market upheaval alert (indices, VIX, yields, sterling, HY spread -> Telegram)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/forward/market_alert.py
+TimeoutStartSec=300
