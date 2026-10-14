@@ -285,6 +285,66 @@ def _segments(c, t0, t1):
     return out
 
 
+SHUFFLE_SUFFIX = " (shuffle)"
+
+
+def _attribution(c):
+    """A function (title, album) -> album that names the PLAYLIST a chapter belongs to.
+
+    The ad-hoc one-shot cards myo.queue() makes are deleted after the next play, and HA only learns a
+    card's name from its library, so a chapter played from one often arrives with no album at all
+    (all the album-less Halvan chapters of 2026-10-03 and 10-10). The older "(shuffle)" twins carry
+    their own name. Either way the chapter TITLE still says which playlist it is: map it through
+    every row where the album was a real one. Nothing to go on leaves the title as the card's name
+    (Yoto's own daily shows, e.g. "Wake with Jake", never report an album)."""
+    seen = {}
+    for title, album, n in c.execute("select title, album, count(*) from rows where title is not null"
+                                     " and album is not null group by title, album"):
+        if not album.endswith(SHUFFLE_SUFFIX):
+            seen.setdefault(title, []).append((n, album))
+    home = {t: max(v)[1] for t, v in seen.items()}
+
+    def album_of(title, album):
+        if album and not album.endswith(SHUFFLE_SUFFIX):
+            return album
+        if title in home:
+            return home[title]
+        if album:
+            return album[:-len(SHUFFLE_SUFFIX)]
+        return title
+    return album_of
+
+
+def _tidy(segs, album_of):
+    """The segments as a person would describe them. Every album goes through album_of; the
+    metadata-less second at the start of a play takes the chapter that follows it; and runs of
+    the same chapter in the same state are ONE segment, however often the volume moved in it (the
+    sleep fade writes eight one-second rows, a start often a 0-then-8 blip). A merged segment
+    keeps its longest-held volume, plus vmin/vmax when the volume moved."""
+    segs = [list(x) for x in segs]
+    for i in range(len(segs) - 2, -1, -1):          # backwards: a run of blank rows all fill
+        s, n = segs[i], segs[i + 1]
+        if s[3] is None and s[4] is None and s[2] == n[2] == "playing" and s[1] == n[0] and n[1] - s[0] < 3600:
+            s[3], s[4] = n[3], n[4]
+    out = []
+    for s, e, st, title, album, vol in segs:
+        album = album_of(title, album) if (title or album) else None
+        p = out[-1] if out else None
+        if p and p["e"] == s and (p["state"], p["title"], p["album"]) == (st, title, album):
+            p["e"] = e
+        else:
+            p = {"s": s, "e": e, "state": st, "title": title, "album": album, "_v": {}}
+            out.append(p)
+        if vol is not None:
+            p["_v"][vol] = p["_v"].get(vol, 0) + e - s
+    for p in out:
+        v = p.pop("_v")
+        p["volume"] = max(v, key=v.get) if v else None
+        if len(v) > 1:
+            p["vmin"], p["vmax"] = min(v), max(v)
+    return out
+
+
 def _split_hours(s, e):
     """Yield (local datetime of the hour, seconds) for [s, e), split at local hour boundaries."""
     while s < e:
@@ -305,8 +365,10 @@ def stats(days=30):
         t0 = t1 - days * 86400
     else:
         t0 = (first or t1) - 86400
+    album_of = _attribution(c)
     segs = _segments(c, t0, t1)
-    play = [x for x in segs if x[2] == "playing"]
+    play = [(x["s"], x["e"], x["state"], x["title"], x["album"])
+            for x in _tidy(segs, album_of) if x["state"] == "playing"]
 
     cards, chapters, vols = {}, {}, {}
     heat = [[0] * 24 for _ in range(7)]
@@ -314,7 +376,10 @@ def stats(days=30):
     plays = sessions = 0
     last_play = None                                # (title, album, end)
     last_end = None
-    for s, e, _, title, album, vol in play:
+    for s, e, st, _, _, vol in segs:                # time at each volume: the raw rows, unmerged
+        if st == "playing" and vol is not None:
+            vols[vol] = vols.get(vol, 0) + e - s
+    for s, e, _, title, album in play:
         dur = e - s
         album = album or "(unknown card)"
         title = title or "(unknown)"
@@ -330,8 +395,6 @@ def stats(days=30):
         k["listen_s"] += dur; k["plays"] += new; k["last"] = max(k["last"], e)
         ch = chapters.setdefault((album, title), {"album": album, "title": title, "listen_s": 0, "plays": 0, "last": 0})
         ch["listen_s"] += dur; ch["plays"] += new; ch["last"] = max(ch["last"], e)
-        if vol is not None:
-            vols[vol] = vols.get(vol, 0) + dur
         for d, secs in _split_hours(s, e):
             heat[d.weekday()][d.hour] += secs
             day = d.date().isoformat()
@@ -347,10 +410,10 @@ def stats(days=30):
 
     nights = _nights(c, segs, t0, t1, first)
     l0 = t1 - 86400
-    last24 = [{"s": s, "e": e, "state": st, "title": ti, "album": al, "volume": v}
-              for s, e, st, ti, al, v in _segments(c, l0, t1)]
+    last24 = _tidy(_segments(c, l0, t1), album_of)
     c.close()
-    rnd = lambda xs: [dict(x, listen_s=round(x["listen_s"])) for x in xs]
+    # a blank second with nothing after it to name it stays "(unknown card)"; at 0 s it is noise
+    rnd = lambda xs: [dict(x, listen_s=round(x["listen_s"])) for x in xs if x["plays"] or x["listen_s"] >= 0.5]
     return {
         "range": {"days": days, "start": t0, "end": t1},
         "synced_to": synced or None, "first_ts": first,

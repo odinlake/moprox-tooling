@@ -171,6 +171,8 @@ td .al { color: var(--muted); font-size: 12px; }
     var day = days === 0 ? "today" : days === 1 ? "yesterday" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
     return day + " " + hm(ts);
   }
+  // a merged segment carries vmin/vmax when the volume moved inside it (playlog._tidy)
+  function vol(s) { return s.vmin != null ? s.volume + " (" + s.vmin + "–" + s.vmax + ")" : String(s.volume); }
   function what(x) { return x.title && x.album && x.title !== x.album ? x.album + " — " + x.title : (x.title || x.album || "unknown"); }
 
   // ---- tooltip (hover on desktop, tap on touch) ---------------------------------------------------
@@ -227,7 +229,7 @@ td .al { color: var(--muted); font-size: 12px; }
     segs.forEach(function (s) {
       var x0 = x(s.s), w = Math.max(2, x(s.e) - x0);
       var tipTxt = "<b>" + esc(hm(s.s)) + "–" + esc(hm(s.e)) + "</b> · " + dur(s.e - s.s) + (s.state === "paused" ? " · paused" : "") +
-                   "<br>" + esc(what(s)) + (s.volume != null ? "<br>volume " + s.volume : "");
+                   "<br>" + esc(what(s)) + (s.volume != null ? "<br>volume " + vol(s) : "");
       var paused = s.state === "paused";
       g += '<rect class="hit" x="' + x0 + '" y="' + (top + (paused ? bh * 0.3 : 0)) + '" width="' + w + '" height="' + (paused ? bh * 0.4 : bh) +
            '" fill="' + col(s) + '"' + (paused ? ' fill-opacity=".45"' : "") + ' vector-effect="non-scaling-stroke" data-tip="' + esc(tipTxt) + '"/>';
@@ -239,7 +241,7 @@ td .al { color: var(--muted); font-size: 12px; }
     var acts = segs.slice().reverse().map(function (s) {
       return '<li><span class="t">' + hm(s.s) + "–" + hm(s.e) + '</span><i class="dot" style="background:' + col(s) + (s.state === "paused" ? ';opacity:.45' : "") + '"></i>' +
              '<span class="w">' + (s.state === "paused" ? '<span style="color:var(--muted)">paused · </span>' : "") + esc(what(s)) + '</span>' +
-             '<span class="m">' + dur(s.e - s.s) + (s.volume != null ? " · vol " + s.volume : "") + '</span></li>';
+             '<span class="m">' + dur(s.e - s.s) + (s.volume != null ? " · vol " + vol(s) : "") + '</span></li>';
     }).join("");
     return '<section class="card"><h2>Last 24 hours</h2><p class="sub">Every play and pause, to the minute. Tap a bar for details.</p>' +
       (segs.length ? svg + legend + '<ul class="acts">' + acts + '</ul>' : '<div class="msg">Nothing played in the last 24 hours.</div>') + '</section>';
