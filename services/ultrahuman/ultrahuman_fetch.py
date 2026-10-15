@@ -196,6 +196,25 @@ def scalars(d, payload):
         rec["hr_cov_5m"] = 0.0
         rec["hr_gap_max_min"] = None
 
+    # Skin temperature, counted and not averaged, because the only consumer is the freshness lane's
+    # `require` and what it needs is "did the ring report at all". It is here because temp is the one
+    # series this flat row did not expose, and on 2026-05-25 it is the ONLY evidence the ring
+    # reported: 10 temp samples at 30.6 degC, hr/hrv/steps/Sleep all empty, so every one of that
+    # lane's four certifiers is null except `steps`, which reads 0.0. Tighten `steps` alone and that
+    # day becomes a measurement the lane cannot see. Unique in the 209-day archive, measured
+    # 2026-10-15.
+    #
+    # Non-zero bins, not len(): an echoed all-zero grid is exactly how `steps` certified five empty
+    # days (see has_measurement). temp has never arrived all-zero, so this is hygiene against the
+    # class rather than a fix for an observed break. hr_points stays a plain count — the
+    # ultrahuman-coverage lane calibrates a density floor on it and 0 is a real HR reading's
+    # neighbour there, not a missing one.
+    tmo = by.get("temp") or {}
+    rec["temp_points"] = sum(
+        1 for v in ((tmo.get("values") if isinstance(tmo, dict) else None) or [])
+        if isinstance((v.get("value") if isinstance(v, dict) else v), (int, float))
+        and (v.get("value") if isinstance(v, dict) else v) != 0)
+
     s = by.get("Sleep") or {}
     if isinstance(s, dict):
         rec["bedtime_start"] = s.get("bedtime_start")
