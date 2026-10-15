@@ -69,6 +69,21 @@ def parse_ts(v):
         return None
 
 
+def dig(doc, path):
+    """Read a dotted field path out of nested dicts. None if any hop is missing or not a dict.
+
+    Polar writes one file per exercise as `{"summary": {...}, "hr": {...}}`, so the only clock the
+    DATA sets — `summary.upload_time` — is one level down, and `json_dir_newest` could not reach it.
+    Deliberately not recursive-search: a path that does not resolve yields None, which the callers
+    already report as "no usable value", rather than silently matching a same-named key elsewhere.
+    """
+    for part in str(path).split("."):
+        if not isinstance(doc, dict):
+            return None
+        doc = doc.get(part)
+    return doc
+
+
 def read_jsonl(paths, skips):
     for p in paths:
         try:
@@ -396,6 +411,10 @@ def check_json_dir_newest(lane, skips):
 
     `json_newest` is the sibling for one document holding a list; this is the sibling for one
     directory holding many documents. Same `require` vocabulary as `jsonl_newest`.
+
+    `field` is a dotted path (see `dig`), because a one-record-per-file archive usually nests the
+    record under a wrapper key — Polar's `summary.upload_time`. `require` is NOT dotted; no lane
+    needs it yet and inventing the vocabulary unused is how a file like this stops being verified.
     """
     paths = expand(lane["glob"])
     if not paths:
@@ -417,7 +436,7 @@ def check_json_dir_newest(lane, skips):
         if require and not _match(doc, require):
             continue
         kept += 1
-        t = parse_ts(doc.get(lane["field"]))
+        t = parse_ts(dig(doc, lane["field"]))
         if t is not None and (newest is None or t > newest):
             newest, newest_in = t, p
     if newest is None:
