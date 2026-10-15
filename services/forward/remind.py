@@ -2,7 +2,9 @@
 """Hourly Telegram reminders for one appointment, as a systemd timer that survives reboots.
 
     remind.py add <name> "<YYYY-MM-DD HH:MM>" "<what>" [--hours 8,9,10,11,12]
-        install /etc/systemd/system/remind-<name>.{service,timer} (sudo) and send one confirmation
+        install /etc/systemd/system/remind-<name>.{service,timer} (sudo) and send one confirmation.
+        --hours takes whole hours or HH:MM (e.g. 7,8:15). A bare "<YYYY-MM-DD>" is an all-day
+        event: the pings say "today", with no countdown and no invented start time.
     remind.py send <name> "<YYYY-MM-DD HH:MM>" "<what>"
         one reminder now (what the timer runs); says nothing once the appointment has started
     remind.py list                      the reminder timers and when each fires next
@@ -24,11 +26,27 @@ AGENT = "reminder"
 
 
 def when(s):
+    """The appointment as a datetime; an all-day date means the END of that day."""
+    if len(s.strip()) == 10:
+        return datetime.datetime.strptime(s.strip(), "%Y-%m-%d").replace(hour=23, minute=59)
     return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M")
 
 
-def text(what, at, now=None):
+def allday(s):
+    return len(s.strip()) == 10
+
+
+def hhmm(h):
+    """'7' or '8:15' -> (7, 0) / (8, 15)."""
+    hh, _, mm = str(h).partition(":")
+    return int(hh), int(mm or 0)
+
+
+def text(what, at, now=None, whole_day=False):
     now = now or datetime.datetime.now()
+    if whole_day:
+        day = "today" if at.date() == now.date() else at.strftime("%a %-d %b")
+        return "⏰ *%s* %s (all day)" % (what, day)
     mins = int((at - now).total_seconds() // 60)
     left = "%dh %02dm" % divmod(mins, 60) if mins >= 60 else "%d min" % mins
     day = "today" if at.date() == now.date() else at.strftime("%a %-d %b")
@@ -41,7 +59,7 @@ def send(name, at_s, what):
     if datetime.datetime.now() >= at:
         print("%s: appointment has started, nothing sent" % name)
         return
-    msg = text(what, at)
+    msg = text(what, at, whole_day=allday(at_s))
     tg.send(msg, agent=AGENT)
     print("sent: %s" % msg)
 
@@ -57,7 +75,7 @@ def add(name, at_s, what, hours):
     unit = ("[Unit]\nDescription=reminder: %s at %s\nAfter=network-online.target\nWants=network-online.target\n"
             "[Service]\nType=oneshot\nUser=mikael\nEnvironment=HOME=/home/mikael\nEnvironment=PYTHONUNBUFFERED=1\n"
             "ExecStart=/usr/bin/python3 %s send %s %s %s\n") % (what, at_s, HERE, _q(name), _q(at_s), _q(what))
-    cal = "\n".join("OnCalendar=%s %02d:00:00" % (at.strftime("%Y-%m-%d"), h) for h in hours)
+    cal = "\n".join("OnCalendar=%s %02d:%02d:00" % ((at.strftime("%Y-%m-%d"),) + hhmm(h)) for h in hours)
     timer = ("[Unit]\nDescription=reminder timer: %s at %s\n[Timer]\n%s\nPersistent=true\n"
              "[Install]\nWantedBy=timers.target\n") % (what, at_s, cal)
     for fn, body in ((svc + ".service", unit), (svc + ".timer", timer)):
@@ -69,9 +87,9 @@ def add(name, at_s, what, hours):
     subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
     subprocess.run(["sudo", "systemctl", "enable", "--now", svc + ".timer"], check=True)
     import tg
-    tg.send("⏰ Reminder set: *%s* on %s at %s. I'll ping you at %s." % (
-        what, at.strftime("%a %-d %b"), at.strftime("%H:%M"),
-        ", ".join("%02d:00" % h for h in hours)), agent=AGENT)
+    tg.send("⏰ Reminder set: *%s* on %s%s. I'll ping you at %s." % (
+        what, at.strftime("%a %-d %b"), "" if allday(at_s) else " at " + at.strftime("%H:%M"),
+        ", ".join("%02d:%02d" % hhmm(h) for h in hours)), agent=AGENT)
 
 
 def main(a):
@@ -82,7 +100,7 @@ def main(a):
     if a[0] == "add" and len(a) >= 4:
         hours = [8, 9, 10, 11, 12]
         if "--hours" in a:
-            hours = [int(h) for h in a[a.index("--hours") + 1].split(",")]
+            hours = a[a.index("--hours") + 1].split(",")
         return add(a[1], a[2], a[3], hours)
     if a[0] == "list":
         return subprocess.run(["systemctl", "list-timers", "remind-*", "--all", "--no-pager"])
