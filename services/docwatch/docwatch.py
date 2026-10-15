@@ -592,4 +592,25 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        # Every SURVIVABLE failure in this file goes through errlog; the fatal one did not. An
+        # uncaught exception reaches journald through Python's default excepthook, which writes to
+        # stderr with no `<N>` prefix, and journald files an un-prefixed stderr line at PRIORITY=6
+        # — so the only err-level record a dead docwatch left was systemd's own generic "Failed to
+        # start docwatch.service", which names no cause at all.
+        #
+        # Measured on claude-dev at 2026-10-15T13:27:27Z: the run died on the FIRST Drive call in
+        # main() and left 55 journal rows, every one of them PRIORITY=6, including the only line
+        # that identifies the fault — `google.auth.exceptions.RefreshError: ('unauthorized_client:
+        # Client is unauthorized to retrieve access tokens using this method, or client not
+        # authorized for any of the scopes requested.', ...)`. A credential failure is a different
+        # repair from a Drive outage or a bad page token, and a `priority=3` query could not tell
+        # them apart because it returned none of them.
+        #
+        # Same idiom as godnattkvart.py: name the cause at err, then `raise`. The traceback and the
+        # non-zero exit are untouched, so the unit-failed incident still fires — this only stops the
+        # sentence that explains it from being filed below the level anything queries.
+        errlog.err("docwatch: died before it finished filing", e)
+        raise
