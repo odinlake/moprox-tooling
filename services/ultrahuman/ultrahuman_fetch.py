@@ -219,13 +219,27 @@ def has_measurement(payload):
     Deliberately not "is the response non-empty": a dead day still returns all 16 metric_data
     entries, and night_rhr still carries an echoed value (see scalars()). Only the series-bearing
     metrics count.
+
+    Nor is a PRESENT series enough. On a day the ring never reported, the steps grid still arrives
+    fully binned with every value 0.0, and a truthiness test on `values` accepted that as proof the
+    ring measured — sealing five empty days (2026-06-21, 06-22, 07-03, 07-04, 07-05) as final
+    against the very ten-day re-fetch window is_final() keeps open for this case. A series counts
+    only if some bin carries a non-zero sample. Measured 2026-10-15 over all 209 archived payloads:
+    `steps` is the only metric that ever arrives all-zero (15 days), so this costs hr/hrv/temp no
+    verdict, and the 10 all-zero-steps days that did sample still certify on hr or temp.
     """
     by = {m.get("type"): m.get("object") for m in
           (payload.get("data") or {}).get("metric_data") or []}
     for k in ("hr", "steps", "hrv", "temp"):
         o = by.get(k)
-        if isinstance(o, dict) and (o.get("values") or o.get("value") is not None):
+        if not isinstance(o, dict):
+            continue
+        if o.get("value") is not None:
             return True
+        for v in o.get("values") or []:
+            x = v.get("value") if isinstance(v, dict) else v
+            if isinstance(x, (int, float)) and x != 0:
+                return True
     s = by.get("Sleep")
     return bool(isinstance(s, dict) and s)
 
