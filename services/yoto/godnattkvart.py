@@ -7,8 +7,13 @@ SR airs a new 15-minute episode every Sunday (programid 4801). The show has no p
 Yoto's own podcast list cannot follow it, and SR keeps each episode online for only ~30 days.
 This fetches SR's episode list, downloads every episode newer than the card's last chapter into
 ~/yoto-audio/godnattkvart/<date>.m4a, and appends each as "Godnattkvart <d month yyyy>" through
-myo.append (which transcodes, keeps the cover and is idempotent on the audio). When the card is at
-Yoto's chapter limit the oldest chapter is dropped first. The (shuffle) twin needs nothing: queue
+myo.append (which transcodes, keeps the cover and is idempotent on the audio), then sorts the card
+NEWEST FIRST (operator 2026-10-15: a physical card is linked, and the new episode should be what it
+plays). When the card is at Yoto's chapter limit the oldest (last) chapter is dropped first.
+
+The player remembers where a card was stopped and resumes there; nothing in the API clears that.
+So a new episode is also recorded in freshstart.MARK, and freshstart (fed by listen.py) restarts the
+card at chapter 1 the first time it is inserted afterwards. The (shuffle) twin needs nothing: queue
 rewrites it from the source on every play. One #bard line on Telegram when something was added.
 Run weekly by yoto-godnattkvart.timer (Monday morning).
 """
@@ -16,7 +21,7 @@ import datetime, json, os, re, sys, urllib.request
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-import errlog, myo, yoto
+import errlog, freshstart, myo, yoto
 
 CARD = "hsGyZ"
 PROGRAM = 4801
@@ -54,6 +59,18 @@ def episodes():
     return sorted(out)
 
 
+def newest_first(tok):
+    """Sort the card by air date, newest first; a no-op POST is skipped. Chapters without a date in
+    their title (none today) keep their place at the end."""
+    import time
+    time.sleep(3)          # Yoto read-after-write lag: a read right after a POST can be stale
+    chapters = myo.chapters_of(CARD, tok)
+    ordered = sorted(chapters, key=lambda c: date_of(c.get("title")) or datetime.date.min, reverse=True)
+    if [c.get("title") for c in ordered] != [c.get("title") for c in chapters]:
+        myo.set_order(CARD, ordered, tok)
+        print("godnattkvart: sorted newest first, now starts with %s" % ordered[0].get("title"))
+
+
 def main():
     dry = "--dry" in sys.argv
     tok = yoto.token()
@@ -62,6 +79,8 @@ def main():
     last = max(have) if have else datetime.date.min
     new = [(d, u) for d, u in episodes() if d > last and d not in have]
     if not new:
+        if not dry:
+            newest_first(tok)
         print("godnattkvart: up to date (last %s, %d chapters)" % (last, len(chapters)))
         return
     if dry:
@@ -76,16 +95,18 @@ def main():
             os.replace(path + ".part", path)
         chapters = myo.chapters_of(CARD, tok)
         if len(chapters) >= myo.MAX_CHAPTERS:
-            print("godnattkvart: card full, dropping %s" % chapters[0].get("title"))
-            myo.set_order(CARD, chapters[1:], tok)
+            print("godnattkvart: card full, dropping %s" % chapters[-1].get("title"))
+            myo.set_order(CARD, chapters[:-1], tok)
         r = myo.append(CARD, path, title_for(d), tok)
         print(json.dumps(r, ensure_ascii=False))
         if r.get("status") == "added":
             added.append(title_for(d))
+    newest_first(tok)
     if added:
+        freshstart.mark(CARD, added[-1])
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "forward"))
         import tg
-        tg.send("🐒 *Radioapan*: added %s to the godnattkvart card." % ", ".join(added), agent="bard")
+        tg.send("🐒 *Radioapan*: added %s to the godnattkvart card. It plays first, from the start, next time the card goes in." % ", ".join(added), agent="bard")
 
 
 if __name__ == "__main__":

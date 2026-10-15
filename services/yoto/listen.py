@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yoto
 import brightguard
+import freshstart
 
 LOG = Path(os.environ.get("YOTO_LISTEN_LOG", str(Path.home() / ".local/share/moprox/yoto/listen.jsonl")))
 SESSION = 45 * 60          # reconnect with a fresh access token well inside its lifetime
@@ -34,6 +35,7 @@ def write(topic, m):
 
 
 GUARD = brightguard.Guard()
+FRESH = freshstart.Guard()
 
 
 def session(tok, dev):
@@ -62,6 +64,10 @@ def session(tok, dev):
             GUARD.feed(topic, m, time.time())
         except Exception as e:
             print("brightguard: %s: %s" % (type(e).__name__, e), flush=True)
+        try:                                 # nor may the fresh-start check
+            FRESH.feed(topic, m, time.time())
+        except Exception as e:
+            print("<3>freshstart: %s: %s" % (type(e).__name__, e), flush=True)
 
     c.on_connect = on_connect
     c.on_message = on_message
