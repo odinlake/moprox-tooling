@@ -1,0 +1,16 @@
+# Weekly: add new "Radioapans godnattkvart" episodes from Sveriges Radio to the Yoto card
+# (services/yoto/godnattkvart.py). Same user/interpreter/clone as yoto-web: yoto.env lives in mikael's home.
+[Unit]
+Description=yoto-godnattkvart -- add new Radioapan episodes to the Yoto card
+Documentation=https://github.com/odinlake/moprox-tooling/tree/main/services/yoto
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+Group=mikael
+WorkingDirectory=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/yoto/godnattkvart.py
+TimeoutStartSec=900

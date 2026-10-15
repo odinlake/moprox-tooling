@@ -1,0 +1,10 @@
+# SR publishes the episode on Sunday evening; Monday morning picks it up.
+[Unit]
+Description=yoto-godnattkvart weekly (Monday 07:15)
+
+[Timer]
+OnCalendar=Mon *-*-* 07:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
