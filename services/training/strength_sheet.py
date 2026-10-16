@@ -12,7 +12,7 @@ spacing"). The dashboard's strength panel links both files.
 Chromium is Playwright's chrome-headless-shell under ~/.cache/ms-playwright, driven by its own
 --print-to-pdf / --screenshot flags, so no Python or Node Playwright package is needed.
 """
-import glob, html, json, os, re, subprocess, sys, tempfile, time
+import glob, html, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -83,8 +83,8 @@ def main():
         for f in (pdf, png):
             if not f.exists() or f.stat().st_size < 1000:
                 raise RuntimeError(f"chrome-headless-shell wrote no usable {f.suffix}")
-        os.replace(pdf, out / "strength-sheet.pdf")
-        os.replace(png, out / "strength-sheet.png")
+        shutil.move(pdf, out / "strength-sheet.pdf")      # /tmp is another filesystem: no os.replace
+        shutil.move(png, out / "strength-sheet.png")
     print(f"strength_sheet: wrote {out}/strength-sheet.pdf + .png")
 
 
