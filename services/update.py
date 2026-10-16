@@ -301,6 +301,15 @@ def main():
                 _tail = " | " + " / ".join(_cap.strip().splitlines()[-3:])
             print(f"<3>update: strength feed failed: {type(_e).__name__}: {_e}{_tail}",
                   file=sys.stderr, flush=True)
+        # The strength charts as a printable one-page PDF + PNG, linked from the panel. Drawn by the
+        # panel's own JS in headless Chromium (strength_sheet.py), so it can never disagree with it.
+        # Non-fatal like the feed itself; run_child puts any traceback in the journal.
+        if (DATA / "training/strength.json").exists():
+            try:
+                run_child([sys.executable, str(REPO / "services/training/strength_sheet.py"),
+                           str(DATA / "training/strength.json"), str(DATA / "training")], check=True)
+            except Exception as _e:
+                print(f"<3>update: strength sheet failed: {type(_e).__name__}: {_e}", file=sys.stderr, flush=True)
         timings["training"] = (round((time.monotonic() - t0) * 1000), (DATA / "training/sessions.json").stat().st_size)
         state["training_fp"] = fp
 

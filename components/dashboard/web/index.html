@@ -536,7 +536,11 @@ async function loadStrength(){
   if(d.notes) withheld.push(`${d.notes} cardio or prose`);
   const wline = withheld.length
     ? `<div class="muted" style="font-size:.72rem;margin-top:.4rem">In the log but not on this panel: ${withheld.join(", ")}.</div>` : "";
-  el.innerHTML = `<h2>Strength <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— no HR; load and reps are the measurement</span></h2>
+  // One-page printable copy of the charts, made by strength_sheet.py from this same function.
+  const sv = encodeURIComponent(d.generated||""), sheet = d.progress ? `<span style="float:right;display:flex;align-items:center;gap:.5rem;text-transform:none;letter-spacing:0;font-weight:400">
+      <a href="${DATA}training/strength-sheet.png?v=${sv}" target="_blank" title="charts as an image"><img src="${DATA}training/strength-sheet.png?v=${sv}" alt="strength charts" style="height:34px;border:1px solid var(--bd);border-radius:3px;display:block"></a>
+      <a href="${DATA}training/strength-sheet.pdf?v=${sv}" target="_blank" title="charts on one A4 page" style="font-size:.72rem">PDF</a></span>` : "";
+  el.innerHTML = `<h2>${sheet}Strength <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;color:var(--mut)">— no HR; load and reps are the measurement</span></h2>
     ${strengthProgress(d)}
     <div class="row" style="gap:1rem;align-items:flex-start;flex-wrap:wrap">
       <div style="flex:1;min-width:260px"><table class="compact">
