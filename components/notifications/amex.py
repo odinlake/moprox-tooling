@@ -22,6 +22,20 @@ com.google.android.apps.walletnfcrel / channel tapandpay.transactions.low began
 posting on 2026-08-27 and carries, for the same card, what the Amex alert lost:
 
   title "STARBUCKS"   text "£3.25 with Platinum Cashback Credit Card ••1005"
+  title "NEXTORY AB"  text "SEK139.00 with Platinum Cashback Credit Card ••1005"
+
+The two channels do NOT agree on how to write a foreign currency: the Amex alert
+puts the code AFTER the amount with a space ("139.00 kr"), the wallet row puts it
+BEFORE with none ("SEK139.00"). Only the suffix form was taught to WALLET, so
+every foreign-currency wallet row was dropped at the parse and its bare alert then
+reported as "recovered no amount from either channel" -- which was false, the
+amount was in the corpus. Measured over all 4852 archived notifications: 3 rows,
+SEK 359.00 (LYCAMOBILE EUROPE x2, NEXTORY AB), all three pairing at 2.0-3.2 s to a
+bare alert that was standing in amex-notifs-unparsed.json as unrecoverable.
+Widening costs nothing in the other direction: +3 pairs, 0 pairs lost, max_join_dt_s
+unchanged at 9.31 s, 0 alerts with >1 candidate in range, and the 242 rows the
+narrow pattern already parsed all parse identically. The prefix and suffix branches
+cannot be confused -- one starts with letters, the other with a digit.
 
 It fires a few seconds AFTER the bare Amex alert for the same purchase, so a bare
 alert is joined to the nearest not-yet-used wallet row within WALLET_JOIN_S on
@@ -68,9 +82,13 @@ CHARGE = re.compile(
     r" ending in (?P<card>\d{4,5}) at (?P<merchant>.+?)\.?\s*$")
 # Carries no amount/merchant — recognised so it is reported, not mistaken for noise.
 BARE = re.compile(r"There was a transaction on your card ending with (?P<card>\d{4,5})\.?\s*$")
-# Wallet: "£3.25 with Platinum Cashback Credit Card ••1005" / "139.00 kr with ..."
+# Wallet: "£3.25 with ... ••1005" / "SEK139.00 with ..." / "139.00 kr with ..."
+# The middle branch is the wallet channel's own foreign-currency form (code first, space
+# optional); the last is the Amex alert's (code last). Both are accepted on both channels
+# because neither is worth a second pattern -- see the docstring for what the omission cost.
 WALLET = re.compile(
     r"^(?:(?P<sym>[£$€])(?P<amount_sym>[\d,]+\.\d{2})"
+    r"|(?P<code_pre>[A-Za-z]{2,3})\s?(?P<amount_pre>[\d,]+\.\d{2})"
     r"|(?P<amount_code>[\d,]+\.\d{2}) (?P<code>[A-Za-z]{2,3}))"
     r" with (?P<product>.+?) [••]+(?P<card>\d{4,5})\s*$")
 
@@ -121,8 +139,11 @@ def _join(bare_alerts, wallet):
 
 
 def _amount(m):
-    return float((m["amount_sym"] or m["amount_code"]).replace(",", "")), \
-        (m["sym"] or (m["code"] or "").upper())
+    """Amount + currency out of either pattern. CHARGE has no *_pre groups, so read via
+    groupdict(): a missing key must not be the difference between a parse and a crash."""
+    g = m.groupdict()
+    return float((g["amount_sym"] or g.get("amount_pre") or g["amount_code"]).replace(",", "")), \
+        (g["sym"] or (g.get("code_pre") or g["code"] or "").upper())
 
 
 def _seen(path):
