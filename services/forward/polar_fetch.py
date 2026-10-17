@@ -24,13 +24,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forward"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "training"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import errlog
-from run import run_agent
-import strap_health              # is the chest-strap battery going? (see its docstring)
-import wattbike                  # ride data pull, started early and joined before coach
-import sport                     # run | ride | strength | other: one classifier for every stage
-import tg
-import convo
-from analysis import Athlete, analyse_safe
+# errlog stays OUTSIDE the guard below: it has no dependency of its own, and it is what reports a
+# failure of the rest, so it cannot be inside what it reports on.
+#
+# Why the guard. On 2026-09-25 this file died on EVERY run from 14:20:18Z to 18:30:07Z — ~50
+# invocations over 4.2 h — with `ModuleNotFoundError: No module named 'wattbike'` raised at the
+# `import wattbike` line. That cause was filed at PRIORITY=6: an uncaught exception reaches journald
+# through Python's default excepthook, which writes an un-prefixed traceback to stderr, and journald
+# files un-prefixed stderr at info. The only err-level record each death left was systemd's generic
+# `Failed to start polar-fetch.service`, which names nothing. logscan raised 5 incidents about the
+# episode and every one of them said "logged BELOW err level, so a priority query does not see
+# them" — the estate could see that polar-fetch was dead and could not see why.
+#
+# The sys.path half of THAT episode is already fixed above. This guard is for the next one: these
+# seven imports pull in the coach runner, the Wattbike pull, the classifier, Telegram and the
+# analysis stack, each with transitive third-party dependencies, and a failure of any of them stops
+# Polar ingest completely. `raise` is kept, so the traceback and the non-zero exit are unchanged and
+# the unit-failed incident still fires — this only stops the sentence that explains it from being
+# filed below the level anything queries. Same idiom as godnattkvart.py and docwatch.py.
+try:
+    from run import run_agent
+    import strap_health          # is the chest-strap battery going? (see its docstring)
+    import wattbike              # ride data pull, started early and joined before coach
+    import sport                 # run | ride | strength | other: one classifier for every stage
+    import tg
+    import convo
+    from analysis import Athlete, analyse_safe
+except Exception as e:
+    errlog.err("polar_fetch: an intra-tree import failed — the fetcher cannot run at all", e)
+    raise
 
 POLAR_ENV = Path.home() / ".config/claude-dev/polar.env"
 INCOMING  = Path.home() / "projects/private-data/polar/incoming"
