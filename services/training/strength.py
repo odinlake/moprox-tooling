@@ -161,7 +161,13 @@ def resolve(ref, rows):
 
 
 def superseded(rows):
-    """The rids of rows retracted by a later row's `supersedes`.
+    """{rid of a retracted row: rid of the row that retracted it}.
+
+    Keyed on the RETRACTED row, so `rid(r) in superseded(rows)` is the same drop test it always
+    was. The value is who retracted it, and it is carried because the writer's --show has to label
+    the file with it: resolving every reference a second time over there would be a second answer
+    to "which row is this", and row identity is one function or it is a retraction that deletes the
+    wrong row.
 
     A retracted row stays in the file — it is history, and the correction is only legible next to
     it — and leaves the feed: the session's set total, the movement's history, its best and its n.
@@ -177,7 +183,7 @@ def superseded(rows):
     because the two send the operator to different places: "names 0 rows" means the id was wrong,
     and this means the field was never an id. Both are one row's error and neither is the file's.
     """
-    out = set()
+    out = {}
     for r in rows:
         ref = r.get("supersedes")
         if ref is None:
@@ -193,7 +199,7 @@ def superseded(rows):
                        % (ref, len(hit)),
                        ValueError(json.dumps(r, ensure_ascii=False)[:200]))
             continue
-        out.add(rid(hit[0]))
+        out[rid(hit[0])] = rid(r)
     return out
 
 

@@ -36,6 +36,11 @@ A row that was WRONG is retracted by appending its replacement and naming it. Th
 both; the feed counts only the later one:
 
   strength_note.py --ex side-plank --sets 2 --secs 30 --supersedes 9c10c7f80c9b
+
+The id to pass it is printed on every append, and by --show, which is how you obtain one for a row
+written earlier:
+
+  strength_note.py --show
 """
 import argparse, json, os, sys, time
 from datetime import datetime
@@ -125,9 +130,44 @@ def log_rows():
     return rows
 
 
+# How a row written earlier is NAMED, and why reading the log is not enough to do it.
+#
+# --supersedes takes a content id. The append prints one, which covers the row you have just
+# written and nothing else — and the row that needs retracting is never that row. For anything
+# older the only name left is `ts`, and on the live log (166 rows at 2026-10-18) 45 of them, 27.1%,
+# share a timestamp with another row, in 19 groups, the widest SEVEN across — and the correction
+# this field was built for is in that seven. resolve() returns all of them and every caller refuses
+# rather than guess, correctly, so those 45 rows could not be retracted at all; `supersedes` occurs
+# 0 times in the file a month after it shipped. The one id-discovery path that existed was to
+# compose a doomed append against an ambiguous timestamp and read the ids out of the error, which
+# is documented nowhere and works ONLY for the ambiguous case: a row whose `ts` is unique resolves
+# and the append happens, so there was no way to look at a reference before committing it to an
+# append-only file.
+#
+# This LABELS and never drops, the same way health_note.py --show does and for the same reason: the
+# feed drops a retracted row because it is publishing a total, but this output is read to find out
+# what the file says, and a correction is only legible next to what it corrects.
+def show():
+    """Print the log as JSONL, every row carrying its `rid`, retracted rows their `superseded_by`."""
+    rows = log_rows()
+    gone = strength.superseded(rows)
+    for r in rows:
+        out = dict(r)
+        # rid of the ROW, not of this annotated copy: the id has to be the one --supersedes will
+        # resolve, and a `rid` key inside the hash would make every printed id name nothing.
+        out["rid"] = strength.rid(r)
+        if out["rid"] in gone:
+            out["superseded_by"] = gone[out["rid"]]
+        print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Append one movement to the strength log.")
-    ap.add_argument("--ex", required=True, help="movement, lowercase-hyphenated (seated-row, goblet-squat)")
+    # Not `required=True` any more, because --show writes nothing and has no movement. Absence is
+    # still an error for every other invocation, checked below: forgetting --ex must not become a
+    # way to read the log.
+    ap.add_argument("--ex", help="movement, lowercase-hyphenated (seated-row, goblet-squat)")
     ap.add_argument("--sets", type=int)
     # Not "--sets optional". Forgetting a set count and declaring one unknown are different acts,
     # and only one of them should be possible by accident — so --sets stays mandatory unless this
@@ -161,13 +201,20 @@ def main(argv=None):
     # the retracted side-plank and the heaviest lift in the corpus stamped in the same second.
     ap.add_argument("--supersedes", metavar="ROW",
                     help="retract the earlier row this one replaces, by its id (printed by this "
-                         "script on every append) or by its timestamp if that names exactly one "
-                         "row. The retracted row stays in the log and leaves the feed.")
+                         "script on every append, and by --show) or by its timestamp if that names "
+                         "exactly one row. The retracted row stays in the log and leaves the feed.")
+    ap.add_argument("--show", action="store_true",
+                    help="print the log as JSONL with each row's id, and `superseded_by` on rows "
+                         "a later row has retracted. Writes nothing.")
     ap.add_argument("--date", help="YYYY-MM-DD; default today. Resolve 'Friday' yourself.")
     ap.add_argument("--note", default="")
     ap.add_argument("--agent", default=os.environ.get("AGENT_ID", ""))
     a = ap.parse_args(argv)
 
+    if a.show:
+        return show()
+    if a.ex is None:
+        ap.error("give --ex MOVEMENT, or --show to read the log")
     if (a.sets is None) != a.sets_unknown:
         ap.error("give --sets N, or --sets-unknown if it was not tracked — not both, not neither")
     if a.reps is None and a.secs is None:
