@@ -36,6 +36,12 @@ ok "$([ "$rc" = 0 ] && echo 1 || echo 0)" "coach launches (rc=$rc)"
 ok "$(argv | grep -qx 'moprox COACH' && echo 1 || echo 0)" "coach registers as 'moprox COACH'"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 1 || echo 0)" "coach gets the coach system prompt"
 ok "$(argv | grep -q 'hints.jsonl' && echo 1 || echo 0)" "...including the health-hints directive"
+# The directive used to say only "append it to .../hints.jsonl", which reads as permission to
+# hand-edit and names neither the helper nor its retraction flag. Measured 2026-10-17
+# (moprox-memory/health-hints-supersedes-unused): 0 of 83 rows carry `supersedes` a month after it
+# shipped, against 12 prose-only retractions. These two assert the directive still names both.
+ok "$(argv | grep -q 'health_note.py' && echo 1 || echo 0)" "...naming the helper, not the raw file"
+ok "$(argv | grep -q -- '--supersedes' && echo 1 || echo 0)" "...and the retraction flag prose cannot replace"
 ok "$(argv | grep -q 'FRESHNESS' && echo 1 || echo 0)" "...and the freshness rule (2026-09-08 stale-lane call)"
 ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "no pointer yet, so a fresh session id"
 ok "$(grep -q 'fresh session' "$tmp/out" && echo 1 || echo 0)" "and it says so"
