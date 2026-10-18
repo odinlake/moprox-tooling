@@ -166,12 +166,24 @@ def _post_time(e):
 
 
 def _read_notifications():
-    amex, wallet, wallet_unreadable = [], [], []
+    """The two channels, plus the newest post_time over EVERY row the archive holds.
+
+    That last one is the only clock the settle gate in main() can use. It cannot come from the
+    amex/wallet rows themselves: those are the two channels whose silence the coverage err exists
+    to detect, so during an outage the newest bare alert defines the horizon, is unsettled against
+    itself by construction, and is subtracted from the very count the err thresholds on. A row
+    from any package is sound evidence here because the HA capture file is appended in capture
+    order and mirrored whole, so if a row captured at T is present then every surviving row
+    captured before T is too — which is exactly the question the gate asks."""
+    amex, wallet, wallet_unreadable, newest = [], [], [], None
     for f in sorted(NOTIF.glob("notif-*.jsonl")):
         for line in f.read_text().splitlines():
             if not line.strip():
                 continue
             e = json.loads(line)
+            t = _post_time(e)
+            if t is not None and (newest is None or t > newest):
+                newest = t
             if e.get("app") in AMEX_PKGS:
                 amex.append(e)
             elif e.get("app") == WALLET_PKG and e.get("channel") == WALLET_CHANNEL:
@@ -183,7 +195,7 @@ def _read_notifications():
                     # below against the newest row of any shape, and a row this parser cannot
                     # read is a parse fault, not silence. See main().
                     wallet_unreadable.append(e)
-    return amex, wallet, wallet_unreadable
+    return amex, wallet, wallet_unreadable, newest
 
 
 def _join(bare_alerts, wallet):
@@ -235,7 +247,7 @@ def _seen(path):
 
 
 def main():
-    amex, wallet, wallet_unreadable = _read_notifications()
+    amex, wallet, wallet_unreadable, newest = _read_notifications()
     txns, unparsed, bare_alerts, statements = [], [], [], []
     for e in amex:
         text = (e.get("text") or "").strip()
@@ -286,9 +298,11 @@ def main():
         })
     # A bare alert whose join window has not closed yet is not a miss: its wallet row fires seconds
     # later and lands in a later ingest batch roughly 1% of the time (10 s of a 900 s timer). The
-    # window is closed once the archive holds a notification from after it, whatever channel.
-    newest = max([t for t in (_post_time(e) for e in amex) if t is not None]
-                 + [t for t in (_post_time(w) for w, _ in wallet) if t is not None], default=None)
+    # window is closed once the archive holds a notification from after it, whatever channel --
+    # and `newest` is that, over every package, for the reason _read_notifications() gives. Taken
+    # over the amex+wallet rows alone it made the newest alert on a dead channel permanently
+    # unsettled, so `len(tail) >= 2` below needed THREE stranded alerts and the two-alert boundary
+    # the 244-gap null was measured to establish could not be reached.
     stranded = []
     for e in unpaired:
         t = _post_time(e)
