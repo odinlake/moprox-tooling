@@ -253,7 +253,32 @@ def per_set(r):
     reads `reps` as one number, and `float([10, 10, 8])` killed the whole feed from 2026-09-21 until
     this (26 failed runs by 2026-09-30, panel frozen). So the list is kept as `reps_sets`, `reps`
     becomes the TOP set (what "best" compares) and `sets` the list length if it was absent. Applied
-    after supersession, which names rows by their raw content, so no row's id changes."""
+    after supersession, which names rows by their raw content, so no row's id changes.
+
+    `clean_reps` is that same list under the name the log gives it for the two pulling lifts, where
+    the athlete declared clean reps the measure ("Use CLEAN reps as the pulldown and row measure
+    from now on"). 11 of the log's 166 rows carry it as their ONLY rep count, all weighted, all with
+    `sets` — so they passed the gate, and then volume() and both of build()'s tables, which ask for
+    `reps`, found no rep count at all: 11,735.0 volume-load units withheld, 12.0% of the total, and
+    both lifts' current best published as a load with no reps (`45 kg x ?`). The chart read every
+    one of them, because _reps() already knows the name. Promoted here rather than special-cased at
+    each reader, so there is one place the log's vocabulary is resolved.
+
+    Preferred OVER `reps` where a row carries both, which is the order _reps() uses and the order
+    the log declares. Two rows are like that (28 Sep row and pulldown, `reps: 10` beside
+    `clean_reps: [10, 10, 8]`/`[10, 10, 6]`), and on those the preference replaces sets x TOP set
+    with the sets actually done — 1120.0 for 1200.0 and 910.0 for 1050.0, so the session total falls
+    220.0 — which is the correction the paragraph above says this function exists to make, not a new
+    reading. Net over the log: +11,515.0.
+
+    `reps_approx` is NOT promoted. It is the third key _reps() reads and the log holds one row of it
+    (30 Sep calf raise, 110 kg x [15, 13, 13], 4,510.0 units), but it is an estimate, and the
+    panel's two tables render a rep count in the same column and the same face as a measured one.
+    Giving it the `.est` treatment index.html already gives an assumed LOAD is the other half, and
+    it is a change to a different file; until it has one, that row stays out rather than being
+    published as if it had been counted."""
+    if r.get("clean_reps") is not None:
+        r = dict(r, reps=r["clean_reps"])
     reps = r.get("reps")
     if not isinstance(reps, list):
         return r
