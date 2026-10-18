@@ -100,7 +100,7 @@ def _post_time(e):
 
 
 def _read_notifications():
-    amex, wallet = [], []
+    amex, wallet, wallet_unreadable = [], [], []
     for f in sorted(NOTIF.glob("notif-*.jsonl")):
         for line in f.read_text().splitlines():
             if not line.strip():
@@ -112,7 +112,12 @@ def _read_notifications():
                 m = WALLET.match((e.get("text") or "").strip())
                 if m:
                     wallet.append((e, m))
-    return amex, wallet
+                else:
+                    # Kept, not dropped: whether the channel is COVERING the card is decided
+                    # below against the newest row of any shape, and a row this parser cannot
+                    # read is a parse fault, not silence. See main().
+                    wallet_unreadable.append(e)
+    return amex, wallet, wallet_unreadable
 
 
 def _join(bare_alerts, wallet):
@@ -164,7 +169,7 @@ def _seen(path):
 
 
 def main():
-    amex, wallet = _read_notifications()
+    amex, wallet, wallet_unreadable = _read_notifications()
     txns, unparsed, bare_alerts = [], [], []
     for e in amex:
         text = (e.get("text") or "").strip()
@@ -214,16 +219,19 @@ def main():
     # window is closed once the archive holds a notification from after it, whatever channel.
     newest = max([t for t in (_post_time(e) for e in amex) if t is not None]
                  + [t for t in (_post_time(w) for w, _ in wallet) if t is not None], default=None)
+    stranded = []
     for e in unpaired:
         t = _post_time(e)
-        unparsed.append({
+        row = {
             "ts": e.get("ts"), "kind": "bare-no-amount",
             "card": BARE.match(e["text"].strip())["card"], "text": e["text"].strip(),
             # Recorded, not just computed: an alert first seen with its window open must still be
             # announced on the run that closes it, and the only way to know it never was is to
             # have written down that it was unsettled at the time.
             "settled": not (newest is not None and t is not None and t + WALLET_JOIN_S > newest),
-        })
+        }
+        unparsed.append(row)
+        stranded.append((t, row))
 
     txns.sort(key=lambda r: r["ts"])
     unparsed.sort(key=lambda r: r["ts"])
@@ -285,6 +293,54 @@ def main():
         errlog.warn(f"amex: {len(fresh)} new bare Amex alert(s) recovered no amount from either "
                     f"channel and are unrecoverable ({bare_n} standing, issue i-20260814-154101); "
                     f"last is {fresh[-1]['ts']}")
+
+    # Is the wallet channel still COVERING the card? Nothing in the estate asked that until now:
+    # 0 of the 12 lanes in services/freshness/lanes.json name walletnfcrel or tapandpay, and the
+    # warning above cannot answer it, because one lost wallet row and a dead channel produce the
+    # same sentence at the same level. Measured over the archive's 244 interior gaps
+    # (amex-unrecoverable-alert-census, 2026-10-17): 231 strand nothing, 13 strand EXACTLY ONE,
+    # and none strands two. A lost row comes alone. So two or more stranded alerts at the END of
+    # the archive is the channel no longer covering the card -- a hand on the phone, not an
+    # accounting note -- and that is this one err.
+    #
+    # Duration is explicitly NOT the test and a freshness lane cannot do this job: the longest
+    # healthy interior gap is 34.09 h and stranded one alert, while the open episode was 32.39 h
+    # when it was found, so an age lane on this channel fires on the healthy gap and is still
+    # quiet on the outage.
+    #
+    # Counted against the newest wallet row OF ANY SHAPE, not the newest one this parser could
+    # read: on 2026-09-08T16:56:59Z the only wallet row for the next 13.73 h was
+    # "SEK135.00 with ..." which the then-shipped pattern dropped (fixed in f42fbe09), and 2 bare
+    # alerts arrived inside that window -- so a parsed-only census would have called a live
+    # channel dead for 13.7 h, once, in this archive. Unreadable rows are counted and named in
+    # the line instead; giving them an err of their own is the next increment, not this one.
+    #
+    # NOT novelty-gated, and that is the one difference from the two alarms above. Those count
+    # over an archive that only grows, so once tripped they stay tripped for ever and a 15-minute
+    # timer repeats them with nothing to do. This is measured from the END of the archive and
+    # drops to zero the moment a wallet row arrives, so it repeats only while the episode is open
+    # -- which is how every freshness lane in this estate reports an open condition. No wallet
+    # rows at all is not an outage either (106 of the standing 129 predate the channel), so an
+    # absent last row does not trip it.
+    wallet_rows = [w for w, _ in wallet] + wallet_unreadable
+    wallet_last_row = max(wallet_rows, key=lambda w: _post_time(w) or -1.0, default=None)
+    wallet_last = _post_time(wallet_last_row) if wallet_last_row is not None else None
+    tail = [row for t, row in stranded
+            if row["settled"] and wallet_last is not None and t is not None and t > wallet_last]
+    print(f"  wallet channel: {len(wallet_rows)} row(s), {len(wallet_unreadable)} unreadable, "
+          f"last {wallet_last_row.get('ts') if wallet_last_row is not None else 'never'}, "
+          f"{len(tail)} settled bare alert(s) stranded after it")
+    if len(tail) >= 2:
+        errlog.err(
+            f"amex: the Google Wallet channel has posted nothing since "
+            f"{wallet_last_row.get('ts')} and {len(tail)} settled bare Amex alert(s) have been "
+            f"stranded behind it, over the {(newest - wallet_last) / 3600:.1f} h the archive has "
+            f"run on since; no interior gap on record has ever stranded two, so the card is not "
+            f"being covered rather than one row being lost — "
+            + (f"{len(wallet_unreadable)} wallet row(s) on record are unreadable to this parser, "
+               f"so check the wording before the phone"
+               if wallet_unreadable else
+               "every wallet row on record parsed, so this is silence and not a wording change"))
 
 
 if __name__ == "__main__":
