@@ -281,7 +281,7 @@ td .al { color: var(--muted); font-size: 12px; }
         var d = new Date(nt.date + "T12:00:00");
         cols.push({ day: d.getDate(), top: d.toLocaleDateString(undefined, { weekday: "short" }), sub: d.toLocaleDateString(undefined, { day: "numeric", month: "short" }),
                     name: d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) + "",
-                    slots: nt.recorded ? nt.slots : null, mode: nt, n: nt.recorded ? 1 : 0, avg: false });
+                    slots: nt.recorded ? nt.slots : null, mode: nt, n: nt.recorded ? 1 : 0, avg: false, date: nt.date });
       });
     } else {
       var last = nights[nights.length - 1], by = {};
@@ -295,19 +295,28 @@ td .al { color: var(--muted); font-size: 12px; }
         var changed = rec.some(function (x) { return x.night_time !== newest.night_time || x.day_time !== newest.day_time; });
         var wd = new Date(newest.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
         cols.push({ top: wd, sub: rec.length ? "avg of " + rec.length : "none yet", name: wd + " average of " + rec.length,
-                    slots: rec.length ? sum.map(function (v) { return v / rec.length; }) : null, mode: newest, n: rec.length, avg: true, changed: changed });
+                    slots: rec.length ? sum.map(function (v) { return v / rec.length; }) : null, mode: newest, n: rec.length, avg: true, changed: changed,
+                    date: newest.date });
       }
     }
     var avail = Math.max(260, $("main").clientWidth - 24 - 28);
     var lx = 46, rowH = 4, top = 34, plotH = 144 * rowH;
     var colW = Math.floor((avail - lx) / 7), W = lx + 7 * colW, H = top + plotH + 6;
     var g = "", peak = new Array(144).fill(0), anyAssumed = false;
+    // Today (operator, 2026-10-18): its column is outlined, "now" is a line across it, and the
+    // rest of the day is faded. In the averaged views the cells after now are earlier weeks'
+    // average for this weekday, which read as if today had already happened.
+    var now = new Date(), todayIso = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+    var nowK = (now.getHours() * 60 + now.getMinutes()) / 10, todayCol = -1;
     cols.forEach(function (c, i) {
-      var x = lx + i * colW, nt = c.mode;
+      var x = lx + i * colW, nt = c.mode, isToday = c.date === todayIso && (!c.avg || i === cols.length - 1);
+      if (isToday) todayCol = i;
       anyAssumed = anyAssumed || nt.assumed;
-      var subtxt = colW >= 80 ? c.sub : (c.avg ? (c.n ? "×" + c.n : "–") : String(c.day));
-      g += '<text x="' + (x + colW / 2) + '" y="13" text-anchor="middle" style="font-weight:700;fill:var(--ink)">' + esc(c.top) + '</text>' +
-           '<text x="' + (x + colW / 2) + '" y="27" text-anchor="middle">' + esc(subtxt) + '</text>';
+      var subtxt = isToday && !c.avg ? "today" : colW >= 80 ? c.sub : (c.avg ? (c.n ? "×" + c.n : "–") : String(c.day));
+      if (isToday)
+        g += '<rect x="' + (x + 1) + '" y="1" width="' + (colW - 2) + '" height="' + (top - 4) + '" rx="5" fill="var(--accent)" fill-opacity="0.14"/>';
+      g += '<text x="' + (x + colW / 2) + '" y="13" text-anchor="middle" style="font-weight:700;fill:var(' + (isToday ? "--accent" : "--ink") + ')">' + esc(c.top) + '</text>' +
+           '<text x="' + (x + colW / 2) + '" y="27" text-anchor="middle"' + (isToday ? ' style="font-weight:700;fill:var(--accent)"' : "") + '>' + esc(subtxt) + '</text>';
       var k = 0;
       while (k < 144) {
         var sh = shadeOf(nt, k), j = k;
@@ -331,6 +340,12 @@ td .al { color: var(--muted); font-size: 12px; }
              '" fill="' + f + '" data-tip="' + esc(t) + '"/>';
       });
     });
+    if (todayCol >= 0) {
+      var tx = lx + todayCol * colW, ny = top + nowK * rowH;
+      // pointer-events none: the faded cells keep their tooltips
+      g += '<rect x="' + (tx + 1) + '" y="' + ny + '" width="' + (colW - 2) + '" height="' + (top + plotH - ny) +
+           '" fill="var(--surface)" fill-opacity="0.72" style="pointer-events:none"/>';
+    }
     // a gridline and a label every hour; midnight strong
     for (var hk = 0; hk <= 144; hk += 6) {
       var y = top + hk * rowH, clock = (hk / 6) % 24, mid = clock === 0;
@@ -339,9 +354,18 @@ td .al { color: var(--muted); font-size: 12px; }
            '<text x="' + (lx - 7) + '" y="' + (y + 3.5) + '" text-anchor="end"' + (mid ? ' style="font-weight:700;fill:var(--ink)"' : "") + '>' +
            String(clock).padStart(2, "0") + ':00</text>';
     }
+    if (todayCol >= 0) {
+      var tx = lx + todayCol * colW;
+      g += '<rect x="' + (tx + 0.5) + '" y="' + (top - 0.5) + '" width="' + (colW - 1) + '" height="' + (plotH + 1) +
+           '" fill="none" stroke="var(--accent)" stroke-width="2" rx="2" style="pointer-events:none"/>' +
+           '<line x1="' + (tx - 3) + '" x2="' + (tx + colW) + '" y1="' + ny + '" y2="' + ny + '" stroke="var(--accent)" stroke-width="2.5" style="pointer-events:none"/>' +
+           '<circle cx="' + (tx - 3) + '" cy="' + ny + '" r="3.5" fill="var(--accent)"/>' +
+           '<text x="' + (tx - 9) + '" y="' + (ny + 3.5) + '" text-anchor="end" style="font-weight:700;fill:var(--accent);paint-order:stroke;stroke:var(--surface);stroke-width:4px">now</text>';
+    }
     var pk = peak.indexOf(Math.max.apply(null, peak));
     var sub = (cols.length && cols[0].avg ? "Each column is the average day for that weekday" : "Each column is one day") +
               ", midnight to midnight; each row is 10 minutes. " +
+              (todayCol >= 0 && cols[todayCol].avg ? "Today is outlined; after the now line it shows earlier weeks' average, faded. " : "") +
               (peak[pk] ? "Busiest slot: " + clockOf(pk) + "–" + clockOf(pk + 1) + "." : "Nothing played in this period.");
     var legend = '<div class="legend"><span><i style="background:var(--daycell)"></i>day mode</span>' +
       '<span><i style="background:var(--dayguard)"></i>day mode + sleep-timer guard</span>' +
