@@ -16,6 +16,35 @@ Unmatched Amex alerts are therefore COUNTED and written to
 finance/amex-notifs-unparsed.json rather than silently skipped: a wording change
 upstream must show up as a git diff, not as a quietly flat transaction count.
 
+## The statement/payment notifications, and why they are not "unrecognised"
+
+Amex posts three more wordings on the same package, none of them a transaction:
+
+  statement-ready    "Your October 2026 statement is ready for your Amex Card ending 11005.
+                      Due Date: 2026-11-04"
+  payment-due        "A payment of £3,063.75 is due to be collected by Direct Debit on
+                      22/10/2026 for your Amex Card ending 11005."
+  payment-received   "We received a payment of £4,058.66 on 22 Aug 2026 for your Card ending
+                      11005."
+
+Both of the last two carry the cycle's STATEMENT BALANCE, which is the bank's own
+total and the only external ground truth this channel has for what it is itself
+capturing. amex-wallet-era-cycle-coverage audited the first full wallet-era cycle
+against it and found GBP 465.80 of GBP 3063.75 captured nowhere -- and had to take
+the 3063.75 out of the mail lane (finance/amex_cycles.py, the same two figures under
+`Statement balance:` / `Payment amount:`), because this parser named none of the
+three wordings and filed all 8 of them in the archive as kind="unrecognised".
+
+That cost two things. The figure that can audit this lane was discarded BY this
+lane, as text. And `unrecognised` is the bucket a genuinely new TRANSACTION wording
+would land in -- the one thing the unparsed file exists to make visible -- so with
+these 8 standing in it since 2026-08-11 a ninth row could not be read as news.
+
+So they are parsed, to finance/amex-notifs-statements.json, and NOT into the
+transaction list: a statement balance is a whole cycle net of credits, so summing it
+with the charges it is the total of would double the cycle. Nothing reconciles the
+two yet; that needs the cycle boundary, which only amex_cycles.py knows.
+
 ## The Google Wallet side channel
 
 com.google.android.apps.walletnfcrel / channel tapandpay.transactions.low began
@@ -69,6 +98,7 @@ import errlog  # noqa: E402  — a notable condition must be findable by priorit
 NOTIF = Path.home() / "projects/private-data/notifications"
 OUT = Path.home() / "projects/private-data/finance/amex-notifs.json"
 OUT_UNPARSED = Path.home() / "projects/private-data/finance/amex-notifs-unparsed.json"
+OUT_STATEMENTS = Path.home() / "projects/private-data/finance/amex-notifs-statements.json"
 AMEX_PKGS = ("com.americanexpress.android.acctsvcs.uk", "com.americanexpress.android.acctsvcs.us")
 WALLET_PKG = "com.google.android.apps.walletnfcrel"
 WALLET_CHANNEL = "tapandpay.transactions.low"
@@ -91,6 +121,42 @@ WALLET = re.compile(
     r"|(?P<code_pre>[A-Za-z]{2,3})\s?(?P<amount_pre>[\d,]+\.\d{2})"
     r"|(?P<amount_code>[\d,]+\.\d{2}) (?P<code>[A-Za-z]{2,3}))"
     r" with (?P<product>.+?) [••]+(?P<card>\d{4,5})\s*$")
+# The account's non-transaction wordings (see the docstring). Anchored at both ends and each
+# naming its whole sentence: a near-miss must stay unrecognised, because the whole point of
+# recognising these is that `unrecognised` goes back to meaning "a wording nobody has read".
+LIFECYCLE = (
+    ("statement-ready", re.compile(
+        r"^Your (?P<period>\w+ \d{4}) statement is ready for your Amex Card"
+        r" ending (?P<card>\d{4,5})\.?\s*Due Date:\s*(?P<date>\S+?)\.?\s*$")),
+    ("payment-due", re.compile(
+        r"^A payment of (?P<sym>[£$€])(?P<amount>[\d,]+\.\d{2}) is due to be collected by"
+        r" Direct Debit on (?P<date>\S+?) for your (?:Amex )?Card ending (?P<card>\d{4,5})\.?\s*$")),
+    ("payment-received", re.compile(
+        r"^We received a payment of (?P<sym>[£$€])(?P<amount>[\d,]+\.\d{2})"
+        r" on (?P<date>.+?) for your (?:Amex )?Card ending (?P<card>\d{4,5})\.?\s*$")),
+)
+
+
+def _lifecycle(text):
+    """A statement/payment notification as a row, or None if this is not one of them.
+
+    The date is kept VERBATIM. The three wordings write it three ways -- "2026-09-04",
+    "22/08/2026", "22 Sept 2026" -- and normalising the third means guessing at an
+    abbreviation Amex invented ("Sept", not "Sep"); a wrong date would be worse than no
+    date, and the amount, which is the figure this exists for, is unambiguous.
+    """
+    for kind, rx in LIFECYCLE:
+        m = rx.match(text)
+        if m is None:
+            continue
+        g = m.groupdict()
+        return {"kind": kind,
+                # statement-ready announces the cycle without its balance, so None here is the
+                # notification saying so, not a parse that half-worked.
+                "amount": float(g["amount"].replace(",", "")) if g.get("amount") else None,
+                "currency": g.get("sym"), "card": g["card"],
+                "period": g.get("period"), "date_text": g["date"], "text": text}
+    return None
 
 
 def _post_time(e):
@@ -170,7 +236,7 @@ def _seen(path):
 
 def main():
     amex, wallet, wallet_unreadable = _read_notifications()
-    txns, unparsed, bare_alerts = [], [], []
+    txns, unparsed, bare_alerts, statements = [], [], [], []
     for e in amex:
         text = (e.get("text") or "").strip()
         m = CHARGE.match(text)
@@ -179,6 +245,10 @@ def main():
             t = _post_time(e)
             if bare and t is not None:
                 bare_alerts.append((e, t))       # joinable — decided after the join
+                continue
+            lifecycle = _lifecycle(text)
+            if lifecycle is not None:
+                statements.append({"ts": e.get("ts"), **lifecycle})
                 continue
             unparsed.append({
                 "ts": e.get("ts"),
@@ -235,9 +305,11 @@ def main():
 
     txns.sort(key=lambda r: r["ts"])
     unparsed.sort(key=lambda r: r["ts"])
+    statements.sort(key=lambda r: r["ts"])
     seen_txn, seen_unparsed = _seen(OUT), _seen(OUT_UNPARSED)   # BEFORE the rewrite below
     OUT.write_text(json.dumps(txns, indent=1, ensure_ascii=False) + "\n")
     OUT_UNPARSED.write_text(json.dumps(unparsed, indent=1, ensure_ascii=False) + "\n")
+    OUT_STATEMENTS.write_text(json.dumps(statements, indent=1, ensure_ascii=False) + "\n")
 
     by_src = {s: sum(1 for r in txns if r["source"] == s)
               for s in ("alert", "wallet-join", "wallet-only")}
@@ -245,6 +317,12 @@ def main():
     max_dt = max((r["join_dt_s"] for r in txns if r["source"] == "wallet-join"), default=0.0)
     print(f"amex txns: {len(txns)} ({by_src})  unparsed: {len(unparsed)} (bare {bare_n}, "
           f"unrecognised {len(unparsed) - bare_n})")
+    # The balance is named here and not just stored: the count alone cannot be read against the
+    # transaction total above, and that comparison is the only one this channel can make itself.
+    balance = next((r for r in reversed(statements) if r["amount"] is not None), None)
+    print(f"  statement/payment: {len(statements)} notification(s)" + (
+        f", newest {balance['kind']} {balance['currency']}{balance['amount']:.2f} "
+        f"({balance['date_text']}, {balance['ts']})" if balance else ""))
     # The standing state stays on stdout in full, including both conditions the WARNING lines below
     # used to announce here: nothing a human could read off this run before is missing from it now.
     print(f"  wallet join: max_join_dt_s {max_dt:.2f} of {WALLET_JOIN_S:.0f} bound"
