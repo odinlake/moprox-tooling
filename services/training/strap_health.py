@@ -116,12 +116,20 @@ def verdict(records, changes=None):
     if not flagged(cur):
         return "ok", "strap clean (no mid-session dropouts, no 1 s jumps >=5 bpm)." + age
     recent = [r for r in hits if r["date"] < cur["date"]][-1:]
-    signals = sum(1 for k in ("dropouts", "jumps5", "jumps8") if cur.get(k))
+    # ONE vote per independent family. analyse() counts jumps5 as #(dz>=5) and jumps8 as #(dz>=8)
+    # over the same dz, so jumps8 is NESTED inside jumps5 — 0 of the log's 139 rows violate it, and
+    # no trace can. Counting them as two made any jumps8>0 reach `replace` on a single phenomenon
+    # counted twice: 2026-10-14 (dropouts=0, jumps5=6, jumps8=2) took this branch and told the
+    # operator to replace a battery that had been changed that same day. jumps8 is a severity grade,
+    # not corroboration, so it is REPORTED below instead of voting.
+    signals = sum(1 for k in ("dropouts", "jumps5") if cur.get(k))
     near = recent and (_days(recent[0]["date"], cur["date"]) <= 14)
     what = ("%d mid-session dropout(s) totalling %d s (longest %d s)"
             % (cur["dropouts"], cur["dropout_s"], cur["longest_s"])) if cur["dropouts"] else ""
     if cur.get("jumps5"):
         what += (" and " if what else "") + "%d impossible 1 s jump(s) >=5 bpm in steady state" % cur["jumps5"]
+        if cur.get("jumps8"):
+            what += " (%d of them >=8 bpm)" % cur["jumps8"]
     if near:
         return "replace", ("STRAP BATTERY — %s, and the previous session with any was %s, %d days ago."
                            " Two inside a fortnight is the replace threshold.%s"
