@@ -37,6 +37,7 @@ Storage, per the 2026-08-02 sizing (53 KiB/day compact, 8.6 KiB gzipped, ~19 MiB
 import argparse, gzip, json, sys, time
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -112,6 +113,44 @@ def fetch_day(bearer, d):
     return r.json()
 
 
+def report_tz(payload):
+    """The zone the vendor stamps its readings in, as the payload itself declares it.
+
+    The night_rhr staleness test in scalars() compares a vendor epoch to a calendar date, and it
+    used `date.fromtimestamp()` — naive HOST-local. The vendor stamps each reading at MIDNIGHT in
+    its own reporting zone, so midnight-in-London on a BST day is 23:00 UTC the day before and the
+    test's answer was a property of the fetch host rather than of the data. Measured 2026-10-19
+    over the 209-day archive (2026-03-21..10-15), same payloads, same predicate, TZ varied:
+
+        Europe/London 12 stale   Europe/Stockholm 12   Asia/Tokyo 12   UTC 183   New_York 188
+
+    171 of 209 days flip fresh -> STALE between London and UTC, never the reverse, every one of
+    them a BST day carrying a real non-null reading a UTC run would have nulled; the 8 GMT days in
+    the archive flip under no zone at all. Nothing has been lost because ultrahuman-fetch.service
+    runs on this box and this box is Europe/London — daily.jsonl agrees with the zone-aware verdict
+    on 209/209 and with the shipped-under-UTC one on 38/209. The exposure is a host move, a
+    container with TZ=UTC, or a replay off-box. The payload declares the zone on 209/209 days.
+
+    When it does not declare one, fall back to host-local — which is exactly today's behaviour, and
+    on this host today's answer is right — rather than to UTC, which is the wrong answer measured
+    above. But say so at err: on any other host that fallback IS the defect this removes, and a
+    guard that has quietly gone back to being host-dependent is indistinguishable from one working.
+    """
+    name = (payload.get("data") or {}).get("latest_time_zone")
+    if not name:
+        errlog.err("ultrahuman: payload declares no data.latest_time_zone — the night_rhr "
+                   "staleness verdict falls back to host-local time and is a property of this host")
+        return None
+    try:
+        return ZoneInfo(name)
+    except Exception as exc:
+        # Not a raise: this kills the whole day's record — HR/HRV/sleep series included — over one
+        # scalar's freshness flag, and the day would then be skipped as already-on-disk-absent.
+        errlog.err(f"ultrahuman: data.latest_time_zone {name!r} is not a known zone — the "
+                   f"night_rhr staleness verdict falls back to host-local time", exc)
+        return None
+
+
 def scalars(d, payload):
     """Flatten one day's response to the numbers the dashboard actually plots.
 
@@ -159,10 +198,12 @@ def scalars(d, payload):
     nr = by.get("night_rhr") if isinstance(by.get("night_rhr"), dict) else {}
     rec["night_rhr_avg"] = nr.get("avg")
     # The series is a trailing window stamped at each day's midnight and, on a live day, it ENDS on
-    # the requested date. So the test is simply: does it contain this date at all?
+    # the requested date. So the test is simply: does it contain this date at all? — resolved in
+    # the zone the payload declares, NOT the host's, see report_tz().
     stamps = [v.get("timestamp") for v in (nr.get("values") or []) if isinstance(v, dict)]
     if rec["night_rhr_avg"] is not None and stamps:
-        if not any(date.fromtimestamp(s) == d for s in stamps if s):
+        tz = report_tz(payload)
+        if not any(datetime.fromtimestamp(s, tz).date() == d for s in stamps if s):
             rec["night_rhr_avg"] = None
             rec["night_rhr_stale"] = True
     st = by.get("steps") or {}
