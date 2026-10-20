@@ -70,16 +70,33 @@ It fires a few seconds AFTER the bare Amex alert for the same purchase, so a bar
 alert is joined to the nearest not-yet-used wallet row within WALLET_JOIN_S on
 post_time (the device clock; `ts` is the ingest clock and adds its own jitter).
 
-WALLET_JOIN_S is 10 s, NOT the 4 s that wallet-tapandpay-channel-persists
+WALLET_JOIN_S is 15 s, NOT the 4 s that wallet-tapandpay-channel-persists
 published on 2026-08-31 as "ample". That 4 s was the max observed over
 2026-08-27..08-31 (3.72 s) plus slack, and the very next day broke it: 3 of the 4
 pairs on 2026-09-01 sit at 6.04, 7.76 and 7.95 s. A tolerance fitted to the days
 that happened to line up drops the days that did not, and the dropped rows do not
 look like drops -- they look like coverage misses on both channels at once.
-10 s is safe rather than merely larger: across all 23 bare alerts in the wallet
-era NO alert has more than one wallet row within 10 s, so widening cannot mispair.
-The join is not a guess about the future either way, so max_join_dt_s is printed
-every run and stored per row as join_dt_s: if it approaches the bound, raise it.
+
+It was 10 s until 2026-10-20, and 10 landed in a dead zone. Swept over the 5030
+notifications at/below 2026-10-20T16:00:00Z (257 tapandpay rows, 377 bare alerts),
+the sorted alert->wallet candidate lags are 0.835 .. 8.980, then 9.309, then
+NOTHING until 11.223, then nothing until 43.726. So the bound sat 1.91 s below one
+real pair -- 2026-09-03T20:26:01 / AMAZON GBP 32.99 at +11.223 s, whose wallet row's
+next-nearest alert is 2755 s away and whose own next wallet row is 37312 s away, so
+it is 1:1 by a factor of 245. Every bound in [11.224, 43.726) gives the IDENTICAL
+join: 252 pairs, 0 alerts with >1 candidate, 0 wallet rows with >1 candidate, and
+0 of the 251 pairs the 10 s bound made reassigned. The plateau's upper end is not a
+choice -- at 43.726 s exactly, the wallet row 2026-09-22T12:08:56 (AMAZON GBP 12.74)
+acquires a second alert in range and greedy stops being provably exact.
+
+15 is picked inside that plateau rather than at its top because the 0.8-of-bound
+drift mark is the only thing watching this constant: at 15 it sits at 12.0 s, 0.78 s
+above the new max lag, so one slower pair still says so. At 40 the mark would be
+32 s and a pair at 3x today's worst would pass unremarked -- a wide bound does not
+only risk a mispair, it blinds the monitor that would catch the drift. The join is
+not a guess about the future either way, so max_join_dt_s is printed every run and
+stored per row as join_dt_s: if it approaches the bound, raise it -- and re-sweep,
+because the plateau above is a property of this corpus, not of the device.
 
 Wallet rows that pair to no Amex alert are kept as source="wallet-only" -- the
 Amex lane demonstrably misses purchases the wallet channel announces (GBP 41.42
@@ -102,7 +119,7 @@ OUT_STATEMENTS = Path.home() / "projects/private-data/finance/amex-notifs-statem
 AMEX_PKGS = ("com.americanexpress.android.acctsvcs.uk", "com.americanexpress.android.acctsvcs.us")
 WALLET_PKG = "com.google.android.apps.walletnfcrel"
 WALLET_CHANNEL = "tapandpay.transactions.low"
-WALLET_JOIN_S = 10.0
+WALLET_JOIN_S = 15.0
 
 # Amount is either symbol-prefixed (£3.25) or code-suffixed (139.00 kr).
 CHARGE = re.compile(
