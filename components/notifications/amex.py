@@ -407,10 +407,25 @@ def main():
     # 0 of the 12 lanes in services/freshness/lanes.json name walletnfcrel or tapandpay, and the
     # warning above cannot answer it, because one lost wallet row and a dead channel produce the
     # same sentence at the same level. Measured over the archive's 244 interior gaps
-    # (amex-unrecoverable-alert-census, 2026-10-17): 231 strand nothing, 13 strand EXACTLY ONE,
-    # and none strands two. A lost row comes alone. So two or more stranded alerts at the END of
-    # the archive is the channel no longer covering the card -- a hand on the phone, not an
-    # accounting note -- and that is this one err.
+    # (amex-unrecoverable-alert-census, 2026-10-17, AT THE 10 s bound then shipped): 231 strand
+    # nothing, 13 strand EXACTLY ONE, and none strands two. A lost row comes alone. So two or
+    # more stranded alerts at the END of the archive is the channel no longer covering the card
+    # -- a hand on the phone, not an accounting note -- and that is this one err.
+    #
+    # Those counts are a FUNCTION OF WALLET_JOIN_S, and widening it two days later (b3e65c25,
+    # 10 -> 15 s) moved them without recomputing them: on the SAME pinned corpus a 15 s bound
+    # reads 232 / 12 / none, because the 11.223 s pair the widening recovered (2026-09-03
+    # AMAZON GBP 32.99) was one of the 13 singletons. The conclusion is unharmed -- max interior
+    # strand is still 1, so `>= 2` still discriminates -- but the margin is not large and it is
+    # one-sided. Swept over all 238 candidate alert->wallet lags in integer milliseconds, "no
+    # interior gap strands two" holds for EVERY bound >= 3921 ms and fails for EVERY bound below
+    # it: at 3920 ms one gap strands two, and at the smallest candidate lag (835 ms) eleven do.
+    # It is monotone on this corpus, identically on the pinned and the live archive, so widening
+    # can only make this premise safer and narrowing breaks it -- and the 4 s that
+    # wallet-tapandpay-channel-persists published as "ample" on 2026-08-31 sits 79 ms above the
+    # boundary. If WALLET_JOIN_S is ever LOWERED, re-run this census, not only max_join_dt_s:
+    # the drift mark watches the join, and nothing watches the threshold the join underwrites.
+    # (analyst c745)
     #
     # Duration is explicitly NOT the test and a freshness lane cannot do this job: the longest
     # healthy interior gap is 34.09 h and stranded one alert, while the open episode was 32.39 h
