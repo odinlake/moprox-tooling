@@ -66,6 +66,15 @@ def _hr_val(v):
     return f if 30 < f < 220 else None      # NaN fails both comparisons, so it is dropped here too
 
 def hr_series(d):
+    """The export's HR block, COMPACTED to its valid samples.
+
+    Deliberately not raw, unlike the live path (from_incoming), which keeps dropouts so a lost
+    second still counts as a second. The export cannot be read that way: its channels are padded to
+    a common length that is not the session's clock -- session 46545790 (2016-03-16) ships 75,088
+    values per channel with 566 valid HR, and 10362338 (2015-06-01) 76,779 with 2,615 -- and every
+    export session carries `recordingRate: None`, so nothing says what a position means. Keeping
+    them raw turns 43.6 min into 1279.7. Measured analyst cycle 747; see
+    moprox-memory/polar-dropouts-deleted-from-the-clock.md."""
     ex = (d.get("exercises") or [{}])[0]
     best = []
     for s in (ex.get("samples") or {}).get("samples", []):
@@ -189,9 +198,11 @@ def make_generic_session(hr, sport, date, sid, sess_id, cat, source="polar"):
     bike VO2max set would be labelled "tempo" and the dashboard would carry a confident wrong answer.
     What is kept is sport-neutral and re-derivable: the trace and the plain HR statistics. When we
     know what these sessions actually look like, they can be reclassified from the stored raw."""
-    hr = [h for h in (_hr_val(v) for v in hr) if h is not None and 30 < h < 220]
-    if len(hr) < 60: return None
-    arr = np.clip(np.asarray(hr, float), 40, 210)
+    # `hr` is the RAW trace. Dropouts leave the duration and the window clock, never the statistics:
+    # len(hr) is seconds recorded, `clean` is what was actually measured.
+    clean = [h for h in (_hr_val(v) for v in hr) if h is not None]
+    if len(clean) < 60: return None
+    arr = np.clip(np.asarray(clean, float), 40, 210)
     # 5-min max = highest 5-minute rolling MEAN, same definition the run path uses, computed here
     # directly because we are not going through the engine.
     max5 = None
@@ -202,8 +213,8 @@ def make_generic_session(hr, sport, date, sid, sess_id, cat, source="polar"):
     settled = window_stat(hr, SETTLED_WIN, np.mean)
     return dict(
         id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
-        dur_min=round(len(arr) / 60.0, 1), hr_avg=round(float(np.mean(arr))),
-        hr_max=round(float(np.max(arr))), max5=max5, med10=_round_or_none(med10(hr)),
+        dur_min=round(len(hr) / 60.0, 1), hr_avg=round(float(np.mean(arr))),
+        hr_max=round(float(np.max(arr))), max5=max5, med10=_round_or_none(med10(clean)),
         floor=floor, settled=settled,
         climb=(round(settled - floor, 1) if floor is not None and settled is not None else None),
         nint=0, above_lt2=False, clamp=False, reps=[],
@@ -211,9 +222,14 @@ def make_generic_session(hr, sport, date, sid, sess_id, cat, source="polar"):
 
 
 def make_session(hr, sport, date, sid, sess_id, source="polar"):
-    """Classify one running session's per-second HR into the public-safe dashboard record, or None."""
-    if len(hr) < 60: return None
-    try: res = analyse_safe(hr, len(hr) / 60.0, ATH, sport)
+    """Classify one running session's per-second HR into the public-safe dashboard record, or None.
+
+    `hr` is the RAW per-second trace with dropouts IN PLACE. The classifier gets the clean samples
+    and the real elapsed duration -- exactly what the live path (polar_fetch.post_session) already
+    passes -- and window_stat gets the raw trace its t=0 contract asks for."""
+    clean = [h for h in (_hr_val(v) for v in hr) if h is not None]
+    if len(clean) < 60: return None
+    try: res = analyse_safe(clean, len(hr) / 60.0, ATH, sport)
     except Exception: return None
     cls = res["classification"]
     block = np.clip(np.asarray(res["block"], float), 40, 210)     # display-clean the trace only
@@ -244,7 +260,7 @@ def make_session(hr, sport, date, sid, sess_id, source="polar"):
     return dict(
         id=str(sess_id)[:8], date=(date or "")[:19], sport=sid, cat=cat, source=source,
         dur_min=round(len(hr) / 60.0, 1), hr_avg=round(float(np.mean(block))),
-        hr_max=round(float(np.max(block))), max5=max5, med10=_round_or_none(med10(hr)),
+        hr_max=round(float(np.max(block))), max5=max5, med10=_round_or_none(med10(clean)),
         floor=floor, settled=settled,
         climb=(round(settled - floor, 1) if floor is not None and settled is not None else None),
         nint=cls.n_work_bouts,
@@ -291,7 +307,7 @@ def from_incoming(in_dir):
         sport = "%s %s" % (ex.get("sport") or "", ex.get("detailed_sport_info") or "")
         kind = sport_kind(sport)
         date = ex.get("start_time") or ex.get("start-time") or ""   # /v3/exercises vs transaction shape
-        hr = [h for h in (d.get("hr") or []) if 30 < h < 220]
+        hr = list(d.get("hr") or [])     # RAW: dropouts are seconds that elapsed; the makers filter
         if kind == "run":
             s = make_session(hr, sport, date, 1, ex.get("id", ""))
         else:
@@ -324,10 +340,11 @@ def from_fitbit(fitbit_dir):
             errlog.skip("build.py: fitbit json", _e)
             continue
         ex = d.get("summary") or {}
-        hr = [h for h in (d.get("hr") or []) if 30 < h < 220]
+        hr = list(d.get("hr") or [])     # RAW, as from_incoming; make_session filters
         # The Fitbit log window often runs long past the effort. Trim to the ELEVATED interval — the
         # first..last second at running HR — so duration matches real work, not the idle lead/tail.
-        elev = [i for i, h in enumerate(hr) if h >= 100]
+        # Indices are into the RAW trace, so the start shift below counts dropout seconds too.
+        elev = [i for i, h in enumerate(hr) if (_hr_val(h) or 0) >= 100]
         if not elev: continue
         hr = hr[elev[0]:elev[-1] + 1]
         start = ex.get("start_time", "")
