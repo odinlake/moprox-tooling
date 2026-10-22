@@ -155,6 +155,23 @@ def line(i, why):
     return out + (f"\n  {detail[:200]}" if detail else "")
 
 
+TITLE_MAX = 240
+
+
+def issue_title(i):
+    """An issue's whole title, and visibly cut if it is ever absurd.
+
+    This used to be `title[:80]` (and `[:70]` in the daily digest before that), which cut EVERY title
+    the board has ever held: lengths 77/88/89. All 33 deliveries of i-20260814-154101 went out as
+    "...since 2026-08-06 — is it", dropping the question's object ("the app or the pad?"), and 0 of 33
+    carried the whole line (moprox-memory/incident-digest-title-slice-cuts-every-issue). A title is one
+    line an agent wrote to be read; the slice saved nothing and cost the sentence. The bound here is a
+    sanity limit well above anything the board has carried, not a layout width, and it says when it
+    bites — a silent cut is how this went unnoticed for two months."""
+    t = (i.get("title") or i.get("id") or "?").strip().replace("\n", " ")
+    return t if len(t) <= TITLE_MAX else t[:TITLE_MAX] + "… (title cut at %d chars)" % TITLE_MAX
+
+
 def weekly(rows, now):
     """The once-a-week roundup of what is still open and unaddressed (operator, 2026-10-14: he will
     not act on the Amex lanes now, and is happy to be reminded weekly, but not daily). Lists what is
@@ -172,8 +189,11 @@ def weekly(rows, now):
     iss = open_issues()
     mine = [i for i in iss if (i.get("owner") or "") == "operator"]
     if mine:
-        lines.append(f"\nWaiting on you ({len(mine)}): "
-                     + "; ".join((i.get("title") or i.get("id", ""))[:80] for i in mine[:3]))
+        lines.append(f"\nWaiting on you ({len(mine)}):")
+        for i in mine[:3]:
+            lines.append(f"• {issue_title(i)}  [{i.get('id') or '?'}]")
+        if len(mine) > 3:
+            lines.append(f"…and {len(mine) - 3} more waiting on you, on mo.lan/issues")
     if len(iss) > len(mine):
         lines.append(f"{len(iss) - len(mine)} other open issue(s) on mo.lan/issues")
     return lines
