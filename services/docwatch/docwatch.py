@@ -370,6 +370,14 @@ def notify(filed, skipped, given_up=()):
         errlog.err(f"docwatch: notify failed: {type(e).__name__}: {e}")
 
 
+def log_given_up(given_up):
+    """The journal half of the abandonment notice. Two announcement sites need it, so it is one
+    function: a second copy of this sentence is a second chance to say it differently."""
+    for g in given_up:
+        errlog.warn(f"docwatch: giving up on {g['name']!r} after {g['tries']} attempts — "
+                    f"{g.get('last_why', 'unknown')}")
+
+
 def transient_http(e):
     """True if Drive is saying "ask again" rather than "this is gone". The copy sites already make
     this split the other way round with PERMANENT_REASONS; the re-offer path made it nowhere."""
@@ -500,8 +508,28 @@ def main():
 
     new = {f["id"]: f for f in new}.values()        # a file edited twice is still one file
     if not new:
+        # EVERYTHING the re-offer loop above just decided is in `pend` and nowhere else, and this
+        # return used to leave without writing it — on 130 of the 132 runs of 2026-10-21, because
+        # "nothing new in root" is what a ten-minute timer over an empty folder prints. So on the
+        # only path a pending document is normally handled on:
+        #   * a spent attempt was not spent. The re-read of a document Drive answers with 500
+        #     logged "attempt 1/5" and then dropped the increment, so RETRY_MAX bounded nothing and
+        #     the same warn repeated every run for ever — the heat death the comment above says it
+        #     cannot reach.
+        #   * "dropping it" dropped nothing. The record removed for a permanent refusal was back on
+        #     disk, re-read and re-refused on the next run, with the journal still saying it had
+        #     gone.
+        #   * the give-up was announced on no channel. `told` was set in memory and thrown away
+        #     with it, so the notice waited for an unrelated document to arrive in root — the one
+        #     event it has nothing to do with. 28 runs filed or skipped anything in the 45 days to
+        #     2026-10-22, the gaps between them reach 7 days, and all 28 said "gave up on 0".
+        # None of it is the retry set's business to re-derive, so save it and say it here too.
+        pending_save(pend)
         state_save(st)
-        print("docwatch: nothing new in root")
+        notify([], [], given_up)
+        log_given_up(given_up)
+        print("docwatch: nothing new in root"
+              + (f"; gave up on {len(given_up)}" if given_up else ""))
         return 0
     if len(new) > SANE_MAX:
         # This bail-out used to save the ADVANCED page token and record the files nowhere, so the
@@ -638,9 +666,7 @@ def main():
         curate(r)
     for s in skipped:                               # the digest is not a log; the journal is
         errlog.warn(f"docwatch: skipped {s['old_name']!r} — {s['why']}")
-    for g in given_up:
-        errlog.warn(f"docwatch: giving up on {g['name']!r} after {g['tries']} attempts — "
-                    f"{g.get('last_why', 'unknown')}")
+    log_given_up(given_up)
     print(f"docwatch: filed {len(filed)}, skipped {len(skipped)}, gave up on {len(given_up)}")
     return 0
 
