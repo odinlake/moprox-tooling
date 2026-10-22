@@ -106,7 +106,7 @@ Writes private-data/finance/amex-notifs.json (full rewrite each run; source of
 truth is the notifications archive). Reconciliation against statements happens in
 the spending-tracker build, not here.
 """
-import json, re, sys
+import bisect, json, re, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/lib"))
@@ -236,6 +236,39 @@ def _join(bare_alerts, wallet):
         used.add(i)
         pairs.append((e, wallet[i], dt))
     return pairs, unpaired, [w for i, w in enumerate(wallet) if i not in used], ambiguous
+
+
+def _closed_gap_census(stranded, wallet_rows):
+    """(worst strand, its two wallet rows, number of closed gaps) over the wallet channel.
+
+    This is the census the `>= 2` coverage threshold in main() rests on -- "a lost row comes
+    alone" -- recomputed from the archive on every run instead of asserted from a comment. It has
+    to be recomputed. It is a step function of WALLET_JOIN_S, and b3e65c25 moved that bound
+    (10 -> 15 s) without re-running it; and it is a function of the archive, which grows. The
+    threshold is the only thing standing between "the card is not being covered -- go and look at
+    the phone" and "one wallet row was lost", so when its premise stops holding the err has to say
+    so rather than keep printing the figure that was true when it was written.
+
+    CLOSED means between two wallet rows, of ANY shape, parsed or not -- the same population the
+    err counts its tail against. An alert BEFORE the channel's first row is no evidence about the
+    channel, and the alerts after its LAST row are the condition under test, not the null it is
+    tested against: counting those would feed every episode this err detects back into the premise
+    that justifies detecting it, so one closed 7-alert outage would quietly raise the bar to 8.
+    """
+    rows = sorted(((t, w) for w in wallet_rows if (t := _post_time(w)) is not None),
+                  key=lambda x: x[0])
+    times = [t for t, _ in rows]
+    gaps = {}
+    for t, row in stranded:
+        if t is None or not row["settled"] or len(times) < 2 or not times[0] < t < times[-1]:
+            continue
+        gaps.setdefault(bisect.bisect_right(times, t) - 1, []).append(row)
+    n_closed = max(len(times) - 1, 0)
+    if not gaps:
+        return 0, None, None, n_closed
+    # Ties go to the EARLIEST gap, so the line is the same on two runs over the same archive.
+    i = max(gaps, key=lambda k: (len(gaps[k]), -k))
+    return len(gaps[i]), rows[i][1], rows[i + 1][1], n_closed
 
 
 def _amount(m):
@@ -423,9 +456,15 @@ def main():
     # It is monotone on this corpus, identically on the pinned and the live archive, so widening
     # can only make this premise safer and narrowing breaks it -- and the 4 s that
     # wallet-tapandpay-channel-persists published as "ample" on 2026-08-31 sits 79 ms above the
-    # boundary. If WALLET_JOIN_S is ever LOWERED, re-run this census, not only max_join_dt_s:
-    # the drift mark watches the join, and nothing watches the threshold the join underwrites.
-    # (analyst c745)
+    # boundary. That is why the census is no longer read off this paragraph: _closed_gap_census()
+    # recomputes it every run, the line below prints it, and the err states what it measured. The
+    # drift mark watches the join; this watches the threshold the join underwrites (the gap was
+    # named by analyst c745). It is already not what this paragraph says: the 2026-10-16..18
+    # episode CLOSED on 2026-10-18T15:41:25Z, so at the 2026-10-22 archive it is an interior gap
+    # stranding SEVEN -- the premise is broken by a detection, which is precisely the direction a
+    # census nothing recomputes cannot notice. A closed gap stranding two or more is read two ways
+    # and the err says both: either a lost row no longer comes alone, or the channel went dark and
+    # came back between two runs and nobody was told. Each needs a human, so neither is silent.
     #
     # Duration is explicitly NOT the test and a freshness lane cannot do this job: the longest
     # healthy interior gap is 34.09 h and stranded one alert, while the open episode was 32.39 h
@@ -451,16 +490,33 @@ def main():
     wallet_last = _post_time(wallet_last_row) if wallet_last_row is not None else None
     tail = [row for t, row in stranded
             if row["settled"] and wallet_last is not None and t is not None and t > wallet_last]
+    worst, gap_from, gap_to, n_closed = _closed_gap_census(stranded, wallet_rows)
     print(f"  wallet channel: {len(wallet_rows)} row(s), {len(wallet_unreadable)} unreadable, "
           f"last {wallet_last_row.get('ts') if wallet_last_row is not None else 'never'}, "
           f"{len(tail)} settled bare alert(s) stranded after it")
+    # Standing state, so stdout and not an alarm: the archive only grows, so once a closed gap
+    # strands two it does so for ever, and this file's own two warnings are novelty-gated for
+    # exactly that reason. What a 15-minute timer may NOT do is repeat it; what nothing may do is
+    # leave it unsaid, which is where it was.
+    print(f"  wallet gap census: {n_closed} closed gap(s), worst strands {worst}" + (
+        "" if gap_from is None else
+        f" ({gap_from.get('ts')} .. {gap_to.get('ts')})") +
+        ("; the >= 2 threshold below assumes at most 1, and that holds" if worst <= 1 else
+         "; the >= 2 threshold below assumes at most 1 — PREMISE BROKEN, re-measure it"))
     if len(tail) >= 2:
         errlog.err(
             f"amex: the Google Wallet channel has posted nothing since "
             f"{wallet_last_row.get('ts')} and {len(tail)} settled bare Amex alert(s) have been "
             f"stranded behind it, over the {(newest - wallet_last) / 3600:.1f} h the archive has "
-            f"run on since; no interior gap on record has ever stranded two, so the card is not "
-            f"being covered rather than one row being lost — "
+            f"run on since; "
+            + (f"no closed gap in this archive's {n_closed} strands more than {worst}, so the card "
+               f"is not being covered rather than one row being lost — "
+               if worst <= 1 else
+               f"BUT the premise behind this threshold no longer holds -- {worst} settled alert(s) "
+               f"stand in the CLOSED gap {gap_from.get('ts')} .. {gap_to.get('ts')}, so either a "
+               f"lost row does not come alone in this archive or the channel went dark and came "
+               f"back unannounced, and {len(tail)} stranded is no longer evidence on its own; "
+               f"re-measure the census before acting on this line — ")
             + (f"{len(wallet_unreadable)} wallet row(s) on record are unreadable to this parser, "
                f"so check the wording before the phone"
                if wallet_unreadable else
