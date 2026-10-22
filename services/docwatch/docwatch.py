@@ -416,6 +416,7 @@ def main():
                 pass
 
     new, token = [], st["page_token"]
+    feed_from = token                               # where this run's feed read started
     while token:
         resp = drive().changes().list(
             pageToken=token, pageSize=200, restrictToMyDrive=True,
@@ -456,6 +457,16 @@ def main():
             pend.pop(fid, None)
 
     if only:                                        # --file=<id>: one document, on demand
+        # Replacing `new` throws away everything the feed just handed us, and the walk above has
+        # already moved st["page_token"] past it — so a hand-aimed run CONSUMED the changes it
+        # never looked at, the same way the sane-run cap did before 97cee967. Measured 2026-10-22
+        # on a stubbed Drive: 3 feed-discovered documents were in neither filed.jsonl nor
+        # pending.jsonl afterwards, and the next run said "nothing new in root".
+        #
+        # A --file run is an instruction about ONE document, not a feed read. Put the token back
+        # where it was and the normal run re-offers them; `seen` keeps the one we file here from
+        # coming round twice.
+        st["page_token"] = feed_from
         new = [drive().files().get(
             fileId=only,
             fields="id,name,mimeType,parents,trashed,capabilities(canCopy)").execute()]
