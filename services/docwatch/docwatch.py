@@ -466,9 +466,25 @@ def main():
         print("docwatch: nothing new in root")
         return 0
     if len(new) > SANE_MAX:
+        # This bail-out used to save the ADVANCED page token and record the files nowhere, so the
+        # changes it declined were consumed: measured 2026-10-22 on a stubbed Drive, 3 over-cap
+        # documents were already unrecoverable one run later and the next run said "nothing new in
+        # root". The advice in the message below could not work — by the time the cap is raised the
+        # feed has nothing left to re-offer. Park them in the retry set instead, which is the route
+        # back this file already built for the per-file skip path.
+        #
+        # No try is spent on them: the cap is not the document's fault, and re-offering is bounded
+        # by this err firing on every run until the operator raises the cap or clears root.
+        for f in new:
+            e = pend.setdefault(f["id"], {"id": f["id"], "name": f["name"], "tries": 0})
+            e["last_why"] = f"over the {SANE_MAX}-file sane-run cap"
+        for r in given_up:      # notify() does not run on this path — do not mark it announced
+            r.pop("told", None)
+        pending_save(pend)
         state_save(st)
         errlog.err(f"docwatch: {len(new)} new files in root exceeds the {SANE_MAX} sane-run cap — "
-                   f"filing NOTHING. This looks like a restore or a sync loop, not a normal drop. "
+                   f"filing NOTHING, and parking all {len(new)} in the retry set so they are "
+                   f"re-offered. This looks like a restore or a sync loop, not a normal drop. "
                    f"Raise DOCWATCH_MAX_PER_RUN deliberately if it really is a bulk import.")
         return 0
 
