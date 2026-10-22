@@ -61,6 +61,12 @@ RETRY_MAX = int(os.environ.get("DOCWATCH_RETRY_MAX", "5"))
 # representation to copy or export. Retrying that is not resilience, it is five identical Telegram
 # messages about a file that can never be filed, which is what "Untitled map" did on 2026-09-21.
 PERMANENT_REASONS = {"cannotCopyFile", "cannotDownloadFile", "cannotExportFile", "fileNotExportable"}
+# The other half of that split, for the re-offer path. A 5xx or a rate limit is Drive saying "ask
+# again", not "this is gone" — docwatch's own run died on `500 internalError` from this very API on
+# 2026-10-21. Treating one as permanent evicts the document from pending.jsonl, which the re-offer
+# loop's own comment calls the only route back once the change has aged out of the feed.
+TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+TRANSIENT_REASONS = {"internalError", "backendError", "rateLimitExceeded", "userRateLimitExceeded"}
 FOLDER_MIME = "application/vnd.google-apps.folder"
 MAXTXT = 8000
 # Credential material must never reach the index, the digest, or a model prompt. This is not
@@ -364,6 +370,13 @@ def notify(filed, skipped, given_up=()):
         errlog.err(f"docwatch: notify failed: {type(e).__name__}: {e}")
 
 
+def transient_http(e):
+    """True if Drive is saying "ask again" rather than "this is gone". The copy sites already make
+    this split the other way round with PERMANENT_REASONS; the re-offer path made it nowhere."""
+    return (getattr(getattr(e, "resp", None), "status", 0) in TRANSIENT_STATUSES
+            or http_reason(e) in TRANSIENT_REASONS)
+
+
 def http_reason(e):
     """The machine-readable `reason` out of an HttpError, or "" if it has none."""
     try:
@@ -453,8 +466,22 @@ def main():
                 fileId=fid,
                 fields="id,name,mimeType,parents,trashed,capabilities(canCopy)").execute())
         except HttpError as exc:
-            errlog.warn(f"docwatch: pending {fid} is no longer readable ({exc}) — dropping it")
-            pend.pop(fid, None)
+            # Dropping the record is final: the change that announced this file is long gone from
+            # the feed, so pending IS the route back and nothing else will ever offer it again.
+            # That is the right answer to "notFound"/"forbidden" and the wrong one to a 500, which
+            # this endpoint really does return — it killed the whole run on 2026-10-21. A transient
+            # failure spends an attempt instead, which RETRY_MAX already bounds and the give-up
+            # path already announces, so it cannot retry until the heat death either.
+            if transient_http(exc):
+                rec["tries"] = rec.get("tries", 0) + 1
+                rec["last_why"] = (f"Drive could not be asked for it "
+                                   f"({getattr(exc.resp, 'status', '?')} "
+                                   f"{http_reason(exc) or 'no reason given'})")
+                errlog.warn(f"docwatch: pending {fid} could not be re-read ({exc}) — keeping it, "
+                            f"attempt {rec['tries']}/{RETRY_MAX}")
+            else:
+                errlog.warn(f"docwatch: pending {fid} is no longer readable ({exc}) — dropping it")
+                pend.pop(fid, None)
 
     if only:                                        # --file=<id>: one document, on demand
         # Replacing `new` throws away everything the feed just handed us, and the walk above has
