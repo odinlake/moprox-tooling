@@ -6,7 +6,8 @@
     GET  /api/playlist/<cardId>  its chapters, each with an image url
     GET  /api/img/<name>         a cover, downscaled once and cached
     GET  /stats                  what has been played, when, how often (stats.html)
-    GET  /api/stats?days=N       its data (playlog.stats; N=0 is everything)
+    GET  /api/stats?days=N[&player=<deviceId>]  its data (playlog.stats; N=0 is everything;
+                                 player defaults to the main one, YOTO_DEVICE_ID)
     POST /api/playlog            one play-state change, pushed by Home Assistant (10.10.10.7 only)
     POST /api/play               {card, keys[], volume, sleep, rest}  -> myo.queue(), bard's routine
     POST /api/stop               stop the player
@@ -40,6 +41,7 @@ SYNC_EVERY = 15 * 60                  # background pull from HA; HA's own record
 SYNC_FRESH = 60                       # a page load re-syncs if the last pull is older than this
 _sync = {"at": 0, "error": None}
 PLAY_LOCK = threading.Lock()          # one play at a time: two taps racing would interleave orders
+_unknown = set()                      # unmatched players already reported
 _cache = {}                           # small TTL cache: the library barely changes
 
 
@@ -103,14 +105,51 @@ def playlist(cid):
             "reader": READER_OF.get(cid)}
 
 
+def main_player():
+    return yoto.env()["YOTO_DEVICE_ID"]
+
+
+def devices():
+    """The account's players, [{deviceId, name, ...}], refreshed hourly."""
+    return cached("devices", 3600, lambda: yoto.get("/device-v2/devices/mine", yoto.token()).get("devices") or [])
+
+
+def player_of(p):
+    """Which player a pushed HA change came from, as a deviceId. HA's automation sends the device
+    registry's identifiers and name for the media_player (packages/yoto_playlog.yaml). An identifier
+    that IS a deviceId wins; else the name is matched against the account's players. A push from
+    before HA sent either is the main player's: until 2026-10-23 there was no other."""
+    ids = {str(x) for i in (p.get("identifiers") or []) for x in (i if isinstance(i, (list, tuple)) else [i])}
+    if not ids and not p.get("player_name"):
+        return main_player()
+    for fresh in (False, True):                 # a player added within the hour is not cached yet
+        if fresh:
+            _cache.pop("devices", None)
+        devs = devices()
+        for d in devs:
+            if d.get("deviceId") in ids:
+                return d["deviceId"]
+        for d in devs:
+            if p.get("player_name") and (d.get("name") or "").strip().lower() == p["player_name"].strip().lower():
+                return d["deviceId"]
+    # Kept, not refused: under its own key it cannot pollute the main player's stats, and the rows
+    # can be re-attributed by hand once the mapping is known. Logged once per key.
+    key = "unknown:" + (p.get("player_name") or ",".join(sorted(ids)) or "?")
+    if key not in _unknown:
+        _unknown.add(key)
+        errlog.warn("yoto-web: playlog push from a Yoto not on the account: %s / %s" % (sorted(ids), p.get("player_name")))
+    return key
+
+
 def sync_playlog():
     """Optional backfill from HA's REST history (only with a token; HA normally pushes), plus a
-    snapshot of the player's day/night settings for the night map. Never raises; the page shows
+    snapshot of every player's day/night settings for the night map. Never raises; the page shows
     the error instead."""
     try:
-        cfg = yoto.get("/device-v2/%s/config" % yoto.env()["YOTO_DEVICE_ID"], yoto.token())
-        if playlog.record_config((cfg.get("device") or cfg).get("config") or cfg):
-            print("playlog: Yoto day/night settings changed, recorded", flush=True)
+        for d in devices():
+            cfg = yoto.get("/device-v2/%s/config" % d["deviceId"], yoto.token())
+            if playlog.record_config((cfg.get("device") or cfg).get("config") or cfg, d["deviceId"], main_player()):
+                print("playlog: %s day/night settings changed, recorded" % d.get("name"), flush=True)
     except Exception as e:
         errlog.err("yoto-web: Yoto config snapshot", e)
     try:
@@ -129,11 +168,19 @@ def sync_loop():
         time.sleep(SYNC_EVERY)
 
 
-def stats(days):
+def stats(days, player=None):
     if time.time() - _sync["at"] > SYNC_FRESH:
         sync_playlog()
-    out = playlog.stats(days)
+    main = main_player()
+    have = playlog.players(main)
+    # every player on the account is offered once it has a row; the main one always
+    out = playlog.stats(days, player or main, main)
     out["sync_error"] = _sync["error"]
+    out["player"] = player or main
+    out["players"] = [{"id": d["deviceId"], "name": d.get("name") or d["deviceId"],
+                       "mini": d.get("formFactor") == "mini", "main": d["deviceId"] == main,
+                       "online": d.get("online"), "rows": have.get(d["deviceId"], 0)}
+                      for d in devices() if d["deviceId"] == main or have.get(d["deviceId"])]
     return out
 
 
@@ -177,7 +224,10 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/stats":
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 days = max(0, min(3650, int((q.get("days") or ["30"])[0])))
-                return self.send(200, stats(days))
+                player = (q.get("player") or [""])[0]
+                if player and player not in {d["deviceId"] for d in devices()}:
+                    return self.send(404, {"error": "no such player"})
+                return self.send(200, stats(days, player or None))
             if path in STATIC:
                 return self.send(200, (HERE / path[1:]).read_bytes(), STATIC[path], "max-age=86400")
             if path == "/api/playlists":
@@ -206,7 +256,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(403, {"error": "not Home Assistant"})
             try:
                 n = int(self.headers.get("Content-Length") or 0)
-                return self.send(200, {"stored": playlog.record(json.loads(self.rfile.read(n)))})
+                p = json.loads(self.rfile.read(n))
+                return self.send(200, {"stored": playlog.record(p, player_of(p), main_player())})
             except Exception as e:
                 errlog.err("yoto-web POST /api/playlog", e)
                 return self.send(400, {"error": "%s: %s" % (type(e).__name__, e)})

@@ -18,6 +18,11 @@ What is stored: one row per CHANGE of (state, title, card, volume). HA writes a 
 attribute update, position included, so consecutive identical tuples are collapsed on the way in.
 `volume` is the raw hardware step: HA's volume_level is the step over the player's absolute
 maximum of 16 (yoto_api HARDWARE_VOLUME_MAX), NOT over the day/night cap, so step = level * 16.
+
+PLAYERS (2026-10-23, when the travel Mini joined the account): every row and config row carries
+`player`, the Yoto deviceId it came from. Rows from before then have NULL, which means the main
+player (YOTO_DEVICE_ID): HA's automation fires for every Yoto media_player, and until then there was
+only one. Every query goes through _is(), which reads NULL as `main`.
 """
 import datetime, json, os, sqlite3, sys, threading, time, urllib.parse, urllib.request
 from zoneinfo import ZoneInfo
@@ -76,7 +81,15 @@ def db():
     # row per change, written by sleepguard itself on every run.
     c.execute("create table if not exists guard_config (ts real primary key, start text, end text,"
               " deep_start text, deep_end text)")
+    for t in ("rows", "yoto_config"):
+        if "player" not in [r[1] for r in c.execute("pragma table_info(%s)" % t)]:
+            c.execute("alter table %s add column player text" % t)
     return c
+
+
+def _is(player, main):
+    """SQL condition + params for "this row is from `player`"; NULL rows are the main player's."""
+    return "coalesce(player, ?) = ?", (main or "", player or main or "")
 
 
 def meta(c, k, v=None):
@@ -94,9 +107,10 @@ def _row(s):
             None if lvl is None else round(lvl * HW_VOLUME_MAX))
 
 
-def record(p):
-    """One pushed change from HA: {ts, state, title, album, artist, volume_level}. Returns True if
-    stored, False if it repeats the row before it (HA sends one per attribute update)."""
+def record(p, player=None, main=None):
+    """One pushed change from HA: {ts, state, title, album, artist, volume_level}, from `player`
+    (a deviceId; None = main). Returns True if stored, False if it repeats that player's row
+    before it (HA sends one per attribute update)."""
     lvl = p.get("volume_level")
     txt = lambda k: (p.get(k) or "").strip() or None       # Yoto card titles carry trailing spaces
     r = (float(p["ts"]), str(p["state"]), txt("title"), txt("album"), txt("artist"),
@@ -104,11 +118,13 @@ def record(p):
     with _lock:
         c = db()
         try:
-            prev = c.execute("select state, title, album, artist, volume from rows where ts < ?"
-                             " order by ts desc limit 1", (r[0],)).fetchone()
+            w, a = _is(player, main)
+            prev = c.execute("select state, title, album, artist, volume from rows where ts < ? and " + w +
+                             " order by ts desc limit 1", (r[0],) + a).fetchone()
             if prev == r[1:]:
                 return False
-            c.execute("insert or ignore into rows values (?,?,?,?,?,?)", r)
+            c.execute("insert or ignore into rows (ts, state, title, album, artist, volume, player)"
+                      " values (?,?,?,?,?,?,?)", r + (None if player == main else player,))
             meta(c, "synced_to", time.time())
             c.commit()
             return True
@@ -131,7 +147,8 @@ def sync():
                                     "end_time": datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat()})
         start = datetime.datetime.fromtimestamp(since, datetime.timezone.utc).isoformat()
         hist = _ha("/api/history/period/%s?%s" % (urllib.parse.quote(start), q), e)
-        last = c.execute("select ts, state, title, album, artist, volume from rows order by ts desc limit 1").fetchone()
+        last = c.execute("select ts, state, title, album, artist, volume from rows where player is null"
+                         " order by ts desc limit 1").fetchone()
         prev = last[1:] if last else None
         added = 0
         for s in sorted((hist[0] if hist else []), key=lambda s: s.get("last_updated") or ""):
@@ -149,8 +166,8 @@ def sync():
         return added
 
 
-def record_config(cfg):
-    """Store the player's day/night settings if they differ from the last stored row. `cfg` is
+def record_config(cfg, player=None, main=None):
+    """Store a player's day/night settings if they differ from its last stored row. `cfg` is
     /device-v2/<id>/config's `config` object. Returns True when a change was stored."""
     row = (cfg.get("dayTime"), cfg.get("nightTime"),
            int(cfg["maxVolumeLimit"]) if cfg.get("maxVolumeLimit") else None,
@@ -160,11 +177,13 @@ def record_config(cfg):
     with _lock:
         c = db()
         try:
-            last = c.execute("select day_time, night_time, day_max, night_max from yoto_config"
-                             " order by ts desc limit 1").fetchone()
+            w, a = _is(player, main)
+            last = c.execute("select day_time, night_time, day_max, night_max from yoto_config where " + w +
+                             " order by ts desc limit 1", a).fetchone()
             if last == row:
                 return False
-            c.execute("insert into yoto_config values (?,?,?,?,?)", (time.time(),) + row)
+            c.execute("insert into yoto_config (ts, day_time, night_time, day_max, night_max, player)"
+                      " values (?,?,?,?,?,?)", (time.time(),) + row + (None if player == main else player,))
             c.commit()
             return True
         finally:
@@ -206,8 +225,10 @@ def _guard_at(guards, t):
     return (cur[1], cur[2]) if cur else (None, None)
 
 
-def _configs(c):
-    return c.execute("select ts, day_time, night_time, day_max, night_max from yoto_config order by ts").fetchall()
+def _configs(c, player=None, main=None):
+    w, a = _is(player, main)
+    return c.execute("select ts, day_time, night_time, day_max, night_max from yoto_config where " + w +
+                     " order by ts", a).fetchall()
 
 
 def _config_at(cfgs, t):
@@ -227,7 +248,7 @@ SLOT = 600                                   # the night map's resolution: 10 mi
 SLOTS = 86400 // SLOT                        # 144 per day, midnight to midnight
 
 
-def _nights(c, segs, t0, t1, first):
+def _nights(c, segs, t0, t1, first, player=None, main=None):
     """One column per DAY, midnight to midnight local. Each: date, 144 ten-minute slots of seconds
     listened, and the Yoto's day/night times that day. (2026-10-02 to 10-04 this was noon to noon,
     keeping a night in one column; the operator asked for midnight back at the edges on 10-04.)"""
@@ -255,8 +276,10 @@ def _nights(c, segs, t0, t1, first):
             if day in idx:
                 slots[idx[day]][k] += cut - s
             s = cut
-    cfgs = _configs(c)
-    guards = c.execute("select ts, start, end from guard_config order by ts").fetchall()
+    cfgs = _configs(c, player, main)
+    # sleepguard only ever drives the main player
+    guards = c.execute("select ts, start, end from guard_config order by ts").fetchall() \
+        if (player or main) == main else []
     out = []
     for d, sl in zip(dates, slots):
         noon = datetime.datetime(d.year, d.month, d.day, 12, tzinfo=TZ).timestamp()
@@ -270,12 +293,16 @@ def _nights(c, segs, t0, t1, first):
 
 # --- stats -----------------------------------------------------------------------------------------
 
-def _segments(c, t0, t1):
-    """(start, end, state, title, album, volume) covering [t0, t1], clipped. The row in force at t0
-    is included; the last segment ends at t1, which the caller caps at the last sync."""
-    before = c.execute("select * from rows where ts < ? order by ts desc limit 1", (t0,)).fetchone()
+ROW = "select ts, state, title, album, artist, volume from rows where "
+
+
+def _segments(c, t0, t1, player=None, main=None):
+    """(start, end, state, title, album, volume) of one player covering [t0, t1], clipped. The row in
+    force at t0 is included; the last segment ends at t1, which the caller caps at the last sync."""
+    w, a = _is(player, main)
+    before = c.execute(ROW + "ts < ? and " + w + " order by ts desc limit 1", (t0,) + a).fetchone()
     rows = ([before] if before else []) + c.execute(
-        "select * from rows where ts >= ? and ts < ? order by ts", (t0, t1)).fetchall()
+        ROW + "ts >= ? and ts < ? and " + w + " order by ts", (t0, t1) + a).fetchall()
     out = []
     for i, (ts, st, title, album, artist, vol) in enumerate(rows):
         end = rows[i + 1][0] if i + 1 < len(rows) else t1
@@ -361,10 +388,23 @@ def _split_hours(s, e):
         s = cut
 
 
-def stats(days=30):
+def players(main=None):
+    """{deviceId: rows} for every player with a row; the NULL rows count as main's."""
+    c = db()
+    try:
+        out = {}
+        for p, n in c.execute("select coalesce(player, ?), count(*) from rows group by 1", (main or "",)):
+            out[p] = out.get(p, 0) + n
+        return out
+    finally:
+        c.close()
+
+
+def stats(days=30, player=None, main=None):
     c = db()
     synced = float(meta(c, "synced_to") or 0)
-    first = c.execute("select min(ts) from rows").fetchone()[0]
+    w, a = _is(player, main)
+    first = c.execute("select min(ts) from rows where " + w, a).fetchone()[0]
     # pushed data is current to now: the last row stays in force until the next push changes it
     t1 = time.time()
     if days:
@@ -372,7 +412,7 @@ def stats(days=30):
     else:
         t0 = (first or t1) - 86400
     album_of = _attribution(c)
-    segs = _segments(c, t0, t1)
+    segs = _segments(c, t0, t1, player, main)
     play = [(x["s"], x["e"], x["state"], x["title"], x["album"])
             for x in _tidy(segs, album_of) if x["state"] == "playing"]
 
@@ -414,9 +454,9 @@ def stats(days=30):
         days_list.append({"date": d.isoformat(), "listen_s": round(daily.get(d.isoformat(), 0))})
         d += datetime.timedelta(days=1)
 
-    nights = _nights(c, segs, t0, t1, first)
+    nights = _nights(c, segs, t0, t1, first, player, main)
     l0 = t1 - 86400
-    last24 = _tidy(_segments(c, l0, t1), album_of)
+    last24 = _tidy(_segments(c, l0, t1, player, main), album_of)
     c.close()
     # a blank second with nothing after it to name it stays "(unknown card)"; at 0 s it is noise
     rnd = lambda xs: [dict(x, listen_s=round(x["listen_s"])) for x in xs if x["plays"] or x["listen_s"] >= 0.5]

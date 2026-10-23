@@ -10,6 +10,11 @@ apart from one events + status report request per connection, so the log starts 
 
     listen.py                append JSON lines to ~/.local/share/moprox/yoto/listen.jsonl
 
+Every player on the account is recorded (2026-10-23, when the travel Mini joined): the main one
+(YOTO_DEVICE_ID) to listen.jsonl as before, each other to listen-<deviceId>.jsonl. Only the main
+player gets brightguard and freshstart; they change its settings, and nobody asked for that on the
+others. A player that is off just leaves its session idle until it comes back.
+
 Each line: {"t": arrival unix time (ms precision), "topic": "events|status|response|...", "m": payload}.
 `m.eventUtc` (the player's clock, whole seconds) against `t` gives the player->here latency.
 
@@ -28,9 +33,13 @@ LOG = Path(os.environ.get("YOTO_LISTEN_LOG", str(Path.home() / ".local/share/mop
 SESSION = 45 * 60          # reconnect with a fresh access token well inside its lifetime
 
 
-def write(topic, m):
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
+def log_for(dev, main):
+    return LOG if dev == main else LOG.with_name("%s-%s%s" % (LOG.stem, dev, LOG.suffix))
+
+
+def write(topic, m, log=LOG):
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as f:
         f.write(json.dumps({"t": round(time.time(), 3), "topic": topic, "m": m}, ensure_ascii=False) + "\n")
 
 
@@ -38,7 +47,7 @@ GUARD = brightguard.Guard()
 FRESH = freshstart.Guard()
 
 
-def session(tok, dev):
+def session(tok, dev, log=LOG, guards=True):
     """One broker session; returns when it drops or SESSION has elapsed."""
     import paho.mqtt.client as mqtt
     up, down = threading.Event(), threading.Event()
@@ -59,7 +68,9 @@ def session(tok, dev):
         except Exception:
             m = msg.payload.decode(errors="replace")
         topic = msg.topic.split("/")[-1]
-        write(topic, m)
+        write(topic, m, log)
+        if not guards:
+            return
         try:                                 # the guard must never cost the log
             GUARD.feed(topic, m, time.time())
         except Exception as e:
@@ -78,27 +89,45 @@ def session(tok, dev):
         if not up.wait(25):
             print("could not connect to the broker", flush=True)
             return
-        write("_connected", {"online": yoto.online(tok, dev)})
+        write("_connected", {"online": yoto.online(tok, dev)}, log)
         c.publish(f"device/{dev}/command/events/request", "", 0)
         c.publish(f"device/{dev}/command/status/request", "", 0)
         down.wait(SESSION)
-        write("_disconnected", {"dropped": down.is_set()})
+        write("_disconnected", {"dropped": down.is_set()}, log)
     finally:
         c.loop_stop()
         c.disconnect()
 
 
-def main():
-    dev = yoto.env()["YOTO_DEVICE_ID"]
-    print("yoto-listen: logging to %s" % LOG, flush=True)
-    GUARD.restore()
+def run(dev, main):
+    log = log_for(dev, main)
+    print("yoto-listen: %s -> %s" % (dev, log), flush=True)
     while True:
         try:
-            session(yoto.token(), dev)
+            session(yoto.token(), dev, log, guards=dev == main)
         except Exception as e:
-            print("session error: %s: %s" % (type(e).__name__, e), flush=True)
+            print("session error (%s): %s: %s" % (dev, type(e).__name__, e), flush=True)
             time.sleep(30)
         time.sleep(1)
+
+
+def main():
+    main_dev = yoto.env()["YOTO_DEVICE_ID"]
+    GUARD.restore()
+    started = set()
+    while True:
+        # the main player always; the others as the account lists them, checked hourly so a newly
+        # added player is picked up without a restart
+        try:
+            devs = [d["deviceId"] for d in yoto.get("/device-v2/devices/mine", yoto.token()).get("devices") or []]
+        except Exception as e:
+            print("<4>yoto-listen: could not list players: %s: %s" % (type(e).__name__, e), flush=True)
+            devs = []
+        for dev in [main_dev] + devs:
+            if dev not in started:
+                started.add(dev)
+                threading.Thread(target=run, args=(dev, main_dev), daemon=True, name=dev).start()
+        time.sleep(3600)
 
 
 if __name__ == "__main__":
