@@ -87,6 +87,11 @@ def flagged(rec):
     return bool(rec.get("dropouts") or rec.get("jumps5"))
 
 
+def analysed(rec):
+    """Was this row scored, or is it only on the drain clock? A usage row carries no analysis."""
+    return "dropouts" in rec
+
+
 def hours_since_change(records, changes):
     """Session hours since the last logged battery change — the real predictor, when it is logged."""
     if not changes: return None, None
@@ -102,11 +107,14 @@ def verdict(records, changes=None):
     several independent signals at once — because a single 1-second zero happens roughly every six
     weeks in a perfectly healthy strap and crying wolf on it would make this worthless.
     """
-    recs = sorted(records, key=lambda r: r.get("date", ""))
-    if not recs: return "ok", "no sessions recorded"
+    # Two populations on purpose: the cell drains on every session the strap transmitted, but
+    # every threshold here is run-calibrated, so only an analysed row may reach a judgement.
+    everything = sorted(records, key=lambda r: r.get("date", ""))
+    recs = [r for r in everything if analysed(r)]
+    if not recs: return "ok", "no sessions analysed"
     cur = recs[-1]
     hits = [r for r in recs if flagged(r)]
-    last_change, hours = hours_since_change(recs, changes or [])
+    last_change, hours = hours_since_change(everything, changes or [])
     age = ""
     if hours is not None:
         age = " Battery changed %s: %.0f h of sessions since (spec ~%d h)." % (last_change, hours, SPEC_HOURS)
@@ -155,6 +163,11 @@ def load_log():
     return out
 
 
+def _append(row):
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "a") as f: f.write(json.dumps(row) + "\n")
+
+
 def record(date, values, sport_label):
     """Analyse a session, append it to the log (idempotent per date), and return (rec, level, msg).
 
@@ -179,14 +192,20 @@ def record(date, values, sport_label):
     rec = None
     if kind == CALIBRATED:
         rec = analyse(values); rec["date"] = date[:10]
-        if not any(r.get("date") == rec["date"] for r in recs):
-            LOG.parent.mkdir(parents=True, exist_ok=True)
-            with open(LOG, "a") as f: f.write(json.dumps(rec) + "\n")
-            recs.append(rec)
+        if not any(analysed(r) and r.get("date") == rec["date"] for r in recs):
+            _append(rec); recs.append(rec)
     else:
+        # NOT scored — the thresholds are run-calibrated — but it drained the same cell, and
+        # hours_since_change is the one predictor this module says actually works. So the clock
+        # gets it without the analysis. Deduped on the whole row: a replay is idempotent, and a
+        # second session of the same kind on one day is still a second session on the clock.
+        row = {"date": date[:10], "minutes": round(len(values) / 60.0, 1), "sport": kind}
+        if row not in recs:
+            _append(row); recs.append(row)
         print("strap: %s not analysed — %r is a %s session and every threshold here is %s-calibrated;"
-              " verdict stands on the %d session(s) already measured"
-              % (date[:10], sport_label, kind, CALIBRATED, len(recs)))
+              " its %.1f min go on the battery clock, verdict stands on the %d session(s) measured"
+              % (date[:10], sport_label, kind, CALIBRATED, row["minutes"],
+                 sum(1 for r in recs if analysed(r))))
     changes = json.loads(BATTERY.read_text()) if BATTERY.exists() else []
     level, msg = verdict(recs, changes)
     return rec, level, msg
@@ -206,5 +225,6 @@ if __name__ == "__main__":
             if flagged(r):
                 print("%s  dropouts=%d (%ds, longest %ds)  jumps>=5=%d"
                       % (r["date"], r["dropouts"], r["dropout_s"], r["longest_s"], r["jumps5"]))
-        print("\n%d flagged of %d sessions" % (sum(1 for r in recs if flagged(r)), len(recs)))
+        print("\n%d flagged of %d analysed (%d session(s) on the battery clock)"
+              % (sum(1 for r in recs if flagged(r)), sum(1 for r in recs if analysed(r)), len(recs)))
         print("verdict: %s — %s" % verdict(recs, changes))
