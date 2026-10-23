@@ -67,6 +67,14 @@ PERMANENT_REASONS = {"cannotCopyFile", "cannotDownloadFile", "cannotExportFile",
 # loop's own comment calls the only route back once the change has aged out of the feed.
 TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 TRANSIENT_REASONS = {"internalError", "backendError", "rateLimitExceeded", "userRateLimitExceeded"}
+# The changes feed is the one call with no second route: nothing downstream runs if the walk raises,
+# so the run dies before it files, re-offers or saves anything. It is also the ONLY docwatch request
+# Drive has been recorded answering with a 500 — 2026-10-21T23:40:57Z pid 3187591,
+# `drive/v3/changes?pageToken=82375`, `internalError`, at `.execute()` — and a ten-minute timer makes
+# it ~144 times a day. Nothing is lost when it raises (the page token only moves on the last page, so
+# the next tick re-reads from the same place), but the run files nothing and systemd records a failed
+# unit. Three attempts; after that it dies exactly as loudly as it did before.
+WALK_TRIES = 3
 FOLDER_MIME = "application/vnd.google-apps.folder"
 MAXTXT = 8000
 # Credential material must never reach the index, the digest, or a model prompt. This is not
@@ -393,6 +401,29 @@ def http_reason(e):
         return ""
 
 
+def changes_page(token):
+    """One page of the changes feed, asked again while Drive is saying "ask again".
+
+    This call had no handler at all — not even the PERMANENT_REASONS split the copy sites make and
+    the re-offer path borrowed. Exhaustion re-raises on purpose: the module-level handler's err line
+    is the only thing that named the cause of the 2026-10-21 death, and a feed still answering 500
+    after WALK_TRIES attempts is not something to be quieter about than before."""
+    for attempt in range(1, WALK_TRIES + 1):
+        try:
+            return drive().changes().list(
+                pageToken=token, pageSize=200, restrictToMyDrive=True,
+                fields="nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,trashed,capabilities(canCopy)))"
+            ).execute()
+        except HttpError as exc:
+            if attempt == WALK_TRIES or not transient_http(exc):
+                raise
+            errlog.warn(f"docwatch: changes feed answered "
+                        f"{getattr(exc.resp, 'status', '?')} "
+                        f"{http_reason(exc) or 'no reason given'} at page token {token} — asking "
+                        f"again, attempt {attempt + 1}/{WALK_TRIES}")
+            time.sleep(attempt)
+
+
 def pending_load():
     """Files seen before and not yet filed, with an attempt count. Bounded: a document that fails
     RETRY_MAX times is dropped from the retry set rather than retried until the heat death."""
@@ -439,10 +470,7 @@ def main():
     new, token = [], st["page_token"]
     feed_from = token                               # where this run's feed read started
     while token:
-        resp = drive().changes().list(
-            pageToken=token, pageSize=200, restrictToMyDrive=True,
-            fields="nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,trashed,capabilities(canCopy)))"
-        ).execute()
+        resp = changes_page(token)
         for ch in resp.get("changes", []):
             f = ch.get("file") or {}
             if ch.get("removed") or f.get("trashed") or f.get("mimeType") == FOLDER_MIME:
@@ -476,8 +504,10 @@ def main():
         except HttpError as exc:
             # Dropping the record is final: the change that announced this file is long gone from
             # the feed, so pending IS the route back and nothing else will ever offer it again.
-            # That is the right answer to "notFound"/"forbidden" and the wrong one to a 500, which
-            # this endpoint really does return — it killed the whole run on 2026-10-21. A transient
+            # That is the right answer to "notFound"/"forbidden" and the wrong one to a 500. This
+            # endpoint has never been recorded returning one: the run that died on 2026-10-21 died
+            # on a 500 from the CHANGES feed, a different call, now handled in changes_page(). So
+            # this arm is for the error class, not for an episode measured here. A transient
             # failure spends an attempt instead, which RETRY_MAX already bounds and the give-up
             # path already announces, so it cannot retry until the heat death either.
             if transient_http(exc):
