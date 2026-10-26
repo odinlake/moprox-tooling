@@ -41,7 +41,7 @@ def main():
         lines = fetch({"startcursor": cur} if cur else {"lastentries": 500})
     except urllib.error.HTTPError as e:
         if e.code == 403:
-            errlog.warn("pve_journal_pull.py: token lacks Sys.Syslog on /nodes/%s; Proxmox host changes are NOT recorded" % NODE)
+            errlog.warn("token lacks Sys.Syslog on /nodes/%s; Proxmox host changes are NOT recorded" % NODE)
             return
         raise
     # The API returns the cursor as the first and last lines ("-- cursor: ..."); the rest are log lines.

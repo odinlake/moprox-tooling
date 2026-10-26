@@ -12,5 +12,7 @@ logger -t agent-ssh "ssh login user=$USER agent=${MOPROX_AGENT:-undeclared}${AGE
 EOF
 chmod 644 /etc/ssh/sshrc
 sshd -t 2>/dev/null || /usr/sbin/sshd -t
-systemctl reload ssh 2>/dev/null || systemctl reload sshd
+# Socket-activated sshd (claude-loop) starts per connection and reads the config fresh: nothing to reload.
+if systemctl is-active -q ssh.service; then systemctl reload ssh.service
+elif systemctl is-active -q sshd.service; then systemctl reload sshd.service; fi
 echo "$(hostname): ssh agent tagging on"
