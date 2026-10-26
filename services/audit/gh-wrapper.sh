@@ -36,5 +36,5 @@ if [ "$squash" = 1 ] && [ "$has_body" = 0 ]; then
   [ -n "$CONCURRENT" ] && BODY="$BODY"$'\n'"Concurrent-intents: $(printf %s "$CONCURRENT" | tr '\n' ';')"
   args+=(--body "$BODY")
 fi
-logger -t estate-intent "INTENT note id=- scope=repo:${REPO:-?} by=$AGENT :: gh pr merge ${args[*]:0:4}"
+logger -t estate-intent "INTENT note id=- scope=repo:${REPO:-?} by=$AGENT :: gh pr merge ${*:3}"
 exec "$REAL" pr merge "${args[@]}"
