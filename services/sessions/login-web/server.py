@@ -154,7 +154,11 @@ def code(sid, text):
         _reap(sid)
     clean = ANSI_RE.sub("", out).replace("\r", "").strip()
     probe = run(s["box"], PROBE_SH, timeout=120).strip()
-    return {"box": s["box"], "output": clean[-600:], "probe": probe[-200:], "ok": "AUTH-OK" in probe,
+    # The probe alone cannot judge the login: a box whose OLD login is still valid answers AUTH-OK even
+    # when the new code was rejected (2026-10-26: "Login failed: ... 400" shown under "Done.").
+    logged = bool(re.search(r"(?i)login successful|logged in as", clean)) and not re.search(r"(?i)failed|error|invalid", clean)
+    return {"box": s["box"], "output": clean[-600:], "probe": probe[-200:], "login_ok": logged,
+            "ok": logged and "AUTH-OK" in probe,
             "status": status(s["box"])}
 
 
