@@ -289,6 +289,59 @@ def force_coverage(path):
     return (curves, revs) if revs else None
 
 
+def _tmp_beside(p):
+    """A scratch path next to `p` that no other caller of pull() can be using.
+
+    pull() is a whole-store sync and it IS called concurrently. In-process: polar_fetch calls
+    start() once per ride and joins at most one of them, so a cold start over the 11 INDOOR_CYCLING
+    exercises on disk fires 11 pulls inside 0.01 s (analyst, 2026-10-24,
+    moprox-memory/polar-wattbike-fourth-exit-and-coldstart-fanout). Across processes: the pull's own
+    ceiling HARD_S is 420 s while polar-fetch.timer fires every 5 min, so two runs overlap by
+    construction -- which is why this is keyed on the pid as well as the thread, and why no
+    in-process arrangement of the callers would make it unnecessary.
+
+    Keyed, not random, so the litter one of these can leave is bounded by the number of writers
+    rather than by the number of writes.
+    """
+    return p.with_name("%s.%d.%d.part" % (p.name, os.getpid(), threading.get_ident()))
+
+
+def _sweep_tmps(dest):
+    """Remove scratch files no running pull can own, loudly, and never a live one.
+
+    Keying the scratch name per writer is what makes the concurrency above safe, but it also
+    stops the next run's write from overwriting what a killed writer left: the single
+    `<name>.part` was self-limiting at one file per destination and a per-writer name is not.
+    That matters because the destination is private-data, `wattbike/raw/` is not gitignored, and
+    private-data-sync runs `git add -A` over it hourly -- so an orphan is a ~2.8 MB blob
+    committed to that repo's history for good, and this repo does not rewrite history.
+
+    Orphans are not hypothetical: a pull runs in a DAEMON thread (start()), so when polar_fetch's
+    main() returns the interpreter kills it wherever it had got to, and three of its four exits
+    never join (moprox-memory/polar-wattbike-fourth-exit-and-coldstart-fanout).
+
+    Older than HARD_S cannot belong to a live pull -- HARD_S is the pull's own ceiling. Anything
+    younger is left strictly alone, INCLUDING the in-flight scratch file of a pull running right
+    now: deleting that would reintroduce the very collision the keying removes.
+    """
+    now = time.time()
+    for p in sorted(list((dest / "raw").glob("*.part")) + list(dest.glob("*.part"))):
+        try:
+            st = p.stat()
+            if now - st.st_mtime <= HARD_S:
+                continue
+            p.unlink()
+        except FileNotFoundError:
+            continue                  # a concurrent sweep got there first; not a fault
+        except Exception as e:
+            errlog.err("wattbike: cannot remove the stale scratch file %s, which private-data-sync "
+                       "will commit as data" % p, e)
+            continue
+        errlog.warn("wattbike: removed stale scratch file %s (%d B, %.0f min old) -- a pull was "
+                    "killed between writing it and renaming it into place"
+                    % (p.name, st.st_size, (now - st.st_mtime) / 60.0))
+
+
 def pull(dest=None):
     """Fetch every session for the stored user and every sessionData file we do not hold.
 
@@ -330,6 +383,7 @@ def pull(dest=None):
     rows = list(rows) + kept + recovered
 
     (dest / "raw").mkdir(parents=True, exist_ok=True)
+    _sweep_tmps(dest)
     new, missed = [], []
     for s in rows:
         for ext, local, ent in _files_of(s):
@@ -340,13 +394,28 @@ def pull(dest=None):
             if code != 200 or not data:
                 missed.append("%s.%s(%s)" % (s["objectId"], ext, code))
                 continue
-            tmp = p.with_suffix(p.suffix + ".part")
-            tmp.write_bytes(data)
-            tmp.replace(p)
+            tmp = _tmp_beside(p)
+            try:
+                tmp.write_bytes(data)
+                tmp.replace(p)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()                 # a failed write leaves no litter behind
             new.append(p.name)
     # Written last: the index is the thing other code reads, so it should never be ahead of
-    # the files it points at.
-    (dest / "sessions.json").write_text(json.dumps(rows, indent=1) + "\n")
+    # the files it points at. Via tmp+replace, like the files above: write_text truncates in
+    # place, so a concurrent reader can read a PREFIX of it -- and the reader that matters is
+    # _stored_rows() in another pull, which on an unreadable index returns [] and so carries no
+    # `wattbike_recovered` row forward through the `kept` filter above, dropping a summary-only
+    # ride from the index for good.
+    idx = dest / "sessions.json"
+    itmp = _tmp_beside(idx)
+    try:
+        itmp.write_text(json.dumps(rows, indent=1) + "\n")
+        itmp.replace(idx)
+    finally:
+        if itmp.exists():
+            itmp.unlink()
     note = "%d sessions, %d new files" % (len(rows), len(new))
     # Measured, not assumed: the coach is handed per-stroke instructions, so every .wbs this run
     # landed reports how many of its revolutions actually carry a curve. Scoped to the new files
