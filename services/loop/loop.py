@@ -976,6 +976,22 @@ def change_gate(prop, cyc, agent):
         shutil.rmtree(wt, ignore_errors=True)
 
 
+INTENT = Path(__file__).resolve().parents[1] / "audit" / "estate_intent.py"
+
+
+def intent(*args):
+    """Announce this cycle on the estate-intent ledger (services/audit), so a dev session about to
+    merge into a repo this cycle may land in sees it. Advisory: a failure warns and the cycle goes on."""
+    try:
+        r = subprocess.run([sys.executable, str(INTENT), *args], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip()[:200])
+        return r.stdout.strip()
+    except Exception as e:
+        warn(f"estate-intent {args[0]} failed; this cycle is invisible to other agents", e)
+        return ""
+
+
 def land(prop, wt, files, head, cyc, agent):
     """Commit the verified worktree and push it. -> (sha, None) or (None, reason).
 
@@ -991,8 +1007,10 @@ def land(prop, wt, files, head, cyc, agent):
             f"Checked by the loop harness: the change's own check failed at {head[:12]} and passed "
             f"with this patch applied. Cycle {cyc}.\n")
     for cmd in (["add", "-A", "--"] + files,      # already staged by the gate; keeps this callable alone
-                ["-c", f"user.name=moprox {agent}", "-c", "user.email=agent@odinlake.net",
-                 "commit", "-q", "-m", f"{subject}\n\n{body}"]):
+                # Author = the estate AI account (global config); committer = this unit, from the
+                # 50-moprox-agent drop-in's GIT_COMMITTER_NAME (services/audit).
+                ["-c", "user.name=odinlake-ai", "-c", "user.email=agent@odinlake.net",
+                 "commit", "-q", "-m", f"{subject}\n\n{body}\nAgent: loop@{agent}"]):
         r = _git(cmd, wt, timeout=300)
         if r.returncode != 0:
             err(f"land: `git {cmd[0]}` failed for cycle {cyc}, so the change is NOT on origin",
@@ -1911,6 +1929,8 @@ def main():
 
     say(f"▸ cycle {cyc} · budget ${spent:.2f}/${cap:.2f}"
         + (f" · resuming {inflight}" if inflight else ""), 6, agent)
+    heads = " ".join(f"{name}@{_git(['rev-parse', '--short', 'HEAD'], d).stdout.strip()}" for name, d in REPO_DIRS.items())
+    iid = intent("open", "--ttl", "60", "repo:*", f"loop@{agent} cycle {cyc} may land in any repo; based on {heads}")
 
     # The ledger IS the seed: open items, what has already been tried, what was accepted.
     prompt = (
@@ -2079,6 +2099,8 @@ def main():
     secs = int(((res or {}).get("duration_ms") or 0) / 1000)
     say(f"▸ cycle {cyc} done · {accepted} accepted, {disputed} disputed, {rejected} rejected · "
         f"${cost:.2f} · {turns} turns · {secs//60}m{secs%60:02d}s", 6, agent)
+    if iid:
+        intent("close", iid, f"{accepted} accepted, {disputed} disputed, {rejected} rejected")
 
     # Report the cycle's own last line. A cycle that found nothing still reports: silence is what
     # made thirteen toolless cycles invisible, and "nothing worth doing" is a legitimate result the
