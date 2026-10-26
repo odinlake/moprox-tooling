@@ -12,7 +12,10 @@ logger -t agent-ssh "ssh login user=$USER agent=${MOPROX_AGENT:-undeclared}${AGE
 EOF
 chmod 644 /etc/ssh/sshrc
 sshd -t 2>/dev/null || /usr/sbin/sshd -t
-# Socket-activated sshd (claude-loop) starts per connection and reads the config fresh: nothing to reload.
-if systemctl is-active -q ssh.service; then systemctl reload ssh.service
+# Socket-activated sshd (Debian 13: ssh.socket hands its fd to ssh.service) EXITS 255 on SIGHUP, so
+# `reload` "fails" on dns/web/monitoring/mcp-google/webscout (2026-10-26) and only works because the
+# socket starts a fresh sshd. Restart instead: KillMode=process keeps every open session alive.
+if systemctl is-active -q ssh.socket; then systemctl restart ssh.service
+elif systemctl is-active -q ssh.service; then systemctl reload ssh.service
 elif systemctl is-active -q sshd.service; then systemctl reload sshd.service; fi
 echo "$(hostname): ssh agent tagging on"
