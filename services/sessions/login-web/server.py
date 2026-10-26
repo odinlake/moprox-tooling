@@ -81,7 +81,8 @@ def status(box):
         c = json.loads(creds.strip().splitlines()[-1]) if creds.strip() else {}
         return {"box": box, "label": BOXES[box]["label"], "what": BOXES[box]["what"],
                 "logged_in": bool(a.get("loggedIn")), "email": a.get("email"),
-                "refresh_exp": c.get("refresh_exp"), "access_exp": c.get("access_exp"), "mtime": c.get("mtime")}
+                "refresh_exp": c.get("refresh_exp"), "access_exp": c.get("access_exp"), "mtime": c.get("mtime"),
+                "pending": pending(box)}
     except Exception as e:
         errlog.err("claude-login: status of %s" % box, e)
         return {"box": box, "label": BOXES[box]["label"], "what": BOXES[box]["what"], "error": str(e)[:200]}
@@ -120,6 +121,16 @@ def _reap(sid):
         pass                                    # benign: fd/child already gone
 
 
+def pending(box):
+    # The login still waiting for its code, so a page that was reloaded or discarded while the operator was
+    # on the sign-in page shows the SAME link again; starting a new one would invalidate the code they hold.
+    with LOCK:
+        for sid, v in SESSIONS.items():
+            if v["box"] == box and time.time() - v["started"] < TTL:
+                return {"sid": sid, "url": v["url"]}
+    return None
+
+
 def start(box):
     with LOCK:
         for sid in [k for k, v in SESSIONS.items() if v["box"] == box or time.time() - v["started"] > TTL]:
@@ -137,7 +148,7 @@ def start(box):
         raise RuntimeError("no sign-in URL from %s: %s" % (box, ANSI_RE.sub("", out)[-300:]))
     sid = uuid.uuid4().hex
     with LOCK:
-        SESSIONS[sid] = {"box": box, "pid": pid, "fd": fd, "started": time.time()}
+        SESSIONS[sid] = {"box": box, "pid": pid, "fd": fd, "started": time.time(), "url": m.group(0)}
     return {"sid": sid, "url": m.group(0)}
 
 
