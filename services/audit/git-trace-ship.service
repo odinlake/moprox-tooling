@@ -1,0 +1,6 @@
+[Unit]
+Description=Ship git trace2 records of state-changing git commands to the journal (services/audit)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 @AUDIT@/git_trace_ship.py

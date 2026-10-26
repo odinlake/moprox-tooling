@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull the Proxmox host journal into the fleet log (services/audit)
+
+[Service]
+Type=oneshot
+User=mikael
+EnvironmentFile=/home/mikael/.config/proxmox/pve-metrics.env
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/audit/pve_journal_pull.py
