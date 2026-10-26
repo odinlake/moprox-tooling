@@ -60,12 +60,25 @@ pre { white-space:pre-wrap; word-break:break-word; font:12px ui-monospace,monosp
   function render(list) {
     $("boxes").innerHTML = list.map(function (s) {
       return '<div class="card" id="c-' + s.box + '"><div class="row"><div><div class="name">' + esc(s.label) + '</div><div class="what">' + esc(s.what) + '</div></div>' +
-        '<button class="primary" data-box="' + s.box + '">Log in</button></div><div class="st">' + stLine(s) + '</div><div class="steps" hidden></div></div>';
+        '<button class="primary" data-box="' + s.box + '">' + (s.pending ? "New link" : "Log in") + '</button></div><div class="st">' + stLine(s) + '</div><div class="steps" hidden></div></div>';
     }).join("");
+    list.forEach(function (s) { if (s.pending) { state[s.box] = s.pending; showSteps(s.box); } });
+  }
+  function showSteps(box) {
+    var r = state[box], steps = $("c-" + box).querySelector(".steps");
+    steps.hidden = false;
+    steps.innerHTML = '<ol><li><a class="btn primary" href="' + esc(r.url) + '" target="_blank" rel="noopener">Open the Claude sign-in page</a> ' +
+        '<button data-copy="' + box + '">Copy link</button><div class="url">' + esc(r.url) + '</div></li>' +
+        '<li>Approve it. Claude then shows a code: copy it.</li>' +
+        '<li>Come back here (this login waits 15 minutes, and survives a reload) and paste it: ' +
+        '<input type="text" id="code-' + box + '" placeholder="Paste the code here" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<div class="btns" style="margin-top:8px"><button class="primary" data-send="' + box + '">Finish login</button></div></li></ol>';
   }
   function load() { api("api/status").then(render).catch(function (e) { $("boxes").innerHTML = '<div class="card bad">' + esc(e.message) + '</div>'; }); }
   $("boxes").addEventListener("click", function (e) {
-    var b = e.target.closest("button[data-box]"); if (b) return startLogin(b.getAttribute("data-box"), b);
+    var b = e.target.closest("button[data-box]");
+    if (b) { if (state[b.getAttribute("data-box")] && !confirm("Start over with a new link? A code from the current link will then stop working.")) return;
+             return startLogin(b.getAttribute("data-box"), b); }
     var c = e.target.closest("button[data-copy]"); if (c) { var u = state[c.getAttribute("data-copy")].url;
       (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(function () { c.textContent = "Copied"; }, function () { c.textContent = "Copy failed: long-press the link"; }); }
     var s = e.target.closest("button[data-send]"); if (s) sendCode(s.getAttribute("data-send"), s);
@@ -74,13 +87,8 @@ pre { white-space:pre-wrap; word-break:break-word; font:12px ui-monospace,monosp
     var card = $("c-" + box), steps = card.querySelector(".steps");
     btn.disabled = true; btn.textContent = "Starting…"; steps.hidden = false; steps.innerHTML = "Starting the login on " + esc(box) + "…";
     api("api/start", { box: box }).then(function (r) {
-      state[box] = r;
-      steps.innerHTML = '<ol><li><a class="btn primary" href="' + esc(r.url) + '" target="_blank" rel="noopener">Open the Claude sign-in page</a> ' +
-        '<button data-copy="' + box + '">Copy link</button><div class="url">' + esc(r.url) + '</div></li>' +
-        '<li>Approve it. Claude then shows a code: copy it.</li>' +
-        '<li><input type="text" id="code-' + box + '" placeholder="Paste the code here" autocomplete="off" autocapitalize="off" spellcheck="false">' +
-        '<div class="btns" style="margin-top:8px"><button class="primary" data-send="' + box + '">Finish login</button></div></li></ol>';
-      btn.textContent = "Restart login"; btn.disabled = false;
+      state[box] = r; showSteps(box);
+      btn.textContent = "New link"; btn.disabled = false;
     }).catch(function (e) { steps.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; btn.textContent = "Log in"; btn.disabled = false; });
   }
   function sendCode(box, btn) {
@@ -88,6 +96,7 @@ pre { white-space:pre-wrap; word-break:break-word; font:12px ui-monospace,monosp
     var card = $("c-" + box), steps = card.querySelector(".steps");
     btn.disabled = true; btn.textContent = "Finishing and testing…";
     api("api/code", { sid: state[box].sid, code: v }).then(function (r) {
+      delete state[box]; card.querySelector("button[data-box]").textContent = "Log in";
       card.querySelector(".st").innerHTML = stLine(r.status);
       steps.innerHTML = (r.ok ? '<div class="ok"><b>Done.</b> ' + esc(box) + ' answered a test request (AUTH-OK).</div>'
         : !r.login_ok ? '<div class="bad"><b>Login failed.</b> The code was not accepted, so nothing changed' +
