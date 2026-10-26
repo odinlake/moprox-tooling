@@ -992,14 +992,39 @@ def land(prop, wt, files, head, cyc, agent):
             f"with this patch applied. Cycle {cyc}.\n")
     for cmd in (["add", "-A", "--"] + files,      # already staged by the gate; keeps this callable alone
                 ["-c", f"user.name=moprox {agent}", "-c", "user.email=agent@odinlake.net",
-                 "commit", "-q", "-m", f"{subject}\n\n{body}"],
-                ["push", "-q", "origin", "HEAD:main"]):
+                 "commit", "-q", "-m", f"{subject}\n\n{body}"]):
         r = _git(cmd, wt, timeout=300)
         if r.returncode != 0:
             err(f"land: `git {cmd[0]}` failed for cycle {cyc}, so the change is NOT on origin",
                 RuntimeError(_clip(r.stderr or r.stdout, 200)))
             return None, f"git {cmd[0]}: {_clip(r.stderr or r.stdout, 160)}"
-    return _git(["rev-parse", "HEAD"], wt).stdout.strip()[:12], None
+    # A cycle takes 10-20 min, and anyone pushing to main meanwhile made this push "rejected (fetch
+    # first)" and threw the verified patch away (cycle 174, 2026-10-26). Rebase onto the new main and
+    # retry, but ONLY while the newcomers touch none of our files: the differential proved the patch
+    # against its own head, not against someone else's edit of the same file.
+    for attempt in range(3):
+        r = _git(["push", "-q", "origin", "HEAD:main"], wt, timeout=300)
+        if r.returncode == 0:
+            return _git(["rev-parse", "HEAD"], wt).stdout.strip()[:12], None
+        why = r.stderr or r.stdout
+        if "fetch first" not in why and "non-fast-forward" not in why or attempt == 2:
+            break
+        f = _git(["fetch", "-q", "origin", "main"], wt, timeout=300)
+        theirs = set(_git(["diff", "--name-only", "HEAD~1", "FETCH_HEAD"], wt).stdout.split()) \
+            if f.returncode == 0 else None
+        mine = set(_git(["diff", "--name-only", "HEAD~1", "HEAD"], wt).stdout.split())
+        if theirs is None or theirs & mine:
+            why = (f"main moved and also changed {sorted(theirs & mine)[:3]}; not rebasing a patch "
+                   f"verified against another version of those files") if theirs else f.stderr
+            break
+        rb = _git(["rebase", "-q", "FETCH_HEAD"], wt, timeout=300)
+        if rb.returncode != 0:
+            _git(["rebase", "--abort"], wt)
+            why = rb.stderr or rb.stdout
+            break
+    err(f"land: `git push` failed for cycle {cyc}, so the change is NOT on origin",
+        RuntimeError(_clip(why, 200)))
+    return None, f"git push: {_clip(why, 160)}"
 
 
 def promote(prop, evidence, agent):
