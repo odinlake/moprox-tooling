@@ -13,6 +13,7 @@ Born 2026-10-26: a dev session merged two PRs into moprox-tooling 7 and 11 minut
 cycle, and the cycle's verified patch was rejected at push. Neither side could see the other.
 """
 import json, os, re, subprocess, sys, urllib.parse, urllib.request, uuid
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import who  # noqa: E402
@@ -29,6 +30,15 @@ def scan(hours):
     q = urllib.parse.urlencode({"grep": "INTENT ", "since": f"-{int(hours)}h", "limit": 500})
     with urllib.request.urlopen(f"{LOGVIEW}/api/search?{q}", timeout=20) as r:
         rows = json.load(r).get("rows", [])
+    # The fleet log trails the box by ~40 s (measured 2026-10-26), so add this box's own journal: an
+    # intent opened a moment ago on the same box must not be missed. Duplicates collapse by id below.
+    loc = subprocess.run(["journalctl", "-t", "estate-intent", f"--since=-{int(hours)}h", "-o", "json",
+                          "--output-fields=MESSAGE,__REALTIME_TIMESTAMP,_HOSTNAME"],
+                         capture_output=True, text=True, timeout=20)
+    for line in loc.stdout.splitlines():
+        e = json.loads(line)
+        ts = datetime.fromtimestamp(int(e["__REALTIME_TIMESTAMP"]) / 1e6, timezone.utc).isoformat(timespec="seconds")
+        rows.append({"ident": "estate-intent", "msg": e.get("MESSAGE", ""), "ts": ts, "host": e.get("_HOSTNAME")})
     opened, closed = {}, set()
     for row in sorted(rows, key=lambda r: r.get("ts", "")):
         if row.get("ident") != "estate-intent":
@@ -47,7 +57,6 @@ def scan(hours):
 
 
 def _age_min(ts):
-    from datetime import datetime, timezone
     return (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds() / 60
 
 
