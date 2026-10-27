@@ -362,4 +362,32 @@ def main():
     print("polar: done; posted %d" % posted)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # The import guard at the top of this file covers the imports and nothing else, and its own
+        # comment says it "is for the next one". The next one did not come through an import.
+        #
+        # Measured on claude-dev 2026-10-27: a DNS episode on this box — `Temporary failure in name
+        # resolution` in eight units between 01:29:51Z and 02:49:41Z — killed this unit on both of
+        # the runs it had inside it, 01:32:10Z and 01:37:10Z. `urlopen` raised `URLError` in api(),
+        # which catches HTTPError only, correctly, since a name-resolution failure is not an HTTP
+        # answer; it escaped main() uncaught from the `api("/v3/exercises", tok)` on its first line.
+        # Python's default excepthook wrote the traceback to stderr with no `<N>` prefix, so journald
+        # filed every one of the 60 rows that invocation left under this unit at PRIORITY=6 — a
+        # `priority=5` query over the unit returns nothing it wrote — and the only err-level record
+        # either death left was init.scope's generic "Failed to start polar-fetch.service".
+        #
+        # docwatch.service is the control, and it is a live one: it died in the SAME outage four
+        # minutes earlier, 01:31:07Z, on the same unresolvable-name fault, and because it has this
+        # guard it left `docwatch: died before it finished filing: TransportError: Unable to find
+        # the server at oauth2.googleapis.com` at err. A transient outage, an expired token and a
+        # Polar API change are three different repairs; a `priority=3` query could tell them apart
+        # for docwatch that night and could not for this file.
+        #
+        # `raise` is kept, so the traceback and the non-zero exit are unchanged and the unit-failed
+        # incident still fires — this only stops the sentence that explains it from being filed
+        # below the level anything queries. Same idiom as docwatch.py and godnattkvart.py.
+        errlog.err("polar_fetch: the run died before it finished — Polar ingest did not complete "
+                   "and the seen-set was not saved", e)
+        raise
