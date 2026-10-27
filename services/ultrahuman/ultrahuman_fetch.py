@@ -343,7 +343,24 @@ def main():
     RAW.mkdir(parents=True, exist_ok=True)
     bearer = access_token()
 
-    got = 0
+    # Three different numbers, and the summary line used to report only the first one as if it
+    # were the third. is_final() deliberately keeps a day with no measurement in it OPEN for the
+    # whole ten-day window, so while the ring is not syncing the same empty days are re-fetched on
+    # every run -- and each one was counted as a day "fetched new". At 2026-10-27T10:33:25 this
+    # unit printed "fetched 4 new day(s); daily.jsonl has 221 rows". ONE of those four days was
+    # new to disk (2026-10-27; the table went 220 -> 221 rows) and NONE of the four carried a
+    # measurement: 2026-10-24..10-27 are the ring's current silence, re-fetched because is_final()
+    # keeps them open. Three hours later the ultrahuman lane was at err about exactly that --
+    # "newest record carrying data is 110.0 h old (limit 36 h), at 2026-10-23". The lane is the
+    # alarm and stays the alarm; this line just has to stop contradicting it.
+    got = first_time = blank = 0
+    # has_measurement() reads a shape; a FRESH payload that does not have it is a vendor change,
+    # not a day without a ring reading, and the two must not be added together. It is also not a
+    # reason to lose the rebuild below -- daily.jsonl is what the dashboard reads -- so this is the
+    # module's own per-record idiom: aggregate, keep going, speak once, and escalate to err if
+    # EVERY fetched day was unclassifiable (errlog.Skips). is_final() guards the same call for the
+    # same reason on stored files.
+    skips = errlog.Skips("ultrahuman: classifying fetched payload")
     days = [since + timedelta(days=i) for i in range((until - since).days + 1)]
     for d in days:
         f = RAW / f"{d.year}" / f"{d.isoformat()}.json.gz"
@@ -353,9 +370,15 @@ def main():
             payload = fetch_day(bearer, d)
         except requests.HTTPError as ex:
             print(f"{d}: HTTP {ex.response.status_code}", file=sys.stderr); continue
+        fresh = not f.exists()      # BEFORE the write, or every day reads as one we already had
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(gzip.compress(json.dumps(payload, separators=(",", ":")).encode()))
         got += 1
+        first_time += int(fresh)
+        try:
+            blank += int(not has_measurement(payload))
+        except Exception as exc:
+            skips.add(exc)
         time.sleep(POLITE_S)
 
     # Rebuild daily.jsonl from whatever raw days exist — idempotent, so a re-run after a backfill
@@ -368,7 +391,14 @@ def main():
         except Exception as ex:
             print(f"skip {f.name}: {ex}", file=sys.stderr)
     DAILY.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
-    print(f"fetched {got} new day(s); daily.jsonl has {len(rows)} rows")
+    skips.report(total=got)
+    # Named only when it happened: has_measurement() reads all 221 archived payloads without
+    # raising (measured 2026-10-27), and a clause that says "0 unreadable" every hour trains the
+    # eye to skip the line. When it DOES happen the count may not hide inside `blank`, or the line
+    # is back to denying what it cannot see.
+    unread = f", {skips.n} unreadable" if skips.n else ""
+    print(f"fetched {got} day(s), {first_time} first-time, "
+          f"{blank} still carrying no measurement{unread}; daily.jsonl has {len(rows)} rows")
 
 
 if __name__ == "__main__":
