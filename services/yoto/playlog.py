@@ -269,8 +269,10 @@ def _nights(c, segs, t0, t1, first, player=None, main=None):
             continue
         while s < e:
             dt = datetime.datetime.fromtimestamp(s, TZ)
-            base = dt.replace(second=0, microsecond=0, minute=dt.minute - dt.minute % 10)
-            cut = min(e, (base + datetime.timedelta(minutes=10)).timestamp())
+            # The slot's end in real seconds, not wall-clock arithmetic: when the clocks go back,
+            # 01:50 + 10 min on the wall is 02:00 GMT, an hour and ten minutes later, and that
+            # whole stretch landed in one slot (25 Oct 2026: 4 h in 01:50-02:00).
+            cut = min(e, s - (dt.minute % 10) * 60 - dt.second - dt.microsecond / 1e6 + SLOT)
             day = dt.date()
             k = (dt.hour * 60 + dt.minute) // 10
             if day in idx:
