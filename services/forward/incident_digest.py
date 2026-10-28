@@ -45,6 +45,12 @@ FRESH_H = 24
 # visible in mo.lan/logs; it just does not earn a message. 48 h, so a single failure three days ago
 # stays out of the daily ping.
 NEW_MAX_AGE_H = float(os.environ.get("INCIDENT_NEW_MAX_AGE_H", "48"))
+# How long an incident key is remembered after it was last seen. `seen` used to be rebuilt from the
+# 14-day queue window alone, so anything quiet for two weeks was forgotten and its next occurrence
+# announced as "new": 34 of the 64 distinct keys posted 2026-08-14..10-28 were repeats, one of them
+# seven times (operator, 2026-10-28: "too much noise"). A recurrence of something known is not news;
+# while it keeps recurring the weekly roundup carries it.
+FORGET_DAYS = float(os.environ.get("INCIDENT_FORGET_DAYS", "90"))
 # The weekly roundup's period.
 LIVENESS_DAYS = float(os.environ.get("INCIDENT_LIVENESS_DAYS", "7"))
 
@@ -149,10 +155,12 @@ def age_h(i):
         return 1e9
 
 
-def line(i, why):
-    detail = str(i.get("last_message") or "").strip().replace("\n", " ")
-    out = f"\n• [{i.get('score')}] {key(i)} ({i.get('kind', '?')}): {why}, last {ago(i)}"
-    return out + (f"\n  {detail[:200]}" if detail else "")
+def line(i):
+    """One incident, one line plus a short gist (operator, 2026-10-28: concise)."""
+    # A log-errors message is boilerplate ("N error-shaped lines matching ... between ..."): no gist.
+    detail = "" if i.get("kind") == "log-errors" else " ".join(str(i.get("last_message") or "").split())
+    out = f"• {key(i)} ({i.get('kind', '?')}), {ago(i)}"
+    return out + (f"\n  {detail[:100]}{'…' if len(detail) > 100 else ''}" if detail else "")
 
 
 TITLE_MAX = 240
@@ -178,24 +186,23 @@ def weekly(rows, now):
     still RECURRING and has been open a while; a one-off that stopped days ago is not a reminder."""
     chronic = [i for i in rows if age_h(i) <= 48 and not i.get("acked")]
     chronic.sort(key=lambda i: (-int(i.get("score") or 0), -open_days(i, now)))
-    lines = ["🔧 Weekly estate roundup: still open and unaddressed"]
+    lines = ["🔧 Weekly: outstanding"]
     for i in chronic[:8]:
-        lines.append(f"• [{i.get('score')}] {key(i)} ({i.get('kind', '?')}), "
-                     f"open {open_days(i, now):.0f} d")
+        lines.append(f"• {key(i)} ({i.get('kind', '?')}), {open_days(i, now):.0f} d")
     if len(chronic) > 8:
-        lines.append(f"…and {len(chronic) - 8} more")
+        lines.append(f"…+{len(chronic) - 8} more")
     if not chronic:
-        lines.append("Nothing recurring. (This line exists so a silent week stays meaningful.)")
+        lines.append("Nothing recurring. (Sent so a silent week stays meaningful.)")
     iss = open_issues()
     mine = [i for i in iss if (i.get("owner") or "") == "operator"]
     if mine:
-        lines.append(f"\nWaiting on you ({len(mine)}):")
-        for i in mine[:3]:
-            lines.append(f"• {issue_title(i)}  [{i.get('id') or '?'}]")
-        if len(mine) > 3:
-            lines.append(f"…and {len(mine) - 3} more waiting on you, on mo.lan/issues")
+        lines.append(f"\nOn you ({len(mine)}):")
+        for i in mine[:5]:
+            lines.append(f"• {issue_title(i)}")
+        if len(mine) > 5:
+            lines.append(f"…+{len(mine) - 5} more")
     if len(iss) > len(mine):
-        lines.append(f"{len(iss) - len(mine)} other open issue(s) on mo.lan/issues")
+        lines.append(f"\n{len(iss) - len(mine)} other open issue(s), with agents: mo.lan/issues")
     return lines
 
 
@@ -215,13 +222,15 @@ def main():
         state = json.loads(STATE.read_text())
     except (FileNotFoundError, ValueError):
         state = {}
-    seen = state.get("seen", {})            # key -> count at last digest
+    # key -> last time the queue showed it (epoch s). Before 2026-10-28 the value was a count; a
+    # count carries no date, so treat those as seen now and let them age out from here.
+    seen = {k: (v if isinstance(v, float) else now) for k, v in state.get("seen", {}).items()}
     # Keys used to carry the host for lanes too; carry those forward so the switch to host-free
     # lane keys does not announce every chronic lane as "new" on the first run.
     for k in list(seen):
         host, _, unit = k.partition("/")
         if unit.startswith("lane-"):
-            seen[unit] = max(seen.get(unit, 0), seen.pop(k))
+            seen[unit] = max(seen.get(unit, 0.0), seen.pop(k))
     reported = state.get("reported", {})    # key -> when it last earned a message
 
     # THE DAILY BAR IS "NEW", AND NOTHING ELSE (operator, 2026-10-14: "rather not see anything
@@ -242,7 +251,8 @@ def main():
     # What the cap drops must not also be swallowed: rebuilding `seen` from every row would retire
     # a truncated incident's "new" status without it ever having earned a message. Hold it over.
     held = {key(i) for i, _ in overflow}
-    next_seen = {key(i): int(i.get("count") or 0) for i in rows if key(i) not in held}
+    next_seen = {k: t for k, t in seen.items() if now - t < FORGET_DAYS * 86400}
+    next_seen.update({key(i): float(now) for i in rows if key(i) not in held})
 
     # The watchdog's own death is the one thing nothing else can report, so it is news, but only
     # once: flag it when it goes overdue, and again only after it has recovered and died again.
@@ -261,12 +271,11 @@ def main():
 
     lines = []
     if top or force:
-        lines.append(f"🔧 New in the estate: {len(top)} incident(s)")
-        for i, why in top:
-            lines.append(line(i, why))
+        lines.append(f"🔧 New: {len(top)} incident(s)")
+        for i, _ in top:
+            lines.append(line(i))
         if overflow:
-            lines.append(f"\n{len(overflow)} more new, held over for tomorrow: "
-                         + "; ".join(f"[{i.get('score')}] {key(i)}" for i, _ in overflow[:5]))
+            lines.append(f"+{len(overflow)} more new, tomorrow")
     if wd_news:
         lines.append("\nwatchdog: " + ("no run found in the last 7 days, the checker-checker is DOWN"
                                          if wd is None else f"last ran {wd:.0f} h ago, it should run every 30 min"))
