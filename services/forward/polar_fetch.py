@@ -299,7 +299,22 @@ def main():
     tok = env()["POLAR_ACCESS_TOKEN"]
     st, lst = api("/v3/exercises", tok)
     if st != 200 or lst is None:
-        print("polar: /v3/exercises returned %s" % st); return
+        # The listing answering NO is the other way a run ingests nothing, and it was the quiet
+        # one. The guard at the bottom of this file covers the path where api() *raises* -- a
+        # transport fault, which escapes as URLError because api() catches HTTPError only -- and
+        # that path also exits non-zero, so systemd files "Failed to start" at err and the incident
+        # queue gets a unit-failed. This branch is its opposite: the API answered, it answered no,
+        # the process exits 0, and nothing above info level records that a run ingested nothing.
+        #
+        # Measured on claude-dev 2026-09-23: this listing returned 503 on 33 consecutive runs from
+        # 05:05:00Z to 07:45:07Z -- 2.67 h, 313 s max inter-arrival against a 5 min timer, so no
+        # run missed, and 0 successful listings inside the span. All 33 printed this sentence at
+        # PRIORITY=6. The box's err-level lines that day: 10, none naming polar; logscan raisings:
+        # 2, neither this unit. 16.5x the runs and 10.4x the duration of the DNS episode that got
+        # the guard below, filed nowhere. 2.67 h is also 44.5% of FRESH_WINDOW_H, the window whose
+        # expiry drops a workout from the posting path.
+        errlog.err("polar: /v3/exercises returned %s -- no exercise was ingested this run" % st)
+        return
     seen = load_seen(); posted = 0
     print("polar: %d exercises listed; %d seen" % (len(lst), len(seen)))
     for summ in lst:
