@@ -1,0 +1,15 @@
+# Hourly incident triage: new incidents -> the `triage` agent -> categories, acks, issues, and a
+# Telegram message only when the operator's input is needed. Triggered by incident-triage.timer.
+# Install to /etc/systemd/system/.
+[Unit]
+Description=moprox incident triage (new incidents -> triage agent)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/forward/incident_triage.py
+TimeoutStartSec=25min

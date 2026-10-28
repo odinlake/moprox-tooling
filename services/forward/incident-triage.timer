@@ -1,0 +1,8 @@
+# Hourly: a needs-the-operator incident reaches him within the hour; quiet runs cost one HTTP GET.
+[Unit]
+Description=Run the estate incident triage hourly
+[Timer]
+OnCalendar=*-*-* *:45:00
+Persistent=true
+[Install]
+WantedBy=timers.target

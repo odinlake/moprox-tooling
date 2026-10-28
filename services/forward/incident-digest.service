@@ -1,7 +1,7 @@
-# Daily estate-incident digest to the operator's Telegram — SILENT unless something is material.
+# Daily: watchdog-overdue alert only; Mondays the weekly roundup of triage categories (since 2026-10-28).
 # Triggered by incident-digest.timer. Install to /etc/systemd/system/.
 [Unit]
-Description=moprox daily incident digest (open incidents -> Telegram, only if material)
+Description=moprox incident digest (watchdog alert daily, triage roundup weekly)
 After=network-online.target
 Wants=network-online.target
 [Service]

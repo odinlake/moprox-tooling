@@ -6,7 +6,13 @@ read it, and the analyst asked for it six times in 72 cycles. Detections were la
 nobody in it — unit failures, stale data lanes, and (since 2026-08-13) services logging errors below
 err level. This is the reader.
 
-THE BAR IS DELIBERATELY HIGH. A daily message that always arrives becomes wallpaper, and wallpaper
+SINCE 2026-10-28 THIS NO LONGER POSTS INCIDENTS DAILY. Operator: "The messages are all but useless
+... I don't think this is the level at which I want to be involved at all." Every new incident now
+goes to the `triage` agent (incident_triage.py, hourly), which categorises it, acks noise, files
+fixes for burndown and posts to Telegram itself only when the operator's input is needed. What is
+left here: the watchdog-overdue alert, and the weekly roundup, built from triage's categories.
+
+History, kept for the reasoning. THE BAR IS DELIBERATELY HIGH. A daily message that always arrives becomes wallpaper, and wallpaper
 is how a six-day outage goes unread. Since 2026-10-14 (operator: "rather not see anything unless
 there's something new") the daily message carries only:
 
@@ -51,6 +57,11 @@ NEW_MAX_AGE_H = float(os.environ.get("INCIDENT_NEW_MAX_AGE_H", "48"))
 # seven times (operator, 2026-10-28: "too much noise"). A recurrence of something known is not news;
 # while it keeps recurring the weekly roundup carries it.
 FORGET_DAYS = float(os.environ.get("INCIDENT_FORGET_DAYS", "90"))
+TRIAGE_LEDGER = Path(os.environ.get("TRIAGE_LEDGER", Path.home() / ".local/state/incident-triage.json"))
+WEEK_URL = os.environ.get("INCIDENT_WEEK_URL",
+                          "http://logview.lan:8016/api/incidents?window=7d&limit=500&include_acked=1")
+TWO_WEEK_URL = os.environ.get("INCIDENT_2WEEK_URL",
+                              "http://logview.lan:8016/api/incidents?window=14d&limit=500&include_acked=1")
 # The weekly roundup's period.
 LIVENESS_DAYS = float(os.environ.get("INCIDENT_LIVENESS_DAYS", "7"))
 
@@ -180,19 +191,58 @@ def issue_title(i):
     return t if len(t) <= TITLE_MAX else t[:TITLE_MAX] + "… (title cut at %d chars)" % TITLE_MAX
 
 
-def weekly(rows, now):
-    """The once-a-week roundup of what is still open and unaddressed (operator, 2026-10-14: he will
-    not act on the Amex lanes now, and is happy to be reminded weekly, but not daily). Lists what is
-    still RECURRING and has been open a while; a one-off that stopped days ago is not a reminder."""
-    chronic = [i for i in rows if age_h(i) <= 48 and not i.get("acked")]
-    chronic.sort(key=lambda i: (-int(i.get("score") or 0), -open_days(i, now)))
-    lines = ["🔧 Weekly: outstanding"]
-    for i in chronic[:8]:
-        lines.append(f"• {key(i)} ({i.get('kind', '?')}), {open_days(i, now):.0f} d")
-    if len(chronic) > 8:
-        lines.append(f"…+{len(chronic) - 8} more")
-    if not chronic:
-        lines.append("Nothing recurring. (Sent so a silent week stays meaningful.)")
+def _counts(url):
+    """key -> (occurrences in the window, kind)."""
+    with urllib.request.urlopen(url, timeout=30) as r:
+        out = {}
+        for i in json.loads(r.read().decode()).get("incidents") or []:
+            n, _ = out.get(key(i), (0, ""))
+            out[key(i)] = (n + int(i.get("count") or 0), i.get("kind", ""))
+        return out
+
+
+def weekly(now):
+    """The weekly roundup (operator, 2026-10-28): "briefly tell me what the categories and example
+    errors are along with counts so I know what is or isn't piling up". One line per triage
+    category, this week against last, with one real example; then what is waiting on him."""
+    try:
+        led = json.loads(TRIAGE_LEDGER.read_text())
+    except (FileNotFoundError, ValueError):
+        led = {"keys": {}, "categories": {}}
+    try:
+        wk, two = _counts(WEEK_URL), _counts(TWO_WEEK_URL)
+    except Exception as exc:
+        errlog.err("incident-digest: could not read weekly counts", exc)
+        wk, two = {}, {}
+    cats = {}
+    # A stale lane's count is the number of hourly checks that saw it stale, not a number of
+    # errors, so a lane category reads "ongoing" rather than "334 this wk".
+    for k, (n, kind) in wk.items():
+        t = led["keys"].get(k)
+        e = cats.setdefault(t["category"] if t else "not yet triaged", {"now": 0, "prev": 0, "lane": True})
+        e["now"] += n
+        e["lane"] = e["lane"] and kind == "lane-stale"
+    for k, (n, _) in two.items():
+        t = led["keys"].get(k)
+        e = cats.setdefault(t["category"] if t else "not yet triaged", {"now": 0, "prev": 0, "lane": True})
+        e["prev"] += max(0, n - wk.get(k, (0, ""))[0])
+    rows = sorted(((c, v) for c, v in cats.items() if v["now"]), key=lambda cv: -cv[1]["now"])
+    lines = ["🔧 Weekly: what the estate logged (triaged by the agents)"]
+    for c, v in rows[:8]:
+        meta = led["categories"].get(c, {})
+        trend = "new" if not v["prev"] else ("↑" if v["now"] > v["prev"] * 1.25
+                                            else "↓" if v["now"] < v["prev"] * 0.75 else "=")
+        disp = meta.get("disposition", "")
+        size = ("ongoing" if v["prev"] else "new this wk") if v["lane"] \
+            else f"{v['now']} this wk ({v['prev']} last, {trend})"
+        lines.append(f"• {c}: {size}" + (f", {disp}" if disp else ""))
+        ex = " ".join(str(meta.get("example") or "").split())
+        if ex:
+            lines.append(f"  e.g. {ex[:120]}{'…' if len(ex) > 120 else ''}")
+    if len(rows) > 8:
+        lines.append(f"…+{len(rows) - 8} quieter categories")
+    if not rows:
+        lines.append("Nothing logged. (Sent so a silent week stays meaningful.)")
     iss = open_issues()
     mine = [i for i in iss if (i.get("owner") or "") == "operator"]
     if mine:
@@ -202,7 +252,7 @@ def weekly(rows, now):
         if len(mine) > 5:
             lines.append(f"…+{len(mine) - 5} more")
     if len(iss) > len(mine):
-        lines.append(f"\n{len(iss) - len(mine)} other open issue(s), with agents: mo.lan/issues")
+        lines.append(f"\n{len(iss) - len(mine)} issue(s) with the agents: mo.lan/issues")
     return lines
 
 
@@ -270,7 +320,9 @@ def main():
         or since_weekly >= LIVENESS_DAYS + 1
 
     lines = []
-    if top or force:
+    # Incidents are triage's now (see the docstring); the daily post carries only the watchdog.
+    top, overflow = [], []
+    if force:
         lines.append(f"🔧 New: {len(top)} incident(s)")
         for i, _ in top:
             lines.append(line(i))
@@ -282,7 +334,7 @@ def main():
     if weekly_due:
         if lines:
             lines.append("")
-        lines.extend(weekly(rows, now))
+        lines.extend(weekly(now))
 
     state.update({"last_run": now, "reported": reported, "seen": next_seen,
                   "wd_alerted": bool(wd_down)})

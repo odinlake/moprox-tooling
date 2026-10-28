@@ -26,6 +26,9 @@ AGENTS = {
     # ...and for the operator's OWN listening (2026-10-06): bookscout's per-article judge. Read-only
     # tools plus the bookscout verbs; never reached from Telegram.
     "bard-books": HOME / "projects/private-data/agents/bard",
+    # incident triage (operator, 2026-10-28): reads every new incident so he never has to. Called
+    # only by services/forward/incident_triage.py, never from Telegram.
+    "triage":  HOME / "projects/private-data/agents/triage",
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -121,6 +124,11 @@ AGENT_FLAGS = {
              "--allowedTools", "Read,Grep,Glob,Edit,Write,%s,%s,%s" % (YOTO_TOOL, BOOKS_TOOL, CONVO_TOOL),
              "--add-dir", str(SHARED_MEM), str(HOME / "projects/private-data/audible"),
              str(HOME / "projects/private-data/books")],   # bard-memory.md lives in the memory store; variadic: keep last
+    # triage: the logview MCP only (search logs, ack, file/update issues), no Bash and no edits. Its
+    # one outward act is a Telegram message, and that is sent by the harness from its JSON verdict.
+    "triage": ["--allowedTools", "Read,Grep,Glob,mcp__logview",
+               "--mcp-config", str(AGENTS["triage"] / "mcp.json"), "--strict-mcp-config",
+               "--add-dir", str(SHARED_MEM)],   # read-only use: what the estate already knows; variadic: keep last
     "bard-books": ["--model", "sonnet",
                    "--allowedTools", "Read,Grep,Glob,%s" % BOOKS_TOOL,
                    "--add-dir", str(HOME / "projects/private-data/audible"), str(SHARED_MEM)],
