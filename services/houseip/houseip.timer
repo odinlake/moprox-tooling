@@ -1,0 +1,10 @@
+# Five minutes: a change is reported within 5 min, a stale VPN hostname within ~20.
+[Unit]
+Description=houseip — check the house public IP
+
+[Timer]
+OnCalendar=*:2/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

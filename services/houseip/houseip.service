@@ -1,0 +1,16 @@
+# Telegram ping when the house public IP changes or the VPN DDNS hostname goes stale.
+# Source of truth: moprox-tooling/services/houseip. Oneshot, driven by houseip.timer.
+[Unit]
+Description=houseip — watch the house public IP and the VPN DDNS hostname
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+WorkingDirectory=/home/mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/houseip/houseip.py
+TimeoutStartSec=5min
