@@ -472,12 +472,58 @@ def _run(state):
         state["done"] = True
 
 
+_STARTED  = None                # the one pull this process runs; see start()
+_DEADLINE = None                # one wall-clock budget for waiting on it; see _leash()
+
+
+def _leash(budget):
+    """Seconds still available to wait for the pull, out of ONE budget for the whole process.
+
+    The waits are NOT independent. join_line() is reached on polar_fetch's posting path and
+    drain() at the end of every run, so without this a pull that never finishes is waited for
+    twice -- the coach handoff's leash, then the drain's -- and JOIN_S, which the module docstring
+    above calls "the one the operator feels", would quietly mean 2 x 120 s on a unit
+    polar-fetch.timer fires every 300 s. Measured against a never-finishing pull at
+    WATTBIKE_JOIN_S=3: 6.008 s with two relative leashes, 3.008 s with this one. With two posted
+    rides in the run it was three.
+
+    Pinned at the first WAIT and not at start(), because the constant is about what the operator
+    waits for, not how long the pull may take -- that ceiling is HARD_S, enforced inside _run().
+    A run that spends two minutes fetching HR before it posts should still get its full handoff
+    leash. Later callers get what is left, which is normally all of it (the pull finished and
+    nobody waits at all) and is zero exactly when the budget is already spent.
+    """
+    global _DEADLINE
+    if _DEADLINE is None:
+        _DEADLINE = time.monotonic() + budget
+    return max(0.0, _DEADLINE - time.monotonic())
+
+
 def start():
-    """Fire the pull and return immediately. Call the moment a ride is recognised."""
+    """Fire the pull and return immediately. Call the moment a ride is recognised.
+
+    SINGLE-FLIGHT, and not as an optimisation. pull() is a WHOLE-STORE sync: it lists every
+    RideSession the stored user has and downloads every file private-data/wattbike does not
+    already hold. It takes no argument naming a ride and there is nothing per-ride about it, so a
+    second call in the same process repeats the first one's crawl and can only fetch what the first
+    already fetched. polar_fetch calls this once per NEW ride, from inside its loop, so a cold
+    start over the 11 INDOOR_CYCLING exercises already on disk fired 11 of them inside 0.01 s --
+    11 Parse queries, 11 concurrent crawls of the Hub and 11 writers of one index (measured;
+    moprox-memory/polar-wattbike-fourth-exit-and-coldstart-fanout).
+
+    Handing every caller the first handle also leaves ONE thread to wait for instead of N, which
+    is what makes draining it affordable at all: joining at each of the abandoning exits was
+    priced at 11 x the leash -- 88 s at an 8 s harness leash, so up to 22 min at the shipped
+    JOIN_S=120 -- for a unit on a 5-minute timer. See drain() and _leash().
+    """
+    global _STARTED
+    if _STARTED is not None:
+        return _STARTED
     state = {"done": False, "out": "", "err": None, "secs": None, "route": "direct"}
     t = threading.Thread(target=_run, args=(state,), daemon=True)
     t.start()
-    return (t, state)
+    _STARTED = (t, state)
+    return _STARTED
 
 
 def join_line(handle, timeout=None):
@@ -488,11 +534,12 @@ def join_line(handle, timeout=None):
     if not handle:
         return ""
     t, state = handle
-    t.join(JOIN_S if timeout is None else timeout)
+    budget = JOIN_S if timeout is None else timeout
+    t.join(_leash(budget))              # shared with drain(); see _leash()
     if not state["done"]:
         return ("\n\nWATTBIKE: pull still running after %ds and was not waited for further, so the "
                 "per-revolution data may not be on disk yet for this session. Do not treat its "
-                "absence as meaning the ride lacked power data.\n" % (JOIN_S if timeout is None else timeout))
+                "absence as meaning the ride lacked power data.\n" % budget)
     if state["err"]:
         return ("\n\nWATTBIKE: pull failed (route=%s, %s). Read the session from the Polar HR alone "
                 "and say nothing about pedal mechanics.\n" % (state.get("route"), state["err"]))
@@ -522,6 +569,53 @@ def join_line(handle, timeout=None):
             "half-curve's mean/peak ratio (median residual 0.125 left, 0.141 right), so there is "
             "no per-interval PES. Use it if this session is the matching ride.\n"
             % (state["secs"], summary or "no summary line"))
+
+
+def drain(timeout=None):
+    """Wait for the one pull this process started, and say what became of it.
+
+    Nothing else waits for it on three of the four ways out of polar_fetch's loop. The pull runs in
+    a DAEMON thread, join_line() is reached only on the posting path, and the interpreter kills a
+    daemon thread wherever it had got to when main() returns. Measured over the four exits a
+    started pull can reach: only the posting one joins, and on the other three -- below the HR
+    gate, a backfill, and post_session raising -- main() returned in 0.00 s with the thread still
+    alive and the pull's product not on disk (moprox-memory/
+    polar-wattbike-fourth-exit-and-coldstart-fanout).
+
+    That is a loss and not a delay. Two of those exits add the exercise to polar_fetch's `seen`
+    set, so no later run starts a pull for that ride either: its per-revolution data waits for the
+    next ride to come along, which on the estate's own record was 4.03 d.
+
+    Adds NOTHING to the run's worst case: start() is single-flight so there is one thread, and the
+    wait comes out of the single budget _leash() hands out, which join_line() has already drawn on
+    if the posting path was taken. A run therefore waits at most JOIN_S for the pull in total,
+    however many of these calls it makes.
+
+    Loud either way, because at this point nobody is going to look at the handle again: still
+    running when the budget is gone is a warn, and FAILED is an err. Until now a failed pull
+    reached only the coach prompt built by join_line() -- which is not the journal, and on three of
+    the four exits is not built at all -- so the estate could not see a Hub outage at any level.
+    """
+    if _STARTED is None:
+        return
+    t, state = _STARTED
+    budget = JOIN_S if timeout is None else timeout
+    if not state["done"]:
+        t.join(_leash(budget))
+    if not state["done"]:
+        errlog.warn("wattbike: the pull is still running after this run's %ds wattbike budget and "
+                    "this process is about to kill its thread, so this run's ride files may not "
+                    "have landed; the next ride refetches whatever is missing" % budget)
+        return
+    if state["err"]:
+        errlog.err("wattbike: the pull failed, so this run's rides have no per-revolution data "
+                   "(route=%s): %s" % (state.get("route"), state["err"]))
+        return
+    note = ""
+    for ln in (state["out"] or "").splitlines():
+        if ln.startswith("WATTBIKE:"):
+            note = ln.split("WATTBIKE:", 1)[1].strip()
+    print("wattbike: pull drained in %ss -- %s" % (state.get("secs"), note or "no note"))
 
 
 if __name__ == "__main__":

@@ -359,6 +359,15 @@ def main():
             # the raw data is kept either way, and this err is now the thing that says so.
             errlog.err("polar: posting exercise %s failed — left unposted, will retry next run" % eid, e)
     save_seen(seen)
+    # The pull started in the loop above is joined inside post_session on the posting path and
+    # NOWHERE else: it is a daemon thread, and three of the four exits (below the HR gate, a
+    # backfill, post_session raising) return with it alive, so the interpreter kills it where it
+    # stood and the ride's per-revolution data never lands -- while `seen`, just saved, has
+    # already recorded two of those rides as handled, so no later run starts a pull for them
+    # either. Costs this run nothing it was not already going to spend: start() is single-flight
+    # so there is one thread, and the wait draws on the same WATTBIKE_JOIN_S budget join_line()
+    # drew on, so the posting path is unchanged and a hung pull is waited for once, not twice.
+    wattbike.drain()
     print("polar: done; posted %d" % posted)
 
 if __name__ == "__main__":
