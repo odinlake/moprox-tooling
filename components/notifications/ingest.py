@@ -102,8 +102,39 @@ def seen_keys():
     return keys
 
 
+def src_state():
+    """What the mirror looked like to THIS run. The only record the estate keeps of it.
+
+    `added` counts (app, post_time) keys absent from DEST, not lines or bytes in SRC, so it reads
+    `added=0 dropped=0 committed=0` identically for an unchanged mirror, one truncated to zero
+    lines and one duplicated-and-reordered -- and the absent branch below used to exit 0 printing
+    nothing at all. Measured at private-data b58d8758 during a 35 h silence:
+    moprox-memory/notif-mirror-unobserved-added-zero. ~/ha-notif is the capture chain's only
+    observable midpoint on this box and nothing else looks at it: 0 of the 12 freshness lanes
+    target it and this file is its only reader in all of moprox-tooling.
+
+    Read BEFORE the ingest loop, so the fields describe what the program was handed.
+
+    These three fields separate mirror states, NOT broken links: a quiet tablet and a stalled
+    Syncthing both leave `src_age_s` large, and distinguishing those still needs the HA side.
+    """
+    try:
+        st = SRC.stat()
+    except OSError:
+        return "src_lines=- src_bytes=- src_age_s=-"
+    n = sum(1 for line in SRC.read_text().splitlines() if line.strip())
+    return f"src_lines={n} src_bytes={st.st_size} src_age_s={int(time.time() - st.st_mtime)}"
+
+
 def main():
+    src = src_state()
     if not SRC.exists():
+        # Was a bare `sys.exit(0)`: the mirror vanishing was indistinguishable in the journal from
+        # a run with nothing to do, because it did not even print an `added=` line. errlog exists
+        # for exactly this shape. warn, not err: Syncthing has not created the file yet on a fresh
+        # box either, and that is expected-but-notable rather than broken.
+        errlog.warn(f"notification mirror absent: {SRC}")
+        print(f"added=0 dropped=0 committed=0 {src}")
         sys.exit(0)
     seen = seen_keys()
     added, dropped = 0, 0
@@ -134,7 +165,7 @@ def main():
         if fh is None:
             # Contention is not a failure: the work is on disk and pending() will still be true in
             # 15 min. Exiting 1 here is what turned a lost sub-second race into a unit-failed incident.
-            print(f"added={added} dropped={dropped} committed=0 busy=1")
+            print(f"added={added} dropped={dropped} committed=0 busy=1 {src}")
             return
         try:
             git("add", "notifications")
@@ -148,7 +179,7 @@ def main():
     # committed counts what git is actually recording, not what this run appended; the two differ
     # exactly when an earlier run's orphan is being swept up with it. Keeping the message equal to the
     # insertions preserves `git log --numstat` mismatch as a clean detector of an unhandled write.
-    print(f"added={added} dropped={dropped} committed={committed}")
+    print(f"added={added} dropped={dropped} committed={committed} {src}")
 
 
 if __name__ == "__main__":
