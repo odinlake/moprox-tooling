@@ -171,6 +171,25 @@ def _md(text):
 def _post(tok, method, params):
     return json.load(urllib.request.urlopen(API % (tok, method) + "?" + urllib.parse.urlencode(params), timeout=20))
 
+def _post_retrying(tok, method, params):
+    """One API call, retried once on a transient — the same rule send_photo already applies.
+
+    A text message has no second copy: the caller computed it and dropped it, so a blip behind Squid
+    (`URLError [SSL: UNEXPECTED_EOF_WHILE_READING]`, `urlopen error timed out`) silently deleted
+    whatever a producer was saying. An HTTPError is NOT transient — Telegram answered and rejected
+    this body — so it propagates on the first attempt, for send()'s plain-text fallback to handle;
+    retrying the same rejected body only burns another 20 s timeout. A second transient still
+    raises: a message that could not be delivered has to reach the journal.
+    """
+    for attempt in (1, 2):
+        try:
+            return _post(tok, method, params)
+        except urllib.error.HTTPError:
+            raise
+        except Exception:
+            if attempt == 2:
+                raise
+
 def send(text, agent=None, reply_to=None):
     tok, chat = creds()
     body = tag(text, agent)
@@ -182,11 +201,11 @@ def send(text, agent=None, reply_to=None):
         p["reply_to_message_id"] = reply_to
         p["allow_sending_without_reply"] = "true"               # stale/deleted target -> still send
     try:
-        r = _post(tok, "sendMessage", p)
+        r = _post_retrying(tok, "sendMessage", p)
     except urllib.error.HTTPError:                              # bad entities / too long -> plain, drop reply target
         for k in ("parse_mode", "reply_to_message_id"): p.pop(k, None)
         p["text"] = body[:4096]
-        r = _post(tok, "sendMessage", p)
+        r = _post_retrying(tok, "sendMessage", p)
     convo.log_out(agent or "system", body, (r.get("result") or {}).get("message_id"))
     return r
 
