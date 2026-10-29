@@ -395,12 +395,29 @@ def main():
         errlog.err(f"swedbank: session {sess['session_id']} is {s.get('status')}, not AUTHORIZED — "
                    f"re-authorise with BankID; no transactions can be fetched")
         return 1
+    # THE 21-DAY LEAD IS FOR A READER THAT DOES NOT EXIST AT warn LEVEL. Re-authorising needs
+    # BankID in a browser -- the operator's hands on a phone, which this process cannot schedule --
+    # so the lead is the only part of this that is actionable, and it has to arrive before the
+    # lapse rather than with it. It was filed at warning, and warning from this unit is measurably
+    # unread: over 2026-09-30..10-29 this service emitted 150 rows on this same errlog path, all
+    # 150 at PRIORITY=4 and none at err, on all 30 days -- and the incident store over the
+    # trailing 120 d holds 97 incidents, acked and ignored included, with ZERO for
+    # swedbank-fetch.service, while 18 OTHER claude-dev units each have a
+    # monitoring/logscan-claude-dev-<unit> log-errors incident. The shape logscan could match these on is
+    # `err-priority`, and that one needs PRIORITY <= 3 (moprox-memory/logscan-below-err-claim-false).
+    # So: err, which is louder and never quieter, and the exit code is deliberately NOT touched --
+    # a consent with days left still fetches, and a run that fetched is not a failed run.
     valid = (s.get("access") or {}).get("valid_until", "")
     if valid:
         left = (datetime.fromisoformat(valid.replace("Z", "+00:00")).date() - date.today()).days
         if left < 21:
-            errlog.warn(f"swedbank: consent expires in {left} days ({valid[:10]}) — re-auth needs "
-                        f"BankID in a browser, and the lane goes silent the moment it lapses")
+            errlog.err(f"swedbank: consent expires in {left} days ({valid[:10]}) — re-auth needs "
+                       f"BankID in a browser, and the lane goes silent the moment it lapses")
+    else:
+        # The other arm of the same silence: with no valid_until there is no countdown at all, so
+        # the only record of the deadline is this file's docstring, which nothing reads either.
+        errlog.err(f"swedbank: session {sess['session_id']} is AUTHORIZED but its access carries no "
+                   f"valid_until — the expiry cannot be checked, so no re-auth lead is being given")
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
     accounts = sess.get("accounts") or []
