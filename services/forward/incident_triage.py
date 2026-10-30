@@ -112,9 +112,17 @@ def parse(text):
 
 
 def apply(led, batch, items, now):
-    """Fold verdicts into the ledger. -> [telegram texts]. A key the agent skipped stays untriaged."""
+    """Fold verdicts into the ledger. -> [telegram texts]. A key the agent skipped stays untriaged.
+
+    An ALREADY-triaged key is not untriaged, though: it has a verdict and reached the agent only
+    because recheck() let it through, so its cooldown is refreshed whatever comes back. Without
+    that, a re-look the agent declines to answer leaves `at` at the old verdict, recheck() passes
+    again on the next run, and the key goes to a fresh `claude -p` run every hour -- the flood the
+    cooldown above exists to bound. A never-triaged key still gets no entry and is picked up again.
+    """
     given = {key(i) for i in batch}
     msgs = []
+    answered = set()
     for it in items:
         k = it.get("key")
         if k not in given:
@@ -122,6 +130,7 @@ def apply(led, batch, items, now):
             continue
         disp = it.get("disposition") if it.get("disposition") in DISPOSITIONS else "known"
         cat = (it.get("category") or "uncategorised").strip()[:80]
+        answered.add(k)
         led["keys"][k] = {"category": cat, "disposition": disp, "at": now,
                           "example": str(it.get("example") or "")[:240],
                           "issue": str(it.get("issue") or "")}
@@ -130,6 +139,12 @@ def apply(led, batch, items, now):
                  example=led["keys"][k]["example"] or c.get("example", ""), last=now)
         if disp == "operator" and (it.get("telegram") or "").strip():
             msgs.append(it["telegram"].strip())
+    unanswered = sorted(k for k in given - answered if k in led["keys"])
+    for k in unanswered:
+        led["keys"][k]["at"] = now                  # cooldown holds; the verdict is left alone
+    if unanswered:
+        errlog.warn("incident-triage: re-examined with no verdict returned, cooldown refreshed: %s"
+                    % ", ".join(unanswered))
     return msgs
 
 
