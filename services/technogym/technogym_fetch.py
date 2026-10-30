@@ -76,11 +76,22 @@ def env():
 def login(s, e):
     """JSON login against core.mywellness.com. The app id MUST go in the x-mwapps-appid header —
     omit it and you get a bare 401 with an empty body, which looks exactly like a wrong password."""
-    r = s.post(f"{CORE}/v2/enduser/authentication/login", timeout=30,
-               headers={"Content-Type": "application/json", "Accept": "application/json",
-                        "x-mwapps-appid": APP_ID},
-               json={"username": e["MYWELLNESS_USER"], "password": e["MYWELLNESS_PASS"],
-                     "keepMeLoggedIn": True})
+    # The call ITSELF can fail, and that is not one of the answers below: a name-resolution
+    # episode, a reset or a TLS fault leaves `r` unbound and the exception escapes main() with no
+    # `<N>` prefix, so journald files the sentence naming the cause at info and the only err-level
+    # record is systemd's generic "Failed to start". That is the exact shape the errlog.die note
+    # below exists to prevent, one layer out. Measured on claude-dev 2026-10-27: the DNS episode
+    # that killed polar-fetch.service twice overlapped this unit's 02:41 run.
+    try:
+        r = s.post(f"{CORE}/v2/enduser/authentication/login", timeout=30,
+                   headers={"Content-Type": "application/json", "Accept": "application/json",
+                            "x-mwapps-appid": APP_ID},
+                   json={"username": e["MYWELLNESS_USER"], "password": e["MYWELLNESS_PASS"],
+                         "keepMeLoggedIn": True})
+    except Exception as exc:
+        errlog.die("technogym: login failed — the request to core.mywellness.com did not "
+                   "complete, so nothing was established about the credential; this is a "
+                   "transport fault, not a password or an app-id one.", exc)
     # errlog.die, not sys.exit(msg): this is the whole cardio lane dying of a credential, and a
     # bare sys.exit writes its reason to stderr unprefixed, which journald files at info. The unit
     # would go red with nothing at err level but systemd's own "Failed to start" — the shape
@@ -143,9 +154,18 @@ def fetch_detail(s, uid, tok, cult, idcr):
     the exact sentence a genuinely idle account produces. That line is read as evidence the athlete
     did not train (see moprox-memory/freshness-training-lanes-mtime-only.md). So refuse to guess.
     """
-    r = s.get(f"{SVC}/Training/User/{uid}/GetPerformedWorkoutSessionByIdCr", timeout=30,
-              params={"IdCr": idcr, "token": tok, "AppId": APP_ID, "_c": cult},
-              headers={"Accept": "application/json"})
+    # A request that never completed is the strongest possible Indeterminate: there is no answer
+    # to classify. Collapsing it to {} would spend a miss, and MISS_STREAK of them end the walk and
+    # print the "0 session(s) found" line this docstring is about. `except Exception` and not a
+    # requests class, for the reason probe_exists() gives: the try body is the one call, so there is
+    # nothing else in scope for it to mask.
+    try:
+        r = s.get(f"{SVC}/Training/User/{uid}/GetPerformedWorkoutSessionByIdCr", timeout=30,
+                  params={"IdCr": idcr, "token": tok, "AppId": APP_ID, "_c": cult},
+                  headers={"Accept": "application/json"})
+    except Exception as exc:
+        raise Indeterminate(f"idCr {idcr}: the request did not complete: "
+                            f"{type(exc).__name__}: {exc}") from exc
     if r.status_code != 200:
         raise Indeterminate(f"idCr {idcr}: HTTP {r.status_code}: {r.text[:200]!r}")
     try:
@@ -168,9 +188,16 @@ def fetch_cardio(s, tok, cult, analytics_id, facility_id):
     real: moprox-memory/technogym-hollow-records-not-treadmill-population), written with nothing
     at err level, and permanent, because the next scheduled walk starts at max(seen)+1.
     """
-    r = s.get(f"{SVC}/Training/CardioLog/{analytics_id}/Details", timeout=30,
-              params={"facilityId": facility_id, "token": tok, "AppId": APP_ID, "_c": cult},
-              headers={"Accept": "application/json"})
+    # Same rule as fetch_detail, and here the cost of getting it wrong is the hollow record this
+    # docstring names: the caller's generic handler logs a transport fault with a bare print, which
+    # journald files at info, so the session is skipped with nothing at err level to say so.
+    try:
+        r = s.get(f"{SVC}/Training/CardioLog/{analytics_id}/Details", timeout=30,
+                  params={"facilityId": facility_id, "token": tok, "AppId": APP_ID, "_c": cult},
+                  headers={"Accept": "application/json"})
+    except Exception as exc:
+        raise Indeterminate(f"cardio {analytics_id}: the request did not complete: "
+                            f"{type(exc).__name__}: {exc}") from exc
     if r.status_code != 200:
         raise Indeterminate(f"cardio {analytics_id}: HTTP {r.status_code}: {r.text[:200]!r}")
     try:
