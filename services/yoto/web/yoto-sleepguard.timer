@@ -3,7 +3,10 @@
 Description=yoto-sleepguard every 10 min
 
 [Timer]
-OnCalendar=*:0/10
+# In UTC: a local-time schedule skips the hour the clocks go back (25 Oct 2026 ran 01:50 BST, then
+# 02:00 GMT, 70 min later, and a 01:27 GMT play went 53 min with no timer). Every 10 min is the same
+# in either zone, since the offsets are whole hours.
+OnCalendar=*-*-* *:0/10:00 UTC
 Persistent=false
 
 [Install]
