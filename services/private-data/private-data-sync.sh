@@ -341,6 +341,76 @@ unpushed() {
   git rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0
 }
 
+# The clean-tree/nothing-unpushed exit below is the ONLY path out of this script that performs no
+# network read, and that made it the path on which a checkout silently falls behind origin. Nothing
+# else pulls this repo: services/deploy/tooling-pull.sh deploys moprox-tooling and never touches
+# private-data, and sync_push() fetches only as a SIDE EFFECT of a rejected push — so a box with
+# nothing of its own to commit never looks at the remote at all.
+#
+# MEASURED on claude-dev 2026-10-30, and the cost is a stale READ, not a lost write: private-data
+# 1f2f9ccb (the missing agents/triage/icon.svg) was pushed at 14:45:17Z, and the five hourly runs at
+# 15:02:45, 16:02:25, 17:00:56, 18:00:04 and 19:00:17 each produced no output at all — this exit —
+# while dashboard-update.service on the same box warned about the absent file every ~2 min. It
+# arrived at 20:00:57Z, 5.26 h late, and only because that run happened to have three ultrahuman
+# files of its own to push and so had its push rejected. regen() above already records an instance
+# of the same mechanism — "the out still the 2026-09-04 9502cee copy because claude-dev had not
+# pulled dc33ef9" — without naming the cause.
+#
+# --ff-only, never a rebase and never a merge commit: on this path the tree is clean AND nothing is
+# unpushed, i.e. HEAD is contained in @{u}, so a healthy remote is at worst strictly ahead and
+# fast-forwarding is the whole of the correct answer. Anything that is NOT a fast-forward here means
+# the remote's history was rewritten. That is unexpected, so it reaches the journal at err, and it is
+# not resolved here, because this script's one rule is that it never discards a producer's write.
+#
+# --refmap= AND THE update-ref ARE THE WHOLE SAFETY ARGUMENT, so they are not tidiness. A plain
+# `git fetch origin main` OPPORTUNISTICALLY force-updates refs/remotes/origin/main even on the
+# rewritten-history branch where this function errs and leaves HEAD alone. @{u} is that ref, so the
+# fetch alone flips unpushed() from 0 to 1 while the tree stays clean — which routes the NEXT hourly
+# firing out of this quiet exit and into sync_push, whose `git pull --rebase` then takes its fork
+# point from the reflog entry THAT FETCH JUST WROTE, concludes this box's own commit was dropped
+# upstream on purpose, and discards it. Measured end to end on a throwaway origin (box pushes X,
+# origin is force-pushed back to a Y that does not contain X): run 1 moves origin/main X->Y, run 2
+# prints `clean tree but 1 unpushed commit(s) — pushing` then `pushed after rebase: 1 pending
+# commit(s)` at INFO, and afterwards HEAD is Y, x.txt is deleted and X is unreachable. A line
+# claiming it pushed a pending commit is the only record of having destroyed it.
+#
+# So the fetch writes FETCH_HEAD and NOTHING else — an empty --refmap makes git ignore
+# remote.origin.fetch and use only the command-line refspec, which here has no destination — and the
+# remote-tracking ref is advanced separately, by hand, ONLY once `merge --ff-only` has succeeded. On
+# that branch HEAD has just become FETCH_HEAD, so moving @{u} to it cannot make a local commit look
+# dropped: there isn't one. On the failure branch @{u} keeps its old value, so the next firing takes
+# this same quiet path, says the same thing at err, and this box's commit stays on this box.
+#
+# Advancing @{u} on success is also load-bearing in the ordinary case, not bookkeeping: leave it
+# stale and HEAD is ahead of it, so the very next run reads unpushed()=N on a clean tree and goes to
+# push commits the remote already has, hourly, forever.
+#
+# Still exit 0 on failure, as this path always has: a fetch that did not happen has lost nothing the
+# next firing cannot re-read, and failing the unit would mark the hourly backup sweep broken for a
+# reason that has nothing to do with backing anything up.
+#
+# Silent when there was nothing to collect. `--is-ancestor FETCH_HEAD HEAD` is the already-up-to-date
+# test and it is true on the overwhelming majority of firings; saying so hourly would bury the line
+# that matters, which is the one naming commits this box did not have.
+fast_forward() {
+  local e up
+  [ -n "$HAS_REMOTE" ] || return 0
+  if ! e=$(git fetch --refmap= "$HAS_REMOTE" "refs/heads/$BRANCH" 2>&1); then
+    err "WARN: fetch failed on a clean tree, this checkout may be behind $HAS_REMOTE/$BRANCH and nothing else pulls it: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
+  git merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null && return 0
+  if ! e=$(git merge --ff-only FETCH_HEAD 2>&1); then
+    err "WARN: cannot fast-forward to $HAS_REMOTE/$BRANCH, so its history was rewritten; this checkout is behind and stays behind, and nothing here moved the remote-tracking ref, so this box's own commits are untouched and need a human: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
+  up=$(git rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
+  if [ -n "$up" ] && ! e=$(git update-ref "$up" HEAD 2>&1); then
+    err "WARN: fast-forwarded to $HAS_REMOTE/$BRANCH but could not advance $up, so the next run will read these commits as unpushed and try to push them: $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-300)"
+  fi
+  say "fast-forwarded to $HAS_REMOTE/$BRANCH"
+}
+
 # Push FIRST, rebase only if the push is REJECTED. Both call sites used to pull --rebase
 # unconditionally and then push, and that ordering is what failed on claude-dev at
 # 2026-09-09T05:00:51Z with "cannot pull with rebase: You have unstaged changes".
@@ -394,7 +464,7 @@ sync_push() {
   say "pushed after rebase: $what"
 }
 if [ -z "$(git status --porcelain)" ]; then
-  if [ "$(unpushed)" -eq 0 ] 2>/dev/null; then exit 0; fi
+  if [ "$(unpushed)" -eq 0 ] 2>/dev/null; then fast_forward; exit 0; fi
   say "clean tree but $(unpushed) unpushed commit(s) — pushing"
   # Deliberately still exit 0, as before: this path leaves the commits safely local and the next
   # run retries. sync_push has already said why at err.
