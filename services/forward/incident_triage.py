@@ -89,17 +89,57 @@ def save(led):
     tmp.replace(LEDGER)
 
 
-def prompt(batch, cats):
-    rows = [{"key": key(i), "host": i.get("host"), "unit": i.get("unit"), "kind": i.get("kind"),
+RELOOK = (
+    "SOME OF THESE YOU HAVE JUDGED BEFORE. A row carrying `your_previous_verdict` is one you\n"
+    "already gave a verdict for; logview re-surfaced it because the incident came back after your\n"
+    "ack, so your instructions' \"never been triaged before\" does not hold for that row. Decide\n"
+    "whether the verdict still holds: return the same category and disposition if it does, a\n"
+    "different one if it does not, and reuse its `issue` instead of filing a second one.\n\n")
+
+
+def prompt(batch, cats, keys):
+    """The agent's whole input. `keys` is the ledger's verdicts, so a re-look can read its own.
+
+    A row reaches the agent a second time only through recheck(), i.e. because logview says the
+    incident came back AFTER the verdict -- and the verdict is the one thing that makes that look
+    different from the first one. Until this carried it, the agent re-derived a category from
+    scratch for a key it had already categorised, with its instructions still asserting it is
+    "handed the incidents that have never been triaged before". The ledger entry is taken rather
+    than the queue's own `ack_verdict`: the queue string is one of four words, while the ledger
+    holds the category and the issue id this agent itself wrote, which is what a re-look needs and
+    what the weekly roundup aggregates.
+
+    `at` comes from `verdict_at`, NOT from `at`: `at` is the cooldown clock recheck() reads, and
+    apply() bumps it to `now` on every re-look the agent answers nothing for, so it drifts away
+    from the verdict without bound while the verdict itself is untouched. An entry written before
+    `verdict_at` existed carries no time at all rather than that one -- a missing field is a thing
+    the agent can see, a wrong instant is not. It is formatted in UTC, because the host zone must
+    not change what moment the agent is told."""
+    rows = []
+    for i in batch:
+        k = key(i)
+        r = {"key": k, "host": i.get("host"), "unit": i.get("unit"), "kind": i.get("kind"),
              "count_14d": i.get("count"), "first_seen": i.get("first_seen_iso"),
              "last_seen": i.get("last_seen_iso"), "acked": i.get("acked"),
              "recurred_after_ack": i.get("recurred_after_ack"),
-             "summary": str(i.get("last_message") or "")[:600]} for i in batch]
+             "summary": str(i.get("last_message") or "")[:600]}
+        prev = keys.get(k)
+        if prev:
+            r["your_previous_verdict"] = v = {
+                "category": str(prev.get("category") or ""),
+                "disposition": str(prev.get("disposition") or ""),
+                "issue": str(prev.get("issue") or "")}
+            if prev.get("verdict_at"):
+                v["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                        time.gmtime(int(float(prev["verdict_at"]))))
+        rows.append(r)
     known = [{"category": c, "desc": v.get("desc", ""), "disposition": v.get("disposition", "")}
              for c, v in sorted(cats.items())]
-    return ("Triage these incidents, following your CLAUDE.md. Today is %s.\n\n"
+    relook = RELOOK if any("your_previous_verdict" in r for r in rows) else ""
+    return ("Triage these incidents, following your CLAUDE.md. Today is %s.\n\n%s"
             "EXISTING CATEGORIES (reuse when the cause matches):\n%s\n\nINCIDENTS:\n%s\n"
-            % (time.strftime("%Y-%m-%d %H:%M"), json.dumps(known, ensure_ascii=False, indent=1),
+            % (time.strftime("%Y-%m-%d %H:%M"), relook,
+               json.dumps(known, ensure_ascii=False, indent=1),
                json.dumps(rows, ensure_ascii=False, indent=1)))
 
 
@@ -132,6 +172,7 @@ def apply(led, batch, items, now):
         cat = (it.get("category") or "uncategorised").strip()[:80]
         answered.add(k)
         led["keys"][k] = {"category": cat, "disposition": disp, "at": now,
+                          "verdict_at": now,     # `at` is the cooldown and gets bumped; this does not
                           "example": str(it.get("example") or "")[:240],
                           "issue": str(it.get("issue") or "")}
         c = led["categories"].setdefault(cat, {"first": now})
@@ -175,7 +216,8 @@ def main():
         return 0
     import run
     try:
-        out = run.run_agent("triage", prompt(batch, led["categories"]), timeout=1200)
+        out = run.run_agent("triage", prompt(batch, led["categories"], led["keys"]),
+                            timeout=1200)
         items = parse(out)
     except Exception as exc:
         errlog.err("incident-triage: triage run failed, %d incident(s) stay untriaged" % len(batch), exc)
