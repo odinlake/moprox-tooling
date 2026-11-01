@@ -304,6 +304,20 @@ def has_measurement(payload):
     return bool(isinstance(s, dict) and s)
 
 
+def alertness_status(payload):
+    """`morning_alertness.status`, or None when the metric or the field is absent.
+
+    The only `status` field these payloads carry anywhere: of 226 archived days, 189 have one
+    (calculated 137, missing_data_interrupt 24, low_activity 19, pending 4, non_wear_interrupt 3,
+    charging_interrupt 2) and 37 have none. Absent and `pending` are NOT the same answer, which is
+    why this returns the field rather than a verdict — see is_final().
+    """
+    by = {m.get("type"): m.get("object") for m in
+          (payload.get("data") or {}).get("metric_data") or []}
+    ma = by.get("morning_alertness")
+    return ma.get("status") if isinstance(ma, dict) else None
+
+
 def is_final(f, d):
     """Was this day fetched late enough that it cannot still be filling in — AND did it arrive?
 
@@ -318,6 +332,24 @@ def is_final(f, d):
     nights would exist upstream and be permanently absent here, recoverable only by someone
     remembering to pass --backfill. A day with no measurement in it stays open for the ten-day
     window main() scans; the cost is a handful of extra API calls, against silently losing nights.
+
+    Nor is a day final while the cloud says it is still computing it. `morning_alertness.status ==
+    "pending"` is the vendor saying exactly that, and has_measurement() cannot see it: the hr/Sleep
+    series a pending day already carries satisfy it, so the day was sealed at its FIRST post-settle
+    fetch and the ten-day window above never reached it again. Measured over all 436 git versions
+    of ultrahuman/raw at private-data 8f53ec94: 68 days have held `pending`, 64 moved off it (37 ->
+    calculated, 14 -> low_activity, 13 -> missing_data_interrupt) and NONE ever moved back, so the
+    status is a one-way transient and re-asking is the only way to collect the resolution. The 4
+    that did not resolve are the ones this sealed; 2026-10-23 is the one that priced it -- written
+    at 2026-10-24T10:03:38Z and never again, across the 16 later runs of this unit that all still
+    had it inside their own ten-day window and all reported it done.
+
+    ONLY `pending`, and not "anything unresolved": 37 archived days carry no status at all and 20
+    of those carry a measurement. Re-opening those would re-fetch them for the whole window every
+    run, forever, for a field the vendor is never going to send. Replayed over the archive's span
+    at the timer's two firings a day, this clause costs 210 extra day-fetches across 182 runs --
+    1.15 per run, 0 on 34 of them, 7 at the worst -- and it has never cost a byte: across those
+    436 versions no day's payload ever lost its measurement or any non-zero sample on a re-fetch.
     """
     if not f.exists():
         return False
@@ -325,7 +357,10 @@ def is_final(f, d):
     if f.stat().st_mtime < settled:
         return False
     try:
-        return has_measurement(json.loads(gzip.decompress(f.read_bytes())))
+        payload = json.loads(gzip.decompress(f.read_bytes()))
+        if not has_measurement(payload):
+            return False
+        return alertness_status(payload) != "pending"
     except Exception as exc:
         errlog.warn(f"ultrahuman: cannot read stored payload {f.name} ({exc}) — will re-fetch")
         return False
