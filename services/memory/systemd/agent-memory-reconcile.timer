@@ -4,7 +4,7 @@
 Description=Reconcile shared agent memory every 10 minutes
 
 [Timer]
-OnCalendar=*:0/10
+OnCalendar=*:0/10 UTC
 Persistent=true
 
 [Install]

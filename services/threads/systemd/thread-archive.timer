@@ -4,7 +4,7 @@
 Description=Hourly archive of Claude Code conversation transcripts
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=hourly UTC
 Persistent=true
 RandomizedDelaySec=120
 

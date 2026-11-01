@@ -3,7 +3,7 @@
 Description=houseip — check the house public IP
 
 [Timer]
-OnCalendar=*:2/5
+OnCalendar=*:2/5 UTC
 Persistent=true
 
 [Install]

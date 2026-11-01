@@ -6,7 +6,7 @@
 Description=Run the moprox dashboard updater every 2 minutes
 
 [Timer]
-OnCalendar=*:0/2
+OnCalendar=*:0/2 UTC
 Persistent=true
 
 [Install]

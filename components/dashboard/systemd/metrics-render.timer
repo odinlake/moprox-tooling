@@ -3,7 +3,7 @@
 Description=Render metrics charts hourly
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=hourly UTC
 Persistent=true
 
 [Install]

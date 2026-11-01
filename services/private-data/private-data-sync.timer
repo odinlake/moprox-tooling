@@ -1,7 +1,7 @@
 [Unit]
 Description=Sweep private-data for uncommitted producer output, hourly
 [Timer]
-OnCalendar=hourly
+OnCalendar=hourly UTC
 # Jitter so the sweep does not race the mail lane's own nightly commit at the top of the hour.
 RandomizedDelaySec=300
 Persistent=true

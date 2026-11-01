@@ -4,7 +4,7 @@ Description=Hourly data-lane freshness check
 [Timer]
 # Hourly. The tightest window any lane declares is 24 h, so this is well inside it, and the check is
 # a few seconds of local file reading — there is no reason to run it less often.
-OnCalendar=hourly
+OnCalendar=hourly UTC
 RandomizedDelaySec=240
 Persistent=true
 
