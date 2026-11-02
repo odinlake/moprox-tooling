@@ -13,21 +13,19 @@
     "is not checked, and an undeclared capability that silently disappears is exactly the failure",
     "this file is meant to make impossible."
   ],
-
   "mcp": {
-    "logview":        "http://logview.lan:8016/mcp",
-    "corpus-search":  "http://mcp-search.lan:8020/mcp",
-    "email-search":   "http://mcp-search.lan:8002/mcp",
-    "docsearch":      "http://mcp-search.lan:8010/mcp",
-    "notif-search":   "http://mcp-search.lan:8013/mcp",
+    "logview": "http://logview.lan:8016/mcp",
+    "corpus-search": "http://mcp-search.lan:8020/mcp",
+    "email-search": "http://mcp-search.lan:8002/mcp",
+    "docsearch": "http://mcp-search.lan:8010/mcp",
+    "notif-search": "http://mcp-search.lan:8013/mcp",
     "finance-search": "http://mcp-search.lan:8014/mcp",
-    "news-search":    "http://mcp-search.lan:8015/mcp",
-    "mcp-google":     "http://mcp-google.lan:8000/mcp",
-    "agent-write":    "http://mcp-google.lan:8001/mcp",
-    "webscout":       "http://webscout.lan:8003/mcp",
-    "totolo":         "http://totolo.lan:8765/mcp"
+    "news-search": "http://mcp-search.lan:8015/mcp",
+    "mcp-google": "http://mcp-google.lan:8000/mcp",
+    "agent-write": "http://mcp-google.lan:8001/mcp",
+    "webscout": "http://webscout.lan:8003/mcp",
+    "totolo": "http://totolo.lan:8765/mcp"
   },
-
   "paths": [
     "~/projects/moprox-tooling",
     "~/projects/private-data",
@@ -40,9 +38,47 @@
     "~/projects/private-data/mail",
     "~/.local/share/moprox/agent-usage.jsonl"
   ],
-
   "creds": [
     "~/.config/claude-dev/telegram.env",
     "~/.config/claude-dev/telegram-firehose.env"
-  ]
+  ],
+  "exercise": {
+    "_doc": [
+      "Read by loop.py exercise_block(). Every tool the declared MCP servers list is rotated through",
+      "the loop's TOOL EXERCISE block, least recently used first. `hold`: never called for real,",
+      "because it writes somewhere the operator lives or disrupts other agents; the agent checks its",
+      "schema instead. `how`: a sandbox recipe for a tool that has side effects but may be called.",
+      "A new write tool with neither is reported as needing a recipe, so add one here."
+    ],
+    "hold": {
+      "mcp__mcp-google__draft_gmail_message": "creates a draft in the operator's own mailbox",
+      "mcp__mcp-google__manage_event": "writes the operator's calendar",
+      "mcp__mcp-google__manage_out_of_office": "writes the operator's calendar and auto-replies",
+      "mcp__mcp-google__manage_focus_time": "writes the operator's calendar",
+      "mcp__mcp-google__start_google_auth": "starts an OAuth flow only the operator can finish",
+      "mcp__logview__acknowledge_incident": "acks a real incident; the triage agent exercises it hourly",
+      "mcp__logview__file_issue": "writes the operator's issue board; exercised whenever a real issue is filed",
+      "mcp__logview__update_issue": "writes the operator's issue board; exercised whenever a real issue is updated",
+      "mcp__webscout__redeploy": "restarts webscout under every agent using it",
+      "mcp__webscout__establish_session": "replaces a stored login, which can need the operator's second factor"
+    },
+    "how": {
+      "mcp__agent-write__create_agent_folder": "only under /agent/exercise (create it once if missing)",
+      "mcp__agent-write__create_agent_doc": "only in /agent/exercise, titled 'exercise <date>'",
+      "mcp__agent-write__append_agent_doc": "only to a doc you created in /agent/exercise",
+      "mcp__agent-write__replace_agent_doc": "only a doc you created in /agent/exercise",
+      "mcp__mcp-google__get_gmail_attachment_content": "saves to local disk: use a recent attachment, then delete the file",
+      "mcp__webscout__click": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__fill": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done; never submit a form",
+      "mcp__webscout__press": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__goto": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__eval_js": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done; read-only expressions only",
+      "mcp__webscout__wait_for": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__query": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__links": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__content": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__screenshot": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
+      "mcp__webscout__close": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done"
+    }
+  }
 }
