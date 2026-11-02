@@ -33,7 +33,7 @@ argv() { tr '\0' '\n' < "$tmp/argv"; }
 
 rc=$(run coach /home/mikael/projects/private-data/agents/coach)
 ok "$([ "$rc" = 0 ] && echo 1 || echo 0)" "coach launches (rc=$rc)"
-ok "$(argv | grep -qx 'moprox COACH' && echo 1 || echo 0)" "coach registers as 'moprox COACH'"
+ok "$(argv | grep -qx 'MX COACH' && echo 1 || echo 0)" "coach registers as 'MX COACH'"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 1 || echo 0)" "coach gets the coach system prompt"
 ok "$(argv | grep -q 'hints.jsonl' && echo 1 || echo 0)" "...including the health-hints directive"
 # The directive used to say only "append it to .../hints.jsonl", which reads as permission to
@@ -49,13 +49,13 @@ ok "$(grep -q 'fresh session' "$tmp/out" && echo 1 || echo 0)" "and it says so"
 rm -rf "$tmp/state"
 rc=$(run bard /home/mikael/projects/private-data/agents/bard)
 ok "$([ "$rc" = 0 ] && echo 1 || echo 0)" "bard launches (rc=$rc)"
-ok "$(argv | grep -qx 'moprox BARD' && echo 1 || echo 0)" "bard registers as 'moprox BARD'"
+ok "$(argv | grep -qx 'MX BARD' && echo 1 || echo 0)" "bard registers as 'MX BARD'"
 ok "$(argv | grep -q 'yoto nowplaying' && echo 1 || echo 0)" "bard is told to re-check state, never recall it"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 0 || echo 1)" "and does not get the coach prompt"
 
 rm -rf "$tmp/state"
 rc=$(run one /home/mikael)
-ok "$(argv | grep -qx 'moprox dev ONE' && echo 1 || echo 0)" "dev one registers as 'moprox dev ONE'"
+ok "$(argv | grep -qx 'MX dev ONE' && echo 1 || echo 0)" "dev one registers as 'MX dev ONE'"
 ok "$(argv | grep -q 'AGENT_ID=one' && echo 1 || echo 0)" "dev one still gets the memory protocol"
 ok "$(argv | grep -q 'odinlake-ai-coach' && echo 0 || echo 1)" "and not the coach prompt"
 
@@ -79,12 +79,12 @@ if [ -n "$real" ]; then
     # A rename is a registration change (2026-09-26). First resume with no stamp ADOPTS the name;
     # a resume whose stamp names something else FORKS so the app shows the new name.
     ok "$(argv | grep -qx -- '--fork-session' && echo 0 || echo 1)" "no name stamp: plain resume, no fork"
-    ok "$([ "$(cat "$tmp/state/coach.rcname" 2>/dev/null)" = "moprox COACH" ] && echo 1 || echo 0)" "and the current name is stamped"
+    ok "$([ "$(cat "$tmp/state/coach.rcname" 2>/dev/null)" = "MX COACH" ] && echo 1 || echo 0)" "and the current name is stamped"
     printf 'moprox coach\n' > "$tmp/state/coach.rcname"; printf '%s\n' "$sid" > "$tmp/state/coach.session"
     rc=$(run coach /home/mikael/projects/private-data/agents/coach)
     ok "$(argv | grep -qx -- '--fork-session' && echo 1 || echo 0)" "a changed remote name FORKS instead of resuming"
     ok "$(argv | grep -qx -- '--session-id' && echo 1 || echo 0)" "under a new session id"
-    ok "$([ "$(cat "$tmp/state/coach.rcname")" = "moprox COACH" ] && echo 1 || echo 0)" "and the stamp is updated to the new name"
+    ok "$([ "$(cat "$tmp/state/coach.rcname")" = "MX COACH" ] && echo 1 || echo 0)" "and the stamp is updated to the new name"
     # A fresh start after a rollover carries a HANDOFF distilled from the old transcript (2026-09-26).
     printf '%s\n' "$sid" > "$tmp/state/coach.session"
     printf '#!/bin/sh\necho "HANDOFF-STUB read $(basename "$1")" > "$2"\n' > "$tmp/handoff"; chmod +x "$tmp/handoff"
