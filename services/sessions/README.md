@@ -9,9 +9,14 @@ Four instances:
 
 | instance | appears as | working directory | what it is |
 |---|---|---|---|
-| `one` `two` `three` | moprox dev ONE/TWO/THREE | `/home/mikael` | the shared-context dev sessions ([`../memory/`](../memory/)) |
-| `coach` | moprox COACH | `private-data/agents/coach` | odinlake-ai-coach, on Mikael's health and training |
-| `bard` | moprox BARD | `private-data/agents/bard` | the kids' Yoto entertainer |
+| `one` `two` `three` | MX dev ONE/TWO/THREE | `/home/mikael` | the shared-context dev sessions ([`../memory/`](../memory/)) |
+| `coach` | MX COACH | `private-data/agents/coach` | odinlake-ai-coach, on Mikael's health and training |
+| `bard` | MX BARD | `private-data/agents/bard` | the kids' Yoto entertainer |
+
+**MX Axis Mundi** (`moprox-axis.service`, since 2026-11-02) is different: a `claude remote-control`
+SERVER in `private-data/agents/axis`, so each "new session" started on it from the app is a fresh,
+short-lived chat with dev-level estate context and tools. Archive a chat in the app when its topic is
+done; transcripts stay searchable with `thread-search`. Unit header has the details.
 
 **Status: LIVE on claude-dev since 2026-06-29** (the dev trio), **coach since 2026-09-08.**
 
@@ -34,7 +39,7 @@ systemctl enable --now moprox-dev-cycle@one.timer moprox-dev-cycle@two.timer \
   moprox-dev-cycle@three.timer moprox-dev-cycle@coach.timer
 systemctl enable --now moprox-creds-warn.timer
 ```
-They'll appear in the Claude app as **moprox dev ONE/TWO/THREE**, **moprox COACH** and **moprox BARD**.
+They'll appear in the Claude app as **MX dev ONE/TWO/THREE**, **MX COACH** and **MX BARD**.
 Naming rule (operator, 2026-09-26): agent names are lowercase everywhere else; the REMOTE name uppercases
 the distinguishing token, so the instance for the dev trio and the role itself for a single-instance agent. (Both helpers are required — the
 unit's `ExecStartPre` calls them; see "Boot & trust robustness" below.)

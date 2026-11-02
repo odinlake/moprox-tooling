@@ -1,0 +1,47 @@
+# "MX Axis Mundi": ad-hoc in-estate chats, started from the Claude app (operator, 2026-11-02).
+#
+#   install -m644 services/sessions/moprox-axis.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now moprox-axis
+#
+# The dev trio, coach and bard are each ONE long-lived thread. Axis is the opposite: a Remote Control
+# SERVER (`claude remote-control`, not `--remote-control`), so every "new session" started on it from
+# claude.ai/code or the app's Code tab is a fresh conversation with the same estate context and tools
+# as a dev agent. A topic that has run its course is archived in the app; nothing here has to keep it.
+#
+# Why not the moprox-dev@ template: its launcher exists to keep and resume ONE thread, and server mode
+# has no --mcp-config or --append-system-prompt. The estate context instead comes from the directory:
+# CLAUDE.md, .mcp.json and .claude/settings.json in private-data/agents/axis. The three ExecStartPre
+# gates are the template's, copied, because each one fixed a real outage (see moprox-dev@.service).
+#
+# Restarts: sessions stop responding when this process stops, and server mode can only re-attach for
+# ~4 h. An old chat is reopened from its archived transcript instead (thread-search finds it).
+[Unit]
+Description=Claude Code remote-control server "MX Axis Mundi"
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=AGENT_ID=axis
+EnvironmentFile=-/home/mikael/.config/claude-dev/agent.env
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+WorkingDirectory=/home/mikael/projects/private-data/agents/axis
+ExecStartPre=/usr/bin/flock /home/mikael/.config/claude-dev/.trust.lock /usr/local/bin/moprox-ensure-folder-trust
+ExecStartPre=/usr/local/bin/moprox-creds-check --gate
+ExecStartPre=/bin/sh -c 'n=0; until curl -sS --max-time 5 -o /dev/null https://api.anthropic.com/ 2>/dev/null; do n=$((n+1)); [ "$n" -ge 30 ] && echo "moprox-axis: no egress to api.anthropic.com after ~60s" >&2 && exit 1; sleep 2; done'
+ExecStartPre=/bin/mkdir -p /home/mikael/.local/state/moprox-dev /home/mikael/.claude/projects/-home-mikael-projects-private-data-agents-axis
+# Axis shares the dev trio's memory: Claude Code's auto-memory for a project lives in its project dir,
+# and the trio's is a symlink to moprox-memory. Re-asserted every start, so it cannot drift.
+ExecStartPre=/bin/ln -sfn /home/mikael/projects/moprox-memory /home/mikael/.claude/projects/-home-mikael-projects-private-data-agents-axis/memory
+ExecStart=/usr/bin/script -qfec "/home/mikael/.local/bin/claude remote-control --name 'MX Axis Mundi' --remote-control-session-name-prefix 'Axis' --spawn same-dir --capacity 8 --permission-mode bypassPermissions" /home/mikael/.local/state/moprox-dev/axis.log
+TimeoutStartSec=120
+Restart=always
+RestartSec=5
+RestartSteps=4
+RestartMaxDelaySec=120
+
+[Install]
+WantedBy=multi-user.target
