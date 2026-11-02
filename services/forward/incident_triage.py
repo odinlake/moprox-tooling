@@ -36,6 +36,9 @@ LEDGER = Path(os.environ.get("TRIAGE_LEDGER", Path.home() / ".local/state/incide
 BATCH = int(os.environ.get("TRIAGE_BATCH", "8"))
 MAX_TG = 2                      # per run: a runaway verdict must not become a flood
 DISPOSITIONS = {"noise", "known", "actionable", "operator"}
+# Where a category sits in the weekly roundup (incident_digest.TIERS). The agent judges it: whether
+# the cause is understood, whether it matters, how long it has stood.
+TIERS = {"new", "unexplained", "fixing", "standing", "explained"}
 # How long after a verdict the same key may be looked at again. The gate used to be membership
 # alone -- `k not in led["keys"]`, with nothing ever removing a key -- so a unit was triaged once
 # for the lifetime of the ledger, and logview's deliberate re-surfacing of an acked incident that
@@ -178,6 +181,8 @@ def apply(led, batch, items, now):
         c = led["categories"].setdefault(cat, {"first": now})
         c.update(desc=str(it.get("category_desc") or c.get("desc", ""))[:200], disposition=disp,
                  example=led["keys"][k]["example"] or c.get("example", ""), last=now)
+        if it.get("tier") in TIERS:
+            c["tier"] = it["tier"]
         if disp == "operator" and (it.get("telegram") or "").strip():
             msgs.append(it["telegram"].strip())
     unanswered = sorted(k for k in given - answered if k in led["keys"])

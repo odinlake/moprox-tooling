@@ -201,10 +201,35 @@ def _counts(url):
         return out
 
 
+# The roundup's priority tiers, highest first (operator, 2026-11-02): colour by priority, label by
+# category, concise. The triage agent assigns each category a tier (incident_triage.TIERS); a
+# category it has not tiered yet falls back on its disposition.
+TIERS = [("new", "🔴", "New"), ("unexplained", "🟠", "Unexplained"), ("fixing", "🟡", "Fixing"),
+         ("standing", "🔵", "Long-standing"), ("explained", "⚪", "Explained")]
+BY_DISPOSITION = {"operator": "new", "known": "unexplained", "actionable": "fixing", "noise": "explained"}
+# An operator issue with no category behind it this week is long-standing once it is this old.
+STANDING_DAYS = 30
+
+
+def tier_of(meta):
+    t = meta.get("tier")
+    return t if t in {k for k, _, _ in TIERS} else BY_DISPOSITION.get(meta.get("disposition"), "unexplained")
+
+
+def gist(ex, n=80):
+    ex = " ".join(str(ex or "").split())
+    return ex if len(ex) <= n else ex[:n] + "…"
+
+
 def weekly(now):
-    """The weekly roundup (operator, 2026-10-28): "briefly tell me what the categories and example
-    errors are along with counts so I know what is or isn't piling up". One line per triage
-    category, this week against last, with one real example; then what is waiting on him."""
+    """The weekly roundup, one line per triage category, ranked and coloured by priority.
+
+    Operator, 2026-10-28: "briefly tell me what the categories and example errors are along with
+    counts so I know what is or isn't piling up". Then 2026-11-02: emphasise what is new and
+    genuinely unexplained, put the unexplained-but-minor in the middle, and push down both what has
+    an explanation (a lane stale only because he was away) and what is long-standing (he has chosen
+    not to act on it, but has not closed it). Issues waiting on him are folded into their category's
+    line as "on you" rather than listed a second time."""
     try:
         led = json.loads(TRIAGE_LEDGER.read_text())
     except (FileNotFoundError, ValueError):
@@ -215,44 +240,75 @@ def weekly(now):
         errlog.err("incident-digest: could not read weekly counts", exc)
         wk, two = {}, {}
     cats = {}
-    # A stale lane's count is the number of hourly checks that saw it stale, not a number of
-    # errors, so a lane category reads "ongoing" rather than "334 this wk".
     for k, (n, kind) in wk.items():
         t = led["keys"].get(k)
-        e = cats.setdefault(t["category"] if t else "not yet triaged", {"now": 0, "prev": 0, "lane": True})
+        e = cats.setdefault(t["category"] if t else "not yet triaged",
+                            {"now": 0, "prev": 0, "lane": True, "keys": set()})
         e["now"] += n
         e["lane"] = e["lane"] and kind == "lane-stale"
+        e["keys"].add(k)
     for k, (n, _) in two.items():
         t = led["keys"].get(k)
-        e = cats.setdefault(t["category"] if t else "not yet triaged", {"now": 0, "prev": 0, "lane": True})
-        e["prev"] += max(0, n - wk.get(k, (0, ""))[0])
-    rows = sorted(((c, v) for c, v in cats.items() if v["now"]), key=lambda cv: -cv[1]["now"])
-    lines = ["🔧 Weekly: what the estate logged (triaged by the agents)"]
-    for c, v in rows[:8]:
-        meta = led["categories"].get(c, {})
-        trend = "new" if not v["prev"] else ("↑" if v["now"] > v["prev"] * 1.25
-                                            else "↓" if v["now"] < v["prev"] * 0.75 else "=")
-        disp = meta.get("disposition", "")
-        size = ("ongoing" if v["prev"] else "new this wk") if v["lane"] \
-            else f"{v['now']} this wk ({v['prev']} last, {trend})"
-        lines.append(f"• {c}: {size}" + (f", {disp}" if disp else ""))
-        ex = " ".join(str(meta.get("example") or "").split())
-        if ex:
-            lines.append(f"  e.g. {ex[:120]}{'…' if len(ex) > 120 else ''}")
-    if len(rows) > 8:
-        lines.append(f"…+{len(rows) - 8} quieter categories")
-    if not rows:
-        lines.append("Nothing logged. (Sent so a silent week stays meaningful.)")
+        e = cats.get(t["category"] if t else "not yet triaged")
+        if e is not None:
+            e["prev"] += max(0, n - wk.get(k, (0, ""))[0])
+
+    # Each operator issue rides on the category its incident was triaged into; one with no category
+    # active this week gets a line of its own.
     iss = open_issues()
     mine = [i for i in iss if (i.get("owner") or "") == "operator"]
-    if mine:
-        lines.append(f"\nOn you ({len(mine)}):")
-        for i in mine[:5]:
-            lines.append(f"• {issue_title(i)}")
-        if len(mine) > 5:
-            lines.append(f"…+{len(mine) - 5} more")
-    if len(iss) > len(mine):
-        lines.append(f"\n{len(iss) - len(mine)} issue(s) with the agents: mo.lan/issues")
+    orphans = []
+    for i in mine:
+        inc = i.get("incident") or ""
+        unit = inc.partition("/")[2]
+        # An issue names its incident host/unit; the ledger keys a lane by unit alone (see key()).
+        t = led["keys"].get(unit if unit.startswith("lane-") else inc)
+        if t and t["category"] in cats:
+            cats[t["category"]]["on_you"] = True
+        else:
+            orphans.append(i)
+
+    rows = []                                   # (tier, sort weight, name, text)
+    for c, v in cats.items():
+        if not v["now"]:
+            continue
+        meta = led["categories"].get(c, {})
+        tier = tier_of(meta) if c != "not yet triaged" else "unexplained"
+        if v["lane"]:
+            size = "ongoing" if v["prev"] else "new this wk"
+        else:
+            trend = "" if not v["prev"] else (" ↑" if v["now"] > v["prev"] * 1.25
+                                              else " ↓" if v["now"] < v["prev"] * 0.75 else "")
+            size = f"{v['now']}/wk{trend}"
+        text = f"{c}, {size}" + (", on you" if v.get("on_you") else "")
+        if tier in ("new", "unexplained") and meta.get("example"):
+            text += f"\n   e.g. {gist(meta['example'])}"
+        rows.append((tier, -v["now"], c, text))
+    for i in orphans:
+        try:
+            from datetime import datetime
+            age = (now - datetime.fromisoformat(i.get("created")).timestamp()) / 86400
+        except (TypeError, ValueError):
+            age = 0
+        t = issue_title(i)
+        rows.append(("standing" if age >= STANDING_DAYS else "new", 0, t, f"{t}, on you"))
+
+    lines = ["🔧 Weekly estate roundup, by priority"]
+    for tier, dot, label in TIERS:
+        mine_rows = sorted((r for r in rows if r[0] == tier), key=lambda r: r[1])
+        if not mine_rows:
+            continue
+        if tier == "explained":
+            # Not real problems: one line, names only.
+            lines.append(f"{dot} {label}: " + "; ".join(name.split(",")[0] for _, _, name, _ in mine_rows))
+            continue
+        for _, _, _, text in mine_rows:
+            lines.append(f"{dot} {label}: {text}")
+    if not rows:
+        lines.append("Nothing logged. (Sent so a silent week stays meaningful.)")
+    agents = len(iss) - len(mine)
+    if agents:
+        lines.append(f"\n{agents} issue(s) with the agents: mo.lan/issues")
     return lines
 
 
