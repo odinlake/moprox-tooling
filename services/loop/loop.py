@@ -1087,6 +1087,135 @@ def promote(prop, evidence, agent):
 CAPS = Path(__file__).resolve().parent / "capabilities.json"
 
 
+# --- tool exercise ----------------------------------------------------------
+# Operator, 2026-11-02: "I think loop agent ought to exercise all tools from time to time."
+# Because thread-search was dead from 2026-07-06 to 2026-11-02 and nothing noticed: a tool that
+# fails only when someone uses it looks healthy to every monitor, preflight() included, which asks
+# only whether a server ANSWERS. So each cycle the agent is handed the few tools that have gone
+# longest unused and asked to use them as a real user would, and the harness records the verdict.
+EXERCISE_N = int(os.environ.get("LOOP_EXERCISE_N", 3))
+
+
+def _mcp(url, body, sid=None, timeout=15):
+    """One streamable-http JSON-RPC call -> (message, session id). SSE or plain JSON body."""
+    import urllib.request
+    h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if sid:
+        h["Mcp-Session-Id"] = sid
+    with urllib.request.urlopen(urllib.request.Request(url, json.dumps(body).encode(), h),
+                                timeout=timeout) as r:
+        text, sid = r.read().decode(), r.headers.get("Mcp-Session-Id") or sid
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            text = line[5:]
+    return (json.loads(text) if text.strip() else {}), sid
+
+
+def mcp_inventory(caps):
+    """{mcp__<server>__<tool>: description} for every tool the declared servers expose NOW, plus a
+    list of servers that could not be listed. Live rather than declared, so a tool added to a server
+    joins the rotation the next cycle without anyone remembering to register it."""
+    tools, bad = {}, []
+    for srv, url in (caps.get("mcp") or {}).items():
+        try:
+            _, sid = _mcp(url, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                                           "clientInfo": {"name": "loop-exercise", "version": "1"}}})
+            _mcp(url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+            msg, _ = _mcp(url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid)
+            for t in (msg.get("result") or {}).get("tools") or []:
+                tools[f"mcp__{srv}__{t['name']}"] = (t.get("description") or "").strip().split("\n")[0][:160]
+        except Exception as exc:
+            bad.append(srv)
+            err(f"exercise: could not list the tools of MCP {srv} at {url}, so they are out of "
+                f"this cycle's rotation", exc)
+    return tools, bad
+
+
+def exercise_block(led, agent):
+    """Pick the EXERCISE_N least-recently exercised tools and say how to exercise them.
+
+    Never-exercised first, then oldest. Which tools must not be called for real (they write to the
+    operator's mail, calendar or the issue board) is declared in capabilities.json `exercise.hold`;
+    sandbox recipes for the ones that may are in `exercise.how`. The picks are stored as
+    led["exercise_due"] so record_exercise() can tell an unreported tool from an exercised one."""
+    try:
+        caps = json.loads(CAPS.read_text())
+    except Exception as exc:
+        err(f"exercise: cannot read {CAPS}, so no tool is exercised this cycle", exc)
+        return ""
+    tools, bad = mcp_inventory(caps)
+    if not tools:
+        return ""
+    ex = caps.get("exercise") or {}
+    hold, how = ex.get("hold") or {}, ex.get("how") or {}
+    seen = led.get("exercised") or {}
+    due = sorted(tools, key=lambda t: (seen.get(t, {}).get("at", 0), t))[:EXERCISE_N]
+    led["exercise_due"] = due
+    (Path(STATE) / "exercise.json").unlink(missing_ok=True)     # a killed cycle's report is stale
+    rows = []
+    for t in due:
+        last = seen.get(t)
+        when = (f"last {datetime.fromtimestamp(last['at']).date()} "
+                f"{'ok' if last.get('ok') else 'FAILED' if last.get('ok') is False else 'held'}"
+                if last else "never exercised")
+        if t in hold:
+            rows.append(f"- {t} ({when}) HOLD, do not call it: {hold[t]}. Read its schema and "
+                        f"description instead, and report ok=null with what you checked.")
+        else:
+            rows.append(f"- {t} ({when}): {tools[t]}" + (f"\n    how: {how[t]}" if t in how else ""))
+    out = Path(STATE) / "exercise.json"
+    return ("\n\nTOOL EXERCISE (before or alongside your increment; small, but not optional). "
+            "Use each tool below the way a real agent in this estate would, with a realistic input, "
+            "and judge the RESULT, not just that it returned: an error, a timeout, an empty or "
+            "truncated answer to a question that has one, or output that contradicts its own "
+            "description is a failure. A tool not on HOLD whose description says it writes, sends "
+            "or deletes and has no `how` recipe: do not call it; report ok=null and say it needs a "
+            "recipe in capabilities.json.\n" + "\n".join(rows)
+            + (f"\n(Not listable this cycle: {', '.join(bad)}.)" if bad else "")
+            + f"\nWrite {out} as a JSON list, one object per tool above: "
+              '{"tool": "<exact name>", "ok": true|false|null, "note": "<what you did and saw, '
+              'one or two sentences>"}. For each failure, also fix it or file it on the issue '
+              "board (file_issue); never work around a broken tool and say nothing.")
+
+
+def record_exercise(led, cyc, agent):
+    """Fold the agent's exercise report into the ledger; a failure goes out at err level.
+
+    err() is what puts it in the journal and so in the incident queue, which is the whole point:
+    the agent's tool output alone is where thread-search's crash sat unread for four months. A due
+    tool the report does not mention is NOT stamped, so it stays at the head of the queue."""
+    due = led.pop("exercise_due", None) or []
+    f = Path(STATE) / "exercise.json"
+    if not due:
+        f.unlink(missing_ok=True)
+        return
+    try:
+        rows = json.loads(f.read_text()) if f.exists() else []
+        if not isinstance(rows, list):
+            raise ValueError(f"expected a JSON list, got {type(rows).__name__}")
+    except Exception as exc:
+        err(f"exercise: cycle {cyc} wrote an unreadable {f}, so none of {', '.join(due)} counts "
+            f"as exercised", exc)
+        rows = []
+    f.unlink(missing_ok=True)
+    now = int(time.time())
+    got = {r.get("tool"): r for r in rows if isinstance(r, dict)}
+    seen = led.setdefault("exercised", {})
+    for t in due:
+        r = got.get(t)
+        if r is None:
+            warn(f"exercise: cycle {cyc} did not report on {t}; it stays due")
+            continue
+        ok, note = r.get("ok"), _clip(str(r.get("note") or ""), 400)
+        seen[t] = {"at": now, "cycle": cyc, "ok": ok if ok in (True, False) else None, "note": note}
+        if ok is False:
+            err(f"exercise: {t} FAILED when used: {note}", RuntimeError("tool exercise failed"))
+            notify.send(f"TOOL BROKEN: {t}\n{note}", agent)
+        else:
+            say(f"  exercised {t}: {'ok' if ok else 'held/unsandboxed'}", 6, agent)
+
+
 INCIDENTS_URL = os.environ.get("LOOP_INCIDENTS_URL",
                                "http://logview.lan:8016/api/incidents?window=7d&limit=8")
 
@@ -1954,6 +2083,8 @@ def main():
             prompt += open_issues()
         elif surface == "findings":
             prompt += recent_findings(led)
+        elif surface == "exercise":
+            prompt += exercise_block(led, agent)
         else:
             err(f"agent_conf: {agent} declares inject={surface!r}, which this harness does not "
                 f"implement, so that surface is NOT in the prompt",
@@ -2083,6 +2214,8 @@ def main():
                                                 "why": detail})
             say(f"✗ verify FAIL  {claim}  [{detail}]", 4, agent)
         f.unlink(missing_ok=True)
+
+    record_exercise(led, cyc, agent)
 
     # A cycle that produced nothing is not a failure, but a run of them means back off.
     led["strikes"] = 0 if (accepted or rejected or disputed) else led.get("strikes", 0)
