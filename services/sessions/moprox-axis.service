@@ -1,6 +1,7 @@
 # "MX Axis Mundi": ad-hoc in-estate chats, started from the Claude app (operator, 2026-11-02).
 #
 #   install -m644 services/sessions/moprox-axis.service /etc/systemd/system/
+#   install -m755 services/sessions/axis-launch.sh /usr/local/bin/moprox-axis-launch
 #   systemctl daemon-reload && systemctl enable --now moprox-axis
 #
 # The dev trio, coach and bard are each ONE long-lived thread. Axis is the opposite: a Remote Control
@@ -36,7 +37,13 @@ ExecStartPre=/bin/mkdir -p /home/mikael/.local/state/moprox-dev /home/mikael/.cl
 # Axis shares the dev trio's memory: Claude Code's auto-memory for a project lives in its project dir,
 # and the trio's is a symlink to moprox-memory. Re-asserted every start, so it cannot drift.
 ExecStartPre=/bin/ln -sfn /home/mikael/projects/moprox-memory /home/mikael/.claude/projects/-home-mikael-projects-private-data-agents-axis/memory
-ExecStart=/usr/bin/script -qfec "/home/mikael/.local/bin/claude remote-control --name 'MX Axis Mundi' --remote-control-session-name-prefix 'Axis' --spawn same-dir --capacity 8 --permission-mode bypassPermissions" /home/mikael/.local/state/moprox-dev/axis.log
+# The app lists a Remote Control server under its MACHINE name, which is the hostname, so this one
+# showed up as "claude-dev" (operator, 2026-11-02: call it "MX Axis Mundi"). Only this process gets a
+# private hostname: `+` runs the line as root just long enough to open a UTS namespace and set the
+# name, then setpriv drops to mikael. A UTS namespace, unlike a user namespace, leaves sudo and file
+# ownership exactly as for the dev sessions; the host, its journal (_HOSTNAME) and every other unit
+# keep "claude-dev". See axis-launch.sh.
+ExecStart=+/usr/bin/unshare --uts /usr/local/bin/moprox-axis-launch
 TimeoutStartSec=120
 Restart=always
 RestartSec=5
