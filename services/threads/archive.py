@@ -100,6 +100,23 @@ def main():
     json.dump(manifest, open(MANIFEST, "w"), indent=0)
     json.dump(sorted(index, key=lambda x: x.get("end") or "", reverse=True), open(os.path.join(OUT, "index.json"), "w"), indent=0)
     print(f"archived {archived} sessions ({changed} (re)written) -> {OUT}")
+    canary()
+
+def canary():
+    """Prove search still works over what was just written, at err level if not.
+
+    thread-search is on-demand: when it breaks, the traceback lands in one agent's tool output and
+    nowhere else, and this timer stays green. It was dead from 2026-07-06 to 2026-11-02 that way;
+    the one session that hit it (2026-08-18) grepped around it. Every header carries "session:",
+    so a search for it must find at least one thread."""
+    import subprocess
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.realpath(__file__)), "search.py"),
+                        "-n", "1", "session:"], capture_output=True, text=True, timeout=300,
+                       env={**os.environ, "THREADS_DIR": OUT})
+    if r.returncode != 0 or "thread(s) matching" not in r.stdout:
+        errlog.err("archive.py: thread-search canary failed (exit %d): %s"
+                   % (r.returncode, (r.stderr or r.stdout).strip()[-300:]))
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
