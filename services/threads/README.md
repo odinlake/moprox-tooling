@@ -31,7 +31,7 @@ for semantic recall the `email-search` engine (Tantivy + MiniLM) can later index
 cp services/threads/systemd/thread-archive.{service,timer} /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now thread-archive.timer
 # agent/operator-callable search wrapper:
-ln -sf /home/mikael/projects/moprox-tooling/services/threads/thread-search /home/mikael/.local/bin/thread-search
+ln -sf /opt/moprox-tooling/services/threads/thread-search /home/mikael/.local/bin/thread-search
 ```
 Optionally raise retention so the *source* sticks around longer too (defence in depth):
 `~/.claude/settings.json` → `"cleanupPeriodDays": 90`.

@@ -9,9 +9,27 @@ Usage:
 Prints each hit: title · date · project · #hits · path, with a couple of matching snippets.
 Then Read the path for the full thread.
 """
-import os, sys, subprocess, glob, re
+import os, sys, subprocess, re
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+import errlog  # noqa: E402
 
 THREADS_DIR = os.environ.get("THREADS_DIR", os.path.expanduser("~/.local/share/moprox/threads"))
+
+def counts(term):
+    """{path: matches} for every thread containing `term` (case-insensitive, fixed-string).
+
+    rg walks THREADS_DIR itself. This used to glob every thread and pass them all as arguments,
+    which broke on 2026-07-06 when 30k docindex batch runs were archived: the list passed ARG_MAX
+    and every search died with "Argument list too long" for four months, unnoticed."""
+    r = subprocess.run(["rg", "--count-matches", "-i", "-F", "--glob", "*.md", "-e", term, THREADS_DIR],
+                       capture_output=True, text=True)
+    if r.returncode > 1:                            # 0 = hits, 1 = no hits, 2 = rg itself failed
+        raise RuntimeError(f"rg failed ({r.returncode}): {r.stderr.strip()[:300]}")
+    out = {}
+    for line in r.stdout.splitlines():
+        path, _, n = line.rpartition(":")
+        if path: out[path] = int(n)
+    return out
 
 def main(argv):
     since = None; limit = 10; terms = []
@@ -23,24 +41,21 @@ def main(argv):
     if len(terms) == 1: terms = terms[0].split()   # allow one quoted phrase OR bare words
     if not terms:
         print("usage: thread-search [--since YYYY-MM-DD] [-n N] <terms...>"); return 2
-    files = set(glob.glob(os.path.join(THREADS_DIR, "*", "*.md")))
-    # AND: keep only files containing every term (case-insensitive, fixed-string)
-    for t in terms:
-        r = subprocess.run(["rg", "-il", "-F", t, *files], capture_output=True, text=True)
-        files &= set(r.stdout.split("\n")) - {""}
-        if not files: break
+    try:
+        per_term = [counts(t) for t in terms]
+    except Exception as e:
+        errlog.err("thread-search: search failed", e); return 1
+    files = set.intersection(*(set(c) for c in per_term))
     if not files:
         print(f"no threads match all of: {' '.join(terms)}"); return 0
     scored = []
     for f in files:
-        head = open(f, errors="ignore").readline().lstrip("# ").strip()
-        meta = ""
         with open(f, errors="ignore") as fh:
-            fh.readline(); meta = fh.readline().strip()
+            head = fh.readline().lstrip("# ").strip(); meta = fh.readline().strip()
         end = (re.search(r"–(\d{4}-\d{2}-\d{2})", meta) or re.search(r"(\d{4}-\d{2}-\d{2})", meta))
         end = end.group(1) if end else "0000-00-00"
         if since and end < since: continue
-        hits = sum(len(subprocess.run(["rg", "-o", "-F", "-i", t, f], capture_output=True, text=True).stdout.split("\n")) - 1 for t in terms)
+        hits = sum(c[f] for c in per_term)
         scored.append((hits, end, head, meta, f))
     scored.sort(reverse=True)
     if not scored:
