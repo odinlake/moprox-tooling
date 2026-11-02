@@ -280,8 +280,10 @@ def weekly(now):
             trend = "" if not v["prev"] else (" ↑" if v["now"] > v["prev"] * 1.25
                                               else " ↓" if v["now"] < v["prev"] * 0.75 else "")
             size = f"{v['now']}/wk{trend}"
-        text = f"{c}, {size}" + (", on you" if v.get("on_you") else "")
-        if tier in ("new", "unexplained") and meta.get("example"):
+        text = c + ("" if size == "new this wk" and tier == "new" else f", {size}") \
+            + (", on you" if v.get("on_you") else "")
+        # A stale lane's example only restates "silent since"; a log line is worth quoting.
+        if tier in ("new", "unexplained") and not v["lane"] and meta.get("example"):
             text += f"\n   e.g. {gist(meta['example'])}"
         rows.append((tier, -v["now"], c, text))
     for i in orphans:
@@ -290,7 +292,7 @@ def weekly(now):
             age = (now - datetime.fromisoformat(i.get("created")).timestamp()) / 86400
         except (TypeError, ValueError):
             age = 0
-        t = issue_title(i)
+        t = issue_title(i).replace(" — ", ": ")     # operator: no em dashes in what he reads
         rows.append(("standing" if age >= STANDING_DAYS else "new", 0, t, f"{t}, on you"))
 
     lines = ["🔧 Weekly estate roundup, by priority"]
