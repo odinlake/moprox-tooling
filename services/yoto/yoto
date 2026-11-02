@@ -5,7 +5,7 @@
 # Routes the content verbs to myo.py and the player verbs to yoto.py. Needs an interpreter with
 # mutagen (myo.py) and paho-mqtt (device control); the system python has neither and no pip.
 set -euo pipefail
-DIR=/home/mikael/projects/moprox-tooling/services/yoto
+DIR=$(dirname "$(readlink -f "$0")")   # beside this script, so the /opt link runs the prod tree
 for py in "$HOME/docindex/venv/bin/python" /usr/bin/python3; do
   if [ -x "$py" ] && "$py" -c 'import paho.mqtt.client, mutagen' 2>/dev/null; then
     case "${1:-}" in
