@@ -9,6 +9,10 @@ What counts as manual, from the recorded log (listen.jsonl, 2026-10-03/04):
   - knob:  an events message carrying ONLY volume/volumeMax (+eventUtc), with the volume changed.
            The player's own volume moves always carry more: the sleep-timer fade-out (5..1 at 2 s
            intervals) and the 0-blips at a story change both carry sleepTimerSeconds.
+           Except with NO timer running: then a story change or a playback start sends a bare
+           {"volume": 0} and a bare return to the old level (2026-11-03 20:57:16, 8->0 at a
+           chapter change; 136 such in a month). A hand on the knob moves one step per message,
+           so a single jump of more than 2 to or from 0 is the player's own blip, not a knob.
   - card:  status.cardInserted changing between 0 and 1 (1 = a physical card; 2 = remote), except
            a 1 -> 0 within 20 s of the sleep timer running out: when the timer fires, the player
            reports the card as removed (2026-10-04 02:40:27).
@@ -39,6 +43,7 @@ LIT, DARK, HOLD = "1", "0", 15.0
 QUIET_AFTER_REMOTE = 3.0
 SKIP_LEFT = 90
 SEARCH_GAP = 10.0
+BLIP = 2                                    # a bare volume jump bigger than this to/from 0 is the player's own
 
 
 def _order(key):
@@ -94,7 +99,9 @@ class Guard:
             elif isinstance(m.get("sleepTimerSeconds"), (int, float)):
                 self.timer_end = t + m["sleepTimerSeconds"]
             if "volume" in m:
-                if keys <= {"volume", "volumeMax"} and self.volume is not None and m["volume"] != self.volume and not remote:
+                blip = 0 in (self.volume, m["volume"]) and abs(m["volume"] - (self.volume or 0)) > BLIP
+                if keys <= {"volume", "volumeMax"} and self.volume is not None and m["volume"] != self.volume and not remote \
+                        and not blip:
                     why = "knob %s->%s" % (self.volume, m["volume"])
                 self.volume = m["volume"]
             ck = (m.get("cardId"), m.get("chapterKey"))
