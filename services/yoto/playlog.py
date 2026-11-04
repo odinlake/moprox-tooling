@@ -248,6 +248,36 @@ SLOT = 600                                   # the night map's resolution: 10 mi
 SLOTS = 86400 // SLOT                        # 144 per day, midnight to midnight
 
 
+def _slot_walk(s, e):
+    """Yield (local date, slot index, seconds) for each ten-minute slot the REAL interval
+    [s, e) touches. The slot's end is real seconds, not wall-clock arithmetic: when the clocks go
+    back, 01:50 + 10 min on the wall is 02:00 GMT, an hour and ten minutes later, and that whole
+    stretch would land in one slot (25 Oct 2026: 4 h in 01:50-02:00)."""
+    while s < e:
+        dt = datetime.datetime.fromtimestamp(s, TZ)
+        cut = min(e, s - (dt.minute % 10) * 60 - dt.second - dt.microsecond / 1e6 + SLOT)
+        yield dt.date(), (dt.hour * 60 + dt.minute) // 10, cut - s
+        s = cut
+
+
+def _day_cap(d):
+    """Real seconds each wall-clock slot of local day `d` can hold: SLOT everywhere, except on a
+    clock-change day, where the six slots of the repeated hour hold 2 * SLOT and the six of the
+    skipped hour hold 0.
+
+    The grid is wall-clock by design (the night/guard shading is keyed on the wall-clock hour), so
+    on those two days a year a row is not a tenth of an hour of real time. This is what `slots`
+    would be if the whole day were one `playing` segment -- same walk, so dividing one by the other
+    gives an occupancy fraction that cannot exceed 1. Without it every consumer divides by a
+    constant SLOT and a half-full doubled row draws as a full ordinary one."""
+    midnight = datetime.datetime(d.year, d.month, d.day, tzinfo=TZ)
+    cap = [0.0] * SLOTS
+    for _, k, secs in _slot_walk(midnight.timestamp(),
+                                 (midnight + datetime.timedelta(days=1)).timestamp()):
+        cap[k] += secs
+    return [round(x) for x in cap]
+
+
 def _nights(c, segs, t0, t1, first, player=None, main=None):
     """One column per DAY, midnight to midnight local. Each: date, 144 ten-minute slots of seconds
     listened, and the Yoto's day/night times that day. (2026-10-02 to 10-04 this was noon to noon,
@@ -267,17 +297,9 @@ def _nights(c, segs, t0, t1, first, player=None, main=None):
     for s, e, st, *_ in segs:
         if st != "playing":
             continue
-        while s < e:
-            dt = datetime.datetime.fromtimestamp(s, TZ)
-            # The slot's end in real seconds, not wall-clock arithmetic: when the clocks go back,
-            # 01:50 + 10 min on the wall is 02:00 GMT, an hour and ten minutes later, and that
-            # whole stretch landed in one slot (25 Oct 2026: 4 h in 01:50-02:00).
-            cut = min(e, s - (dt.minute % 10) * 60 - dt.second - dt.microsecond / 1e6 + SLOT)
-            day = dt.date()
-            k = (dt.hour * 60 + dt.minute) // 10
+        for day, k, secs in _slot_walk(s, e):
             if day in idx:
-                slots[idx[day]][k] += cut - s
-            s = cut
+                slots[idx[day]][k] += secs
     cfgs = _configs(c, player, main)
     # sleepguard only ever drives the main player
     guards = c.execute("select ts, start, end from guard_config order by ts").fetchall() \
@@ -287,7 +309,8 @@ def _nights(c, segs, t0, t1, first, player=None, main=None):
         noon = datetime.datetime(d.year, d.month, d.day, 12, tzinfo=TZ).timestamp()
         day_t, night_t, assumed = _config_at(cfgs, noon + 12 * 3600)
         g_start, g_end = _guard_at(guards, noon + 12 * 3600)
-        out.append({"date": d.isoformat(), "slots": [round(x) for x in sl], "recorded": d >= rec_from,
+        out.append({"date": d.isoformat(), "slots": [round(x) for x in sl], "cap": _day_cap(d),
+                    "recorded": d >= rec_from,
                     "day_time": day_t, "night_time": night_t, "assumed": assumed,
                     "guard_start": g_start, "guard_end": g_end})
     return out
