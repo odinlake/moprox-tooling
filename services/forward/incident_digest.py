@@ -166,10 +166,35 @@ def age_h(i):
         return 1e9
 
 
+def _msg(i):
+    """The incident's `last_message` as text.
+
+    logview's /api/incidents returns this field in journald's BYTE-ARRAY form for some rows: a
+    JSON list of 0..255 ints rather than a string. Measured on the live 14 d queue (2026-11-04,
+    41 rows), two arrive as 300-int lists and both decode cleanly as UTF-8, while a same-host
+    sibling of the identical 300-byte shape arrives as a str -- the form is not determined by the
+    content, so a reader cannot tell in advance which rows carry it.
+
+    `str()` on such a list yields "[99, 108, 97, ...]", i.e. the message re-rendered as decimal
+    numbers, which then loses two thirds of itself to the caller's truncation. The same expression
+    stood at the other reader of this field (incident_triage._msg).
+    """
+    v = i.get("last_message")
+    if isinstance(v, list):
+        try:
+            return bytes(v).decode("utf-8", "replace")
+        except (TypeError, ValueError) as exc:
+            # A list this cannot read as bytes is a shape nobody has seen: say so at err level and
+            # fall back to the old rendering rather than dropping the only description there is.
+            errlog.err("incident %s: last_message is a list of non-bytes" % key(i), exc)
+            return str(v)
+    return str(v or "")
+
+
 def line(i):
     """One incident, one line plus a short gist (operator, 2026-10-28: concise)."""
     # A log-errors message is boilerplate ("N error-shaped lines matching ... between ..."): no gist.
-    detail = "" if i.get("kind") == "log-errors" else " ".join(str(i.get("last_message") or "").split())
+    detail = "" if i.get("kind") == "log-errors" else " ".join(_msg(i).split())
     out = f"• {key(i)} ({i.get('kind', '?')}), {ago(i)}"
     return out + (f"\n  {detail[:100]}{'…' if len(detail) > 100 else ''}" if detail else "")
 

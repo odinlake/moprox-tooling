@@ -100,6 +100,31 @@ RELOOK = (
     "different one if it does not, and reuse its `issue` instead of filing a second one.\n\n")
 
 
+def _msg(i):
+    """The incident's `last_message` as text.
+
+    logview's /api/incidents returns this field in journald's BYTE-ARRAY form for some rows: a
+    JSON list of 0..255 ints rather than a string. Measured on the live 14 d queue (2026-11-04,
+    41 rows), two arrive as 300-int lists and both decode cleanly as UTF-8, while a same-host
+    sibling of the identical 300-byte shape arrives as a str -- the form is not determined by the
+    content, so a reader cannot tell in advance which rows carry it.
+
+    `str()` on such a list yields "[99, 108, 97, ...]", i.e. the message re-rendered as decimal
+    numbers, which then loses two thirds of itself to the caller's truncation. The same expression
+    stood at the other reader of this field (incident_digest._msg).
+    """
+    v = i.get("last_message")
+    if isinstance(v, list):
+        try:
+            return bytes(v).decode("utf-8", "replace")
+        except (TypeError, ValueError) as exc:
+            # A list this cannot read as bytes is a shape nobody has seen: say so at err level and
+            # fall back to the old rendering rather than dropping the only description there is.
+            errlog.err("incident %s: last_message is a list of non-bytes" % key(i), exc)
+            return str(v)
+    return str(v or "")
+
+
 def prompt(batch, cats, keys):
     """The agent's whole input. `keys` is the ledger's verdicts, so a re-look can read its own.
 
@@ -125,7 +150,7 @@ def prompt(batch, cats, keys):
              "count_14d": i.get("count"), "first_seen": i.get("first_seen_iso"),
              "last_seen": i.get("last_seen_iso"), "acked": i.get("acked"),
              "recurred_after_ack": i.get("recurred_after_ack"),
-             "summary": str(i.get("last_message") or "")[:600]}
+             "summary": _msg(i)[:600]}
         prev = keys.get(k)
         if prev:
             r["your_previous_verdict"] = v = {
