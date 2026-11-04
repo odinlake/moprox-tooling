@@ -140,8 +140,51 @@ say "deployed $before -> $after ($(git log -1 --format=%s | cut -c1-70))"
 
 # A unit whose code changed keeps running the old module until it restarts (the stale-daemon trap
 # that once cost a false 'valet memory is blocked' report). Restart the long-lived importers only.
-if git diff --name-only "$before" "$after" | grep -qE '^services/(agents|forward)/'; then
-  # sudo -n: the unit runs as mikael; /etc/sudoers.d/tooling-pull grants exactly this one command.
-  sudo -n systemctl restart dispatcher.service telegram-poll.service discord-theming.service 2>/dev/null \
-    && say "restarted agent daemons (services/agents or services/forward changed)"
-fi
+#
+# yoto-web (it answers mo.lan/stats and /api/stats) and yoto-listen (it records the player's MQTT)
+# import services/yoto/{playlog,yoto,myo,reader_cover}.py and were not here, so the only thing that
+# had ever restarted them was services/yoto/web/install.sh, run by hand with sudo on this box. That
+# works for a session sitting here and not at all for the loop agents, which land from claude-loop
+# with no hand on claude-dev: 61764e28 "yoto: publish each heatmap row's real capacity per day" was
+# committed 2026-11-04T08:49:12Z and in this tree minutes later, while the yoto-web answering
+# /api/stats had been up since 2026-11-03T21:07:38Z -- so the field it added was deployed and not
+# served, for hours, with nothing anywhere saying so. Each of the six yoto-web restarts in the 30
+# days before it lands 4-5 s after a services/yoto commit: somebody running install.sh, every time.
+#
+# ONE SUDO CALL PER GROUP, not one call naming everything: /etc/sudoers.d/tooling-pull was written
+# for the three-unit command below (moprox-memory/tooling-pull-gate-sudo-record), so if it does not
+# cover the yoto units, that refusal must not take the agent daemons' restart down with it.
+#
+# AND A REFUSAL IS REPORTED, which it was not. `sudo -n ... 2>/dev/null && say ...` discarded the
+# reason, and left the script exiting 1 only as a side effect of that list being its last command --
+# so a denied restart appeared as a unit-failed incident with no cause in it, the exact complaint
+# this file's own header makes about `exec >>"$LOG"`. The nonzero exit is kept deliberately: a deploy
+# that left production running pre-deploy code did not finish. It alarms once, not every five
+# minutes, because the next run finds before == after and exits before reaching here.
+stale=0
+restart_group() {   # restart_group <regex over the changed paths> <label> <unit>...
+  local re="$1" label="$2"
+  shift 2
+  printf '%s\n' "$changed" | grep -qE "$re" || return 0
+  # sudo -n: the unit runs as mikael; /etc/sudoers.d/tooling-pull grants the agent-daemon command.
+  if out=$(sudo -n systemctl restart "$@" 2>&1); then
+    say "restarted $label ($re changed)"
+  else
+    echo "<3>$(date -Is) could NOT restart $label ($*) after deploying $after -- they keep running" \
+         "the pre-deploy code until someone does:" \
+         "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)" >&2
+    stale=1
+  fi
+}
+changed=$(git diff --name-only "$before" "$after")
+restart_group '^services/(agents|forward)/' "agent daemons" \
+  dispatcher.service telegram-poll.service discord-theming.service
+restart_group '^services/yoto/' "yoto daemons" yoto-web.service yoto-listen.service
+# Not here, deliberately. claude-login-web.service holds a pending interactive login in server-side
+# state (76be2349 exists so one survives a page reload), so a timer restarting it would discard a
+# login somebody is sitting at a browser waiting for, and its unit file already says to restart it
+# by hand. shopping-web.service has the same defect and is left for its own change: it would be safe
+# to restart (its queue is on disk, shopping-pending.json, not in memory) but services/shopping has
+# not changed since 2026-10-06, so the omission has cost nothing measurable. And a services/lib
+# change still restarts nothing at all, though every unit named here imports errlog.
+[ "$stale" = 0 ] || exit 1
