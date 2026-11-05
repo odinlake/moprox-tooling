@@ -1,0 +1,10 @@
+# Every 5 minutes. An idle run is one Gmail list call; claude -p runs only for a new Dexters email.
+[Unit]
+Description=dexwatch: check for new Dexters emails
+
+[Timer]
+OnCalendar=*:2/5 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
