@@ -282,9 +282,31 @@ def per_set(r):
     panel's two tables render a rep count in the same column and the same face as a measured one.
     Giving it the `.est` treatment index.html already gives an assumed LOAD is the other half, and
     it is a change to a different file; until it has one, that row stays out rather than being
-    published as if it had been counted."""
+    published as if it had been counted.
+
+    `kg` is the SAME shape on the load axis, and it arrived on 2026-11-04: a first barbell bench
+    logged `"sets": 3, "reps": 10, "kg": [40, 45, 45]` — one load per set, the top two sets taken
+    after set 1 left reps in reserve. One row of 203, and it exited this module 1 for the whole
+    corpus (`float()` on a list, out of volume() through build()), so update.py's non-fatal wrapper
+    went on serving a strength.json stamped 366 s BEFORE it: the panel froze with no outward sign,
+    for the second time, on the second field. Resolved here rather than guarded at the readers for a
+    measured reason — guarding volume() alone revives the feed TODAY and re-kills it the next time
+    that movement is logged with a scalar load, because build()'s `best` compares `(kg, reps)`
+    tuples and a one-row movement never reaches the comparison. The list is the measurement, so it
+    says how many sets there were by its own length when the row did not."""
     if r.get("clean_reps") is not None:
         r = dict(r, reps=r["clean_reps"])
+    kg = r.get("kg")
+    if isinstance(kg, list):
+        loads = [float(x) for x in kg if x is not None]
+        if loads:
+            # `kg` becomes the TOP set, which is what "best" compares and the same reading `reps`
+            # gets below; the list stays as `kg_sets`, which is what volume() needs to price it.
+            r = dict(r, kg_sets=[int(x) if x == int(x) else x for x in loads],
+                     kg=int(max(loads)) if max(loads) == int(max(loads)) else max(loads),
+                     sets=r.get("sets") or len(loads))
+        else:
+            r = dict(r, kg=None)
     reps = r.get("reps")
     if not isinstance(reps, list):
         return r
@@ -357,10 +379,30 @@ def volume(r):
     """sets x reps x kg, or None. Weighted movements only — an index, not kilos moved: 30 kg of
     pulldown is not 30 kg of squat, so it is comparable against itself over time and nothing else.
     Bodyweight and timed movements deliberately return None rather than a zero that would drag a
-    session total down and look like a bad week."""
+    session total down and look like a bad week.
+
+    A `kg_sets` row is priced SET BY SET, at the load each set was actually done at. That is not a
+    new reading, it is the one this function already commits to one line down: a `reps_sets` row is
+    "the reps actually done, not sets x top set", i.e. sum over sets of reps_i x kg, and the only
+    generalisation of it that holds when kg varies too is sum over sets of reps_i x kg_i. All three
+    branches are the same formula; the two below are kept verbatim because for a row with no list
+    they are that formula already, and leaving the arithmetic untouched is how the 202 rows that
+    predate this keep their published volume to the digit. On the 2026-11-04 bench row the
+    difference is 1300.0 against the 1350.0 that sets x reps x TOP set would publish — 3.8% of that
+    session, and it would be the only figure on the panel asserting a load nobody lifted on set 1.
+
+    Lists of unequal length are a row that contradicts itself about how many sets it holds, and that
+    is not a volume this function can guess: it returns None, so the row keeps its load and its
+    place on the panel and the session's total says `has_unweighted` instead of a made-up number."""
     kg = load(r)
     if kg is None or r.get("reps") is None or r.get("sets") is None:
         return None
+    ks = r.get("kg_sets")
+    if ks:                                  # per-set loads: each set at the load it was done at
+        reps = r.get("reps_sets") or [r["reps"]] * len(ks)
+        if len(reps) != len(ks):
+            return None
+        return round(sum(float(n) * float(k) for n, k in zip(reps, ks)), 1)
     if r.get("reps_sets"):                  # uneven sets: the reps actually done, not sets x top set
         return round(sum(r["reps_sets"]) * float(kg), 1)
     return round(float(r["sets"]) * float(r["reps"]) * float(kg), 1)
@@ -556,7 +598,7 @@ def build():
         v = volume(r)
         src = kg_src(r)
         e = {"ex": r["ex"]}
-        for k in ("sets", "reps", "reps_sets", "kg", "secs", "rir", "note"):
+        for k in ("sets", "reps", "reps_sets", "kg", "kg_sets", "secs", "rir", "note"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 e[k] = val
@@ -574,7 +616,7 @@ def build():
             s["sets"] += int(r["sets"])
 
         m = {"date": d}
-        for k in ("sets", "reps", "reps_sets", "kg", "secs", "rir"):
+        for k in ("sets", "reps", "reps_sets", "kg", "kg_sets", "secs", "rir"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 m[k] = val
