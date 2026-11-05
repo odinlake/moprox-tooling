@@ -1,0 +1,17 @@
+# dexwatch: Dexters viewing emails -> "Onsjö shared" calendar + #valet notes on Telegram.
+# Source of truth: moprox-tooling/services/dexwatch. Oneshot, driven by dexwatch.timer.
+[Unit]
+Description=dexwatch: sync Dexters viewing emails to the shared calendar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+WorkingDirectory=/home/mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+# The docindex venv has google-api-python-client (the system python does not), as for calalert.
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/dexwatch/dexwatch.py
+TimeoutStartSec=20min
