@@ -389,8 +389,19 @@ def main():
             # newest id is retried on the next run and --backfill reaches any other.
             errlog.err(f"technogym: idCr {idcr} NOT stored — cardio detail unreadable, so an "
                        f"empty session cannot be distinguished from a failed fetch", exc)
-        except Exception as exc:  # keep going; a bad session shouldn't abort the run
-            print(f"  ! idCr={idcr} failed: {exc}", flush=True)
+        except Exception as exc:
+            # Keep going — one bad session must not abort the run — but say so at err level. This
+            # branch has the same permanent cost as the Indeterminate one above (the record is not
+            # written, idCr stays out of `seen`, and the walk resumes at max(seen)+1, so only the
+            # NEWEST failed id is retried and anything below it needs --backfill), and until now it
+            # was the only one that reported it with a bare print: journald files an un-prefixed
+            # stdout line at PRIORITY=6, so the session vanished with nothing at err to say so —
+            # the shape fetch_cardio's docstring names. The reason is the actionable half, so the
+            # exception goes in the record. polar_fetch's per-exercise handler is the sibling that
+            # already does this.
+            errlog.err(f"technogym: idCr {idcr} NOT stored — the session could not be processed, "
+                       f"so only the newest failed id is retried next run (--backfill reaches "
+                       f"any other)", exc)
         time.sleep(POLITE_S)
 
     SEEN.write_text(json.dumps(sorted(seen)))
