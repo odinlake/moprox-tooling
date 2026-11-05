@@ -21,8 +21,10 @@ Each run (dexwatch.timer, every 5 min):
      valet, which has the mail and calendar tools).
 
 A message is marked handled only once the calendar change succeeded. A calendar failure retries next
-run; creating twice is prevented by the same-start guard in apply(). If the agent cannot answer
-three times running, the message is posted raw so it is never silently dropped.
+run; creating twice is prevented by the same-start guard in apply(). Neither retry is unbounded: a
+run re-asks the agent from scratch, so if the agent cannot answer, OR the calendar change cannot be
+made, MAX_FAILS times running, the message is posted raw and marked handled rather than re-spending
+one `claude -p` every run forever. Both give-up paths share the one per-message failure counter.
 
 Auth: the service account at ~/.config/claude-dev/google-sa.json with domain-wide delegation,
 impersonating the operator: gmail.readonly and calendar.events (both already authorized in DWD).
@@ -398,9 +400,20 @@ def run_once():
             continue
         try:
             done = apply(cal, v, evs, m, now)
-        except Exception as e:   # noqa: BLE001 — leave unseen; the same-start guard makes a retry safe
-            errlog.err("dexwatch: calendar change failed for %r, will retry" % m["subject"], e)
-            save(st)
+        except Exception as e:   # noqa: BLE001 — retried, then surfaced; the same-start guard makes a retry safe
+            n = st["fails"][m["id"]] = st["fails"].get(m["id"], 0) + 1
+            if n < MAX_FAILS:
+                errlog.err("dexwatch: calendar change failed (%d/%d) for %r, will retry"
+                           % (n, MAX_FAILS, m["subject"]), e)
+                save(st)
+                continue
+            errlog.err("dexwatch: calendar change failed %d times for %r, posting it raw"
+                       % (n, m["subject"]), e)
+            st["seen"][m["id"]] = m["ts"]
+            st["fails"].pop(m["id"], None)
+            save(st)   # BEFORE the post: a Telegram failure must not re-spend the agent next run
+            tg.send("Dexters: I could not put this in the calendar, please check it: \"%s\" from %s\n%s"
+                    % (m["subject"], m["from"], m["link"]), agent=AGENT)
             continue
         text = note(v, done, m)
         print("dexwatch: %s | viewing=%s | %s | %s" % (m["subject"], v["viewing_related"], done, text))
