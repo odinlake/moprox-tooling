@@ -487,8 +487,19 @@ async function loadStrength(){
   const nr = e => e.reps_sets ? e.reps_sets.join("+")
     : e.reps!=null ? `${e.reps}`
     : `<span class="est" title="rep count not recorded in the log">?</span>`;
+  // Third shape, and the one that arrived last: the LOAD itself per set. The log's first barbell
+  // bench (2026-11-04) is `"sets": 3, "reps": 10, "kg": [40, 45, 45]` — set 1 left reps in reserve,
+  // sets 2 and 3 went up — and strength.py keeps the list as `kg_sets` with `kg` set to the TOP set,
+  // exactly as it does for reps. Rendering `@ ${e.kg} kg` then asserts every set was at the top
+  // load, which is the same defect the `reps_sets` reader above exists to prevent, on the other
+  // axis. It is not cosmetic, because volume() prices this row SET BY SET and publishes 1300.0 for
+  // it: the dose read `3×10 @ 45 kg`, which multiplies out to 1350, beside a volume cell saying
+  // 1300. One of the two numbers on screen had to be wrong and it was this one. The list replaces
+  // the single load rather than being summarised into it; `kg` is untouched and still carries the
+  // top set to the movement `best` cell, where "45 kg × 10" is what the log says.
+  const nk = e => e.kg_sets ? `${e.kg_sets.join("/")} kg` : `${e.kg} kg`;
   const dose = e => e.secs!=null ? `${nx(e)}${e.secs}s`
-                  : (e.kg!=null ? `${nx(e)}${nr(e)} @ ${asm(`${e.kg} kg`,e)}` : `${nx(e)}${nr(e)}`);
+                  : (e.kg!=null ? `${nx(e)}${nr(e)} @ ${asm(nk(e),e)}` : `${nx(e)}${nr(e)}`);
   // Per movement: current best + a bare progression line. One session in, the line is a dot; that is
   // honest, and it fills in without any change here.
   const spark = m => {
