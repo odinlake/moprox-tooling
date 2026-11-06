@@ -138,6 +138,71 @@ git reset -q --hard "origin/$BRANCH"
 git clean -qfd
 say "deployed $before -> $after ($(git log -1 --format=%s | cut -c1-70))"
 
+# A deployed unit FILE is not a deployed unit. The restarts below make a CODE change reach
+# production, but nothing here ever copied a changed .service/.timer into /etc/systemd/system or
+# reloaded systemd -- this file contained neither that path nor `daemon-reload` -- so a unit-file
+# change landed in the repo and stopped there. Measured in
+# moprox-memory/c897-dst-fix-has-no-deployment-path: of the 15 .timer files 95928c8a touched (it
+# put ` UTC` on every OnCalendar, the fix for the fall-back hour that cost 92 invocations across 12
+# claude-dev units), 12 are named in the whole tree ONLY by a comment telling a human to copy them;
+# 3 have an install.sh line that executes. A loop agent landing from claude-loop has no hand on
+# claude-dev, so "copy it yourself" is not a deployment path, it is a deployment stop.
+#
+# ONLY FILES THAT ARE ALREADY INSTALLED, and only when the bytes differ. That is what makes this
+# host-correct with no host list: the repo's unit files serve several boxes, and which of them
+# belong here is already recorded by which of them the operator installed. Never create, never
+# delete -- a unit absent from $UNIT_DIR is absent on purpose, and a unit deleted from the repo is
+# a decision a five-minute timer must not act on. Drop-ins (<unit>.d/*.conf), where host-specific
+# tuning lives, are untouched because nothing here writes a directory.
+#
+# SKIP TEMPLATES. services/audit/git-trace-ship.service carries an @AUDIT@ placeholder that
+# install-agent-box.sh renders with sed; copying the raw file over the rendered unit would break
+# it. A unit file with an @PLACEHOLDER@ belongs to its own installer, not to this one.
+#
+# REFUSE ON A BASENAME COLLISION rather than guess. systemd's namespace is flat, so two repo files
+# with one basename have one destination and the loop below would install both, last writer
+# winning. There are none today; if one appears, which file belongs in $UNIT_DIR is not a question
+# this script may answer by file order.
+#
+# AND A REFUSED sudo IS REPORTED BUT NOT FATAL -- deliberately, the same argument the POISONED
+# branch above makes. Drift does not clear by itself, so `exit 1` here would make the unit that
+# deploys ALL code fail on every subsequent deploy forever, converting a quiet schedule drift into
+# a permanent hard failure of the deployer. Say it at err with the exact command instead.
+UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
+unit_files=$(git ls-files -- '*.service' '*.timer' '*.path' '*.socket' '*.target')
+dups=$(printf '%s\n' "$unit_files" | sed 's#.*/##' | sort | uniq -d | tr '\n' ' ')
+if [ -n "${dups// /}" ]; then
+  echo "<3>$(date -Is) unit sync SKIPPED after deploying $after: repo unit files share a basename" \
+       "($dups) and /etc/systemd/system has one slot per name, so which one belongs in $UNIT_DIR" \
+       "is not a question this script may guess. Rename one, or install it by hand." >&2
+else
+  installed=0
+  while IFS= read -r src; do
+    dst="$UNIT_DIR/${src##*/}"
+    if [ ! -f "$dst" ]; then continue; fi                 # not installed on this host: not ours
+    if grep -qE '@[A-Z_]+@' "$src"; then continue; fi     # a template; its own installer renders it
+    if cmp -s "$src" "$dst"; then continue; fi
+    if out=$(sudo -n install -o root -g root -m0644 "$src" "$dst" 2>&1); then
+      say "installed $dst from $src"
+      installed=$(( installed + 1 ))
+    else
+      echo "<3>$(date -Is) could NOT install $src -> $dst after deploying $after -- systemd keeps" \
+           "the pre-deploy unit file until someone runs: sudo install -o root -g root -m0644" \
+           "$PROD/$src $dst && sudo systemctl daemon-reload --" \
+           "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)" >&2
+    fi
+  done <<< "$unit_files"
+  if [ "$installed" -gt 0 ]; then
+    if out=$(sudo -n systemctl daemon-reload 2>&1); then
+      say "daemon-reload after installing $installed unit file(s)"
+    else
+      echo "<3>$(date -Is) installed $installed unit file(s) but daemon-reload FAILED -- systemd" \
+           "still runs the definitions they replaced. Run: sudo systemctl daemon-reload --" \
+           "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)" >&2
+    fi
+  fi
+fi
+
 # A unit whose code changed keeps running the old module until it restarts (the stale-daemon trap
 # that once cost a false 'valet memory is blocked' report). Restart the long-lived importers only.
 #
