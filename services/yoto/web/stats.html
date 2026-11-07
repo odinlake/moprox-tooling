@@ -274,6 +274,24 @@ td .al { color: var(--muted); font-size: 12px; }
   var SHADE = ["--daycell", "--dayguard", "--nightcell", "--nightguard"];
   var SHADE_NAME = ["day mode", "day mode, sleep-timer guard on", "night mode", "night mode, sleep-timer guard on"];
   function shadeOf(n, k) { return (isNight(n, k) ? 2 : 0) + (isGuard(n, k) ? 1 : 0); }
+  // A row is ten wall-clock minutes, which on the two clock-change days is not ten minutes of
+  // real time: six rows of 2026-10-25 hold 1200 s and six of 2027-03-28 hold 0 (playlog.py
+  // _day_cap, which publishes the day's real capacity as `cap`). Saturating the colour on the
+  // constant draws a half-full doubled row as a full ordinary one.
+  var SLOT_S = 600;                    // playlog.SLOT; the denominator before `cap` existed
+  // The weekday and All columns average `slots` over their days, so their denominator is the
+  // same average of those days' capacity. One day without `cap` makes the whole column
+  // unweightable: /opt is reset every five minutes but a browser reloads the page on its own,
+  // so this JS does meet an older playlog, and then every column must draw as it did before.
+  function capAvg(list) {
+    var out = new Array(144).fill(0);
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].cap) return null;
+      list[i].cap.forEach(function (v, k) { out[k] += v; });
+    }
+    return list.length ? out.map(function (v) { return v / list.length; }) : null;
+  }
+  function capOf(c, k) { return c.cap && c.cap[k] > 0 ? c.cap[k] : SLOT_S; }
   function heatmap(nights) {
     // Seven columns, today's weekday on the RIGHT (operator, 2026-10-02). For the 7-day window each
     // column is one real day; for longer windows each is the AVERAGE of that weekday's recorded
@@ -286,7 +304,7 @@ td .al { color: var(--muted); font-size: 12px; }
         var d = new Date(nt.date + "T12:00:00");
         cols.push({ day: d.getDate(), top: d.toLocaleDateString(undefined, { weekday: "short" }), sub: d.toLocaleDateString(undefined, { day: "numeric", month: "short" }),
                     name: d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) + "",
-                    slots: nt.recorded ? nt.slots : null, mode: nt, n: nt.recorded ? 1 : 0, avg: false, date: nt.date });
+                    slots: nt.recorded ? nt.slots : null, cap: nt.cap, mode: nt, n: nt.recorded ? 1 : 0, avg: false, date: nt.date });
       });
     } else {
       var last = nights[nights.length - 1], by = {};
@@ -300,7 +318,8 @@ td .al { color: var(--muted); font-size: 12px; }
         var changed = rec.some(function (x) { return x.night_time !== newest.night_time || x.day_time !== newest.day_time; });
         var wd = new Date(newest.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
         cols.push({ top: wd, sub: rec.length ? "avg of " + rec.length : "none yet", name: wd + " average of " + rec.length,
-                    slots: rec.length ? sum.map(function (v) { return v / rec.length; }) : null, mode: newest, n: rec.length, avg: true, changed: changed,
+                    slots: rec.length ? sum.map(function (v) { return v / rec.length; }) : null,
+                    cap: capAvg(rec), mode: newest, n: rec.length, avg: true, changed: changed,
                     date: newest.date });
       }
     }
@@ -313,7 +332,8 @@ td .al { color: var(--muted); font-size: 12px; }
       var all = new Array(144).fill(0);
       done.forEach(function (x) { x.slots.forEach(function (v, k) { all[k] += v; }); });
       cols.push({ top: "All", sub: done.length ? "avg of " + done.length : "none yet", name: "All days, average of " + done.length,
-                  slots: done.length ? all.map(function (v) { return v / done.length; }) : null, mode: nights[nights.length - 1],
+                  slots: done.length ? all.map(function (v) { return v / done.length; }) : null,
+                  cap: capAvg(done), mode: nights[nights.length - 1],
                   n: done.length, avg: true, all: true });
     }
     var avail = Math.max(260, $("main").clientWidth - 24 - 28);
@@ -350,7 +370,7 @@ td .al { color: var(--muted); font-size: 12px; }
       (c.slots || []).forEach(function (v, k) {
         if (v < 1) return;
         if (!c.all) peak[k] += v;
-        var f = ramp[Math.min(ramp.length - 1, Math.floor(Math.min(1, v / 600) * ramp.length))];
+        var f = ramp[Math.min(ramp.length - 1, Math.floor(Math.min(1, v / capOf(c, k)) * ramp.length))];
         var t = "<b>" + esc(c.name) + "</b><br>" + clockOf(k) + "–" + clockOf(k + 1) + " · " + dur(v) + (c.avg ? " on average" : " listened") +
                 (isNight(nt, k) ? " · night mode" : "");
         g += '<rect class="hit" x="' + (x + 1) + '" y="' + (top + k * rowH) + '" width="' + (colW - 2) + '" height="' + rowH +
