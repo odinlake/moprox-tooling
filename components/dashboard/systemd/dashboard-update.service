@@ -12,4 +12,20 @@ Wants=network-online.target
 Type=oneshot
 User=mikael
 Environment=HOME=/home/mikael
-ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/update.py
+# EXECUTE FROM THE PRODUCTION CHECKOUT. update.py runs every child out of its own tree
+# (REPO = Path(__file__).resolve().parents[1]; the training, strength, metrics and agent-stats
+# builders are all REPO/...), so this one path chooses which version of the whole feed builder
+# production runs. /opt/moprox-tooling is the tree tooling-pull.service resets --hard to
+# origin/main every 5 min; ~/projects/moprox-tooling is the shared DEVELOPMENT checkout, pulled
+# only when someone happens to -- see moprox-memory/prod-must-not-import-dev-tree, whose sweep
+# (0e21eb1) corrected 13 unit files and missed this one.
+#
+# It stopped being inert on 2026-11-07. The INSTALLED copy had been hand-corrected to /opt, so the
+# dev path sitting in this file cost nothing -- until 14dfe1c7 taught tooling-pull.sh to install
+# changed unit files, and the first deploy under it (f1c23f41, 08:55:40Z) copied this file over the
+# corrected one at 08:56:02Z. 2.5 min later dashboard-update was running a checkout 12 commits
+# behind and printed "strength feed failed: ... float() argument must be ... not 'list'" -- the
+# failure 3574f108 had fixed in main two days earlier. 10 runs did that, 9 of them between 13:10
+# and 14:00Z on 11-09, each one a day of logged sets not reaching the Strength panel. The repo file
+# is authoritative for the installed one now, so it has to be the production path.
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/update.py
