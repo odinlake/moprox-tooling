@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polar authorization code</title>
+<style>
+  body{font-family:-apple-system,system-ui,sans-serif;margin:0;padding:1.5rem;background:#0d1117;color:#e6edf3;line-height:1.55}
+  .card{max-width:540px;margin:1.5rem auto;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem}
+  h1{font-size:1.2rem;margin:0 0 .25rem}
+  .code{font-family:ui-monospace,Menlo,monospace;font-size:1.05rem;word-break:break-all;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:1rem;margin:1rem 0}
+  button{font-size:1rem;padding:.8rem 1.25rem;border-radius:8px;border:0;background:#238636;color:#fff;width:100%;cursor:pointer}
+  button:active{background:#2ea043}
+  .muted{color:#8b949e;font-size:.88rem}
+  .err{color:#f85149}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Polar authorization</h1>
+  <div id="out"><p class="muted">Reading the response…</p></div>
+</div>
+<script>
+  var p = new URLSearchParams(location.search);
+  var code = p.get("code"), err = p.get("error"), out = document.getElementById("out");
+  if (err) {
+    out.innerHTML = '<p class="err">Authorization failed: ' + err + '</p>'
+      + '<p class="muted">' + (p.get("error_description") || "") + '</p>';
+  } else if (code) {
+    out.innerHTML = '<p>Copy this code and paste it back to Claude:</p>'
+      + '<div class="code" id="code"></div>'
+      + '<button id="copy">Copy code</button>'
+      + '<p class="muted">Single-use, expires in a few minutes. Useless without the client secret '
+      + '(which never leaves claude-dev). Nothing on this page is sent anywhere &mdash; it only reads the URL.</p>';
+    document.getElementById("code").textContent = code;            // textContent: no HTML injection
+    var btn = document.getElementById("copy");
+    btn.onclick = function () {
+      navigator.clipboard.writeText(code).then(function () { btn.textContent = "Copied ✓"; });
+    };
+  } else {
+    out.innerHTML = '<p class="muted">No authorization code in the URL. Start the flow from the link Claude gave you.</p>';
+  }
+</script>
+</body>
+</html>
