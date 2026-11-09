@@ -367,10 +367,28 @@ def build(raw_dir, out_path, in_dir=None, ah_csv=None, fitbit_dir=None):
     # Gap-fillers only fill where a better source has NOTHING within 45 min. Priority: Polar > Fitbit
     # (real tracked workout, HR reconstructed) > Apple Health (inferred). Fitbit before AH so it wins.
     starts = [datetime.datetime.fromisoformat(s["date"]) for s in sessions]
+    spans = [(e, e + datetime.timedelta(minutes=s.get("dur_min") or 0)) for s, e in zip(sessions, starts)]
     for s in from_fitbit(fitbit_dir) + from_apple_health(ah_csv):
         st = datetime.datetime.fromisoformat(s["date"])
         if any(abs((st - e).total_seconds()) < 2700 for e in starts): continue
-        sessions.append(s); starts.append(st)
+        # Claim the proximity slot BEFORE the interval test below, exactly where the start-only rule
+        # used to claim it. That rule admitted this candidate, so it shielded every later candidate
+        # within 45 min of it; if an interval refusal removed it from `starts` too, the next candidate
+        # would stop being shielded and could be ADMITTED where it used to be rejected. Keeping the
+        # sequence of `starts` identical to the start-only rule's is what makes this an added refusal.
+        starts.append(st)
+        # Start separation does not imply disjointness: 115 of the 180 built sessions inside the belt
+        # lane's span are longer than 2700 s (longest 16746 s), so a candidate 2701 s after a long
+        # session's start can have no built start within tolerance and still lie wholly inside it.
+        # Measured in moprox-memory/gapfill-remedy-admits-eight-second-blocks §3.
+        en = st + datetime.timedelta(minutes=s.get("dur_min") or 0)
+        if any(st < b and a < en for a, b in spans):
+            # Expected filtering, not a fault, so it reports at info like the rest of build's summary
+            # -- but it reports, because a silently dropped candidate is indistinguishable from one
+            # the better source already had.
+            print(f"gapfill: drop {s.get('source', '?')} {s['date']} ({s.get('dur_min')} min) - inside a recorded session")
+            continue
+        sessions.append(s); spans.append((st, en))
     # The classifier is only calibrated for 2026+. Everything earlier is labelled "other" until it can
     # be reviewed by hand — the physiological types (easy/tempo/…) are not trusted pre-2026.
     for s in sessions:
