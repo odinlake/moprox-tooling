@@ -56,6 +56,7 @@ TZ = ZoneInfo("Europe/London")
 DURATION = datetime.timedelta(minutes=30)
 ADDRESS = "10 Croft Road, Wimbledon, London SW19 2NF"
 CANC = "(canc) "
+COLOR = "7"                      # Peacock (cyan): the least-used colour across the operator's calendars
 TAG = "dexwatch"                     # extendedProperties.private key on every event we create
 AGENT = "valet"
 MAX_FAILS = 3
@@ -286,6 +287,7 @@ def apply(cal, verdict, evs, msg, now, dry=False):
                       "location": ADDRESS, "description": body_for(a, msg),
                       "start": {"dateTime": st.isoformat(), "timeZone": "Europe/London"},
                       "end": {"dateTime": (st + DURATION).isoformat(), "timeZone": "Europe/London"},
+                      "colorId": COLOR,
                       "extendedProperties": {"private": {TAG: "viewing", "msg": msg["id"]}}}
                 if not dry:
                     ev = cal.events().insert(calendarId=CAL, body=ev).execute()
@@ -308,7 +310,7 @@ def apply(cal, verdict, evs, msg, now, dry=False):
             if local(ev["start"]["dateTime"]) == st and title == ev.get("summary"):
                 continue
             old = when(ev)
-            patch = {"summary": title,
+            patch = {"summary": title, "colorId": COLOR,
                      "start": {"dateTime": st.isoformat(), "timeZone": "Europe/London"},
                      "end": {"dateTime": (st + DURATION).isoformat(), "timeZone": "Europe/London"},
                      "description": (ev.get("description") or "") +

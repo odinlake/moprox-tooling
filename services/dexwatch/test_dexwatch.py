@@ -46,6 +46,7 @@ def test_create_is_30_min_uk_time_and_tagged():
     assert body["start"]["dateTime"] == "2026-11-07T14:30:00+00:00"
     assert body["end"]["dateTime"] == "2026-11-07T15:00:00+00:00"
     assert body["extendedProperties"]["private"]["dexwatch"] == "viewing"
+    assert body["colorId"] == "7"
     assert body["summary"] == "House viewing: Ms A (Dexters)"
     assert done == ["Calendar: added Sat 7 Nov 14:30, House viewing: Ms A (Dexters)"]
 
