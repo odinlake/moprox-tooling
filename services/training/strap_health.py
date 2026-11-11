@@ -68,7 +68,18 @@ def analyse(values, half=45, drop=25, floor=110):
         elif cur is not None:
             events.append(cur); cur = None
     if cur is not None: events.append(cur)
-    mid = [e for e in events if e[0] >= SETTLE_S]          # settling artifacts are not strap failure
+    # The settling guard is about WHICH SECONDS are artifacts, not which events, so it CLIPS an
+    # event to the post-settling part instead of discarding it whole. Keyed on the start index it
+    # scored the worst session in the record as clean: 2026-11-09 was 2619 of 2913 samples zero in
+    # one run [0, 2618], and because that run was already in progress at t=300 it was worth zero
+    # dropout seconds, `flagged()` was False and no STRAP HEALTH line was built — while the
+    # operator's own battery-changes.json said "FAILED AGAIN" on the same date. Clipping agrees
+    # with `zeros_mid`, which has always counted seconds (i >= SETTLE_S) rather than events: both
+    # now read 2319 s on that session. An event ending before SETTLE_S lies wholly inside the
+    # settling window and is still dropped, so the two 1 s pre-settling blips in the record
+    # (2026-08-04 at 114 s, 2026-09-21 at 79 s) stay unflagged and no session gains a flag.
+    # See moprox-memory/strap-onset-failure-discarded-whole.md.
+    mid = [[max(e[0], SETTLE_S)] + e[1:] for e in events if e[1] >= SETTLE_S]
     steady = hr[STEADY[0]:STEADY[1]]
     dz = [abs(steady[i] - steady[i - 1]) for i in range(1, len(steady)) if steady[i] and steady[i - 1]]
     return {"minutes": round(n / 60.0, 1),
