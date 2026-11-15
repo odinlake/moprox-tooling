@@ -1,0 +1,11 @@
+# 19:30 UK time daily. Not Persistent: a reminder replayed at boot the next morning is useless.
+# The script stops reminding after 2026-12-31 (operator asked "until end of this year").
+[Unit]
+Description=binremind: 19:30 bin reminder
+
+[Timer]
+OnCalendar=*-*-* 19:30:00 Europe/London
+Persistent=false
+
+[Install]
+WantedBy=timers.target

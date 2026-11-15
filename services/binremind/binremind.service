@@ -1,0 +1,15 @@
+# binremind: evening-before bin reminders from the "Bin calendar" to #valet on Telegram.
+# Source of truth: moprox-tooling/services/binremind. Oneshot, driven by binremind.timer.
+[Unit]
+Description=binremind: tell the operator which bins go out tomorrow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mikael
+WorkingDirectory=/home/mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mikael/docindex/venv/bin/python /opt/moprox-tooling/services/binremind/binremind.py
+TimeoutStartSec=5min
