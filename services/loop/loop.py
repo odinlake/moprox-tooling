@@ -1176,7 +1176,7 @@ def exercise_block(led, agent):
             + f"\nWrite {out} as a JSON list, one object per tool above: "
               '{"tool": "<exact name>", "ok": true|false|null, "note": "<what you did and saw, '
               'one or two sentences>"}. For each failure, also fix it or file it on the issue '
-              "board (file_issue, owner=dev when the source is out of your reach, never "
+              "board (file_issue: owner=dev when you can name the fix, else owner=planner; never "
               "owner=operator); never work around a broken tool and say nothing.")
 
 
@@ -1307,10 +1307,83 @@ def open_issues():
             + "\nAn issue with owner=operator is NOT yours to close: it needs a decision, a "
               "credential or a hand on a physical device. You may still do the part of it "
               "that is code. Say which part you did and what remains."
-              "\nWhen YOU file one: owner=operator is only for those three things, and every such "
-              "issue becomes a red line in the operator's weekly roundup. A code or config change "
-              "in a repo or on a host you cannot reach (webscout, mcp-google, logview, a unit that "
-              "needs a restart) is owner=dev: the dev sessions can reach all of them.")
+              "\nWhen YOU file one (pass by=<your agent name>): owner=dev for a fix you understand "
+              "in a repo or on a host you cannot reach (name the file and the change; the dev "
+              "agent reaches webscout, mcp-google, logview and every unit); owner=planner, the "
+              "default, for anything that needs judgement. Never owner=operator: only the planner "
+              "files to him, and the board re-routes anything else to the planner.")
+
+
+# --- the strike gate ---------------------------------------------------------
+# Three bad cycles in a row halt the agent. Until 2026-11-16 that was a latch with two faults:
+# nothing but a hand-edit of the ledger ended it, and EVERY timer wake-up repeated "HALTED" at err
+# level, so one event became 35 errors a week in the operator's roundup while the agents sat dead
+# for five days (2026-11-11..16; the cause, a RAM-backed /tmp filled with scratch, was external to
+# every cycle that took a strike). Now: said ONCE, to the planner's queue rather than to him, and a
+# single fresh cycle is tried every HALT_RETRY_H. A cause that has gone away ends the halt by
+# itself; one that has not costs a cycle per interval and says nothing more.
+HALT_RETRY_H = float(os.environ.get("LOOP_HALT_RETRY_H", 6))
+ISSUES_WRITE = os.environ.get("LOOP_ISSUES_WRITE", "http://logview.lan:8016/api/issues")
+
+
+def _iso(t):
+    return time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(float(t)))
+
+
+def halt_gate(led, now):
+    """-> "run" | "first" | "quiet" | "probe". Mutates `led` for first/probe; the caller saves."""
+    if led.get("strikes", 0) < MAX_STRIKES:
+        return "run"
+    if not led.get("halted_at"):
+        led["halted_at"] = now
+        return "first"
+    if now - float(led["halted_at"]) < HALT_RETRY_H * 3600:
+        return "quiet"
+    led["strikes"] = MAX_STRIKES - 1              # one more bad cycle halts again, silently
+    led["inflight"] = None                        # fresh: never the cycle that got it halted
+    return "probe"
+
+
+def _halt_issue(agent, led, note=""):
+    """File (led given) or annotate the halt on the planner's queue. Returns True if it landed."""
+    import urllib.request
+    unit = f"claude-loop/loop@{agent}.service"
+    try:
+        if led is None:
+            with urllib.request.urlopen(ISSUES_URL, timeout=10) as r:
+                hit = [i for i in json.loads(r.read().decode()).get("issues") or []
+                       if i.get("incident") == unit and i.get("by") == "loop"]
+            if not hit:
+                return True
+            body = {"id": hit[0]["id"], "note": note, "by": "loop"}
+        else:
+            body = {"title": f"loop@{agent} halted after {led.get('strikes')} bad cycles in a row: "
+                             "find what made them fail",
+                    "body": f"Halted at {_iso(led['halted_at'])}, at cycle {led.get('cycle')}. "
+                            f"Last unfinished work: {led.get('inflight') or 'none'}.\n"
+                            f"It tries one fresh cycle every {HALT_RETRY_H:g}h and ends the halt "
+                            "itself if that cycle runs clean, so this is about the CAUSE: read "
+                            f"`journalctl -u loop@{agent}` on claude-loop for the three cycles "
+                            "before the halt, and check the host (memory, /tmp, credentials).",
+                    "owner": "planner", "urgent": True, "incident": unit, "by": "loop"}
+        req = urllib.request.Request(ISSUES_WRITE, json.dumps(body).encode(),
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            out = json.loads(r.read().decode())
+        if out.get("error"):
+            raise RuntimeError(out["error"])
+        return True
+    except Exception as exc:
+        err(f"loop[{agent}]: could not write the halt to the issue board", exc)
+        return False
+
+
+def report_halt(led, agent):
+    msg = (f"HALTED after {led['strikes']} consecutive bad cycles. One fresh cycle is tried every "
+           f"{HALT_RETRY_H:g}h; this is reported once.")
+    say(msg, 3, agent)
+    if not _halt_issue(agent, led):
+        notify.send(msg, agent)                   # the board is down: the firehose is the fallback
 
 
 def recent_findings(led, n=30):
@@ -2028,12 +2101,17 @@ def main():
     if dead:
         return creds_skip(led, f"credentials are dead ({why})", agent)
 
-    if led.get("strikes", 0) >= MAX_STRIKES:
-        msg = (f"HALTED after {led['strikes']} consecutive bad cycles. Nothing will run until "
-               f"'strikes' is reset in {LEDGER}.")
-        say(msg, 3, agent)
-        notify.send(msg, agent)
+    gate = halt_gate(led, time.time())
+    if gate == "first":
+        report_halt(led, agent)
+        save_ledger(led)
         return 0
+    if gate == "quiet":
+        say(f"still halted since {_iso(led['halted_at'])}; one fresh cycle is tried every "
+            f"{HALT_RETRY_H:g}h (reported once, on the issue board)", 6, agent)
+        return 0
+    if gate == "probe":
+        say(f"halted since {_iso(led['halted_at'])}: trying one fresh cycle", 5, agent)
 
     cap = float(conf.get("budget_cap_usd") or BUDGET_CAP)
     spent = spent_recently(BUDGET_H, agent)
@@ -2129,7 +2207,12 @@ def main():
 
     if outcome != "ok":
         led["strikes"] = led.get("strikes", 0) + 1
-        led["inflight"] = inflight or f"cycle {cyc} ({outcome})"
+        # Resume a bad cycle ONCE. `inflight or ...` kept the same label for ever, so one cycle
+        # that could not finish was resumed until it had burned all three strikes by itself:
+        # analyst 946 -> 947, 948 and burndown 237 -> 238, 239 on 2026-11-11, both halted for 5 days.
+        led["inflight"] = None if inflight else f"cycle {cyc} ({outcome})"
+        if led.get("halted_at"):
+            led["halted_at"] = time.time()        # a failed probe: wait a full interval again
         save_ledger(led)
         say(f"✗ cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", 4, agent)
         notify.send(f"cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", agent)
@@ -2225,6 +2308,11 @@ def main():
     # A cycle that produced nothing is not a failure, but a run of them means back off.
     led["strikes"] = 0 if (accepted or rejected or disputed) else led.get("strikes", 0)
     led["inflight"] = None
+    if led.pop("halted_at", None):
+        led["strikes"] = 0                        # the probe cycle ran clean: the halt is over
+        say("the halt is over: a fresh cycle finished normally", 5, agent)
+        _halt_issue(agent, None, note="A fresh cycle finished normally; the agent runs again. "
+                                      "Close this unless the cause still needs a fix.")
     retire_and_say(led, cyc, agent)
     led["tried"] = led.get("tried", [])[-200:]
     led["accepted"] = led.get("accepted", [])[-200:]

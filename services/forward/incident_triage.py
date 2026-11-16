@@ -12,10 +12,10 @@ Each run (incident-triage.timer, hourly):
   1. reads the incident queue (14 d, acked included) and picks the keys not yet in the ledger,
      plus any whose incident has RECURRED since the verdict (at most one re-look per RECHECK_H);
   2. hands up to BATCH of them to one `claude -p` triage run (Max subscription, logview MCP only),
-     which finds a real example line, assigns a cause-category, and acks noise / files issues for
-     the burndown agent / files operator issues itself;
-  3. records each verdict in the ledger, and sends the agent's `telegram` text for the rare
-     `operator` item straight away, as #watchdog.
+     which finds a real example line, assigns a cause-category, and acks noise / files issues on
+     the dev or planner queue (services/queue); what may need the operator goes to the planner
+     as urgent, never to him directly;
+  3. records each verdict in the ledger.
 
 The weekly roundup in incident_digest.py is built from this ledger: categories, counts, examples.
 
@@ -208,8 +208,9 @@ def apply(led, batch, items, now):
                  example=led["keys"][k]["example"] or c.get("example", ""), last=now)
         if it.get("tier") in TIERS:
             c["tier"] = it["tier"]
-        if disp == "operator" and (it.get("telegram") or "").strip():
-            msgs.append(it["telegram"].strip())
+        # Triage no longer writes to the operator (2026-11-16): an `operator` verdict is an urgent
+        # item on the planner's queue, and the planner alone decides what reaches him. A `telegram`
+        # an older persona still returns is dropped here, deliberately.
     unanswered = sorted(k for k in given - answered if k in led["keys"])
     for k in unanswered:
         led["keys"][k]["at"] = now                  # cooldown holds; the verdict is left alone

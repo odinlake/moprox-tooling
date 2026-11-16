@@ -1,0 +1,24 @@
+{
+ "_doc": "The estate's two work-queue agents (operator, 2026-11-16). A queue is an issue-board owner. Model and effort are DATA: change them here, or override per host in ~/.config/moprox/queues.json (same shape, merged over this file), and the next run uses them. Empty model/effort = the CLI default.",
+ "planner": {
+  "agent": "planner",
+  "model": "fable",
+  "effort": "high",
+  "timeout_s": 2400,
+  "batch": 12,
+  "max_runs_per_day": 3,
+  "min_gap_h": 6,
+  "urgent_min_gap_h": 0.5,
+  "urgent_max_runs_per_day": 8,
+  "max_telegram": 2
+ },
+ "dev": {
+  "agent": "devq",
+  "model": "",
+  "effort": "",
+  "timeout_s": 2700,
+  "max_runs_per_day": 16,
+  "stale_days": 5,
+  "max_failures": 2
+ }
+}

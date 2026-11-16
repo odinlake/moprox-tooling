@@ -29,6 +29,10 @@ AGENTS = {
     # incident triage (operator, 2026-10-28): reads every new incident so he never has to. Called
     # only by services/forward/incident_triage.py, never from Telegram.
     "triage":  HOME / "projects/private-data/agents/triage",
+    # The two work-queue agents (operator, 2026-11-16), called only by services/queue/queue_run.py.
+    # Their model and effort are NOT here: queue_run passes them from queues.json as `extra`.
+    "planner": HOME / "projects/private-data/agents/planner",
+    "devq":    HOME / "projects/private-data/agents/devq",
 }
 REPOS = [HOME / "projects/moprox-homelab", HOME / "projects/moprox-tooling", HOME / "projects/private-data"]
 BOOK  = HOME / ".local/share/moprox"                          # the book of works lives here
@@ -81,7 +85,23 @@ DOCINDEX_DL = HOME / "docindex/dl"                       # where docwatch downlo
 CURATE_DENY = ",".join("Bash(%s)" % p for p in (
     "sudo:*", "rm -rf:*", "git push:*", "git reset --hard:*", "reboot:*", "shutdown:*",
     "dd:*", "mkfs:*", "gh:*"))
+# devq works the dev queue unattended and has to do what a dev session does: push to main, deploy
+# with sudo, ssh to a guest. So it gets everything except the acts that cannot be taken back.
+DEVQ_DENY = ",".join("Bash(%s)" % p for p in (
+    "git push --force:*", "git push -f:*", "git reset --hard:*", "git clean:*",
+    "rm -rf /:*", "rm -rf ~:*", "sudo rm -rf:*", "sudo git:*",
+    "reboot:*", "shutdown:*", "sudo reboot:*", "sudo shutdown:*", "dd:*", "mkfs:*",
+    "gh repo delete:*", "gh repo archive:*"))
 AGENT_FLAGS = {
+    # planner: reads everything, changes nothing but the issue board. Bash is for looking (git log,
+    # journalctl, ssh to read a remote unit); edits, pushes, sudo and rm are denied at the tool layer.
+    "planner": ["--allowedTools", "Bash,Read,Grep,Glob,mcp__logview",
+                "--disallowedTools", DEV_DENY,
+                "--mcp-config", str(AGENTS["planner"] / "mcp.json"), "--strict-mcp-config",
+                "--add-dir", str(REPOS[0]), str(REPOS[1]), str(REPOS[2]), str(SHARED_MEM)],  # variadic: keep last
+    "devq": ["--dangerously-skip-permissions",
+             "--disallowedTools", DEVQ_DENY,
+             "--mcp-config", str(AGENTS["devq"] / "mcp.json"), "--strict-mcp-config"],
     # dev already has broad Bash (can run convo directly); the rest get the convo helper as their one
     # way to read/search the shared conversation on demand.
     "dev": ["--permission-mode", "acceptEdits",
@@ -209,13 +229,15 @@ def _diagnose(out, err):
     return " | ".join(bits)
 
 
-def run_agent(agent, prompt, timeout=600):
+def run_agent(agent, prompt, timeout=600, extra=None):
+    """`extra`: CLI flags a caller decides per run (the queue agents' --model/--effort). They go
+    BEFORE the agent's own flags, because those end in a variadic --add-dir."""
     _pre_run(agent)
     cwd = AGENTS[agent]
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
     env["PATH"] = "%s:%s" % (LOCAL_BIN, env.get("PATH", "/usr/bin:/bin"))   # claude shells out to node
-    cmd = [CLAUDE, "-p", prompt, "--output-format", "json"] + AGENT_FLAGS.get(agent, [])
+    cmd = [CLAUDE, "-p", prompt, "--output-format", "json"] + list(extra or []) + AGENT_FLAGS.get(agent, [])
     try:
         r = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

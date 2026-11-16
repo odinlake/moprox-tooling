@@ -1,0 +1,14 @@
+# the planner works its issue-board queue (gated: a few runs a day, urgent jumps). Triggered by queue-planner.timer; an empty queue costs one HTTP GET.
+# Model/effort/caps: services/queue/queues.json. Install to /etc/systemd/system/.
+[Unit]
+Description=moprox work queue: planner
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/mikael/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/queue/queue_run.py planner
+TimeoutStartSec=45min

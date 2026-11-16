@@ -1,0 +1,7 @@
+[Unit]
+Description=Wake the planner work queue
+[Timer]
+OnCalendar=*-*-* *:20:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

@@ -336,9 +336,23 @@ def weekly(now):
             lines.append(f"{dot} {label}: {text}")
     if not rows:
         lines.append("Nothing logged. (Sent so a silent week stays meaningful.)")
-    agents = len(iss) - len(mine)
-    if agents:
-        lines.append(f"\n{agents} issue(s) with the agents: mo.lan/issues")
+    # The work queues (services/queue), one line: what matters is whether they drain. The oldest
+    # dev item is bounded by queue_run's staleness rule, so a growing "oldest" on the PLANNER
+    # queue is the number that says the pipeline is stuck.
+    def q(owner):
+        rows = [i for i in iss if (i.get("owner") or "") == owner]
+        if not rows:
+            return f"{owner} 0"
+        from datetime import datetime
+        def t(i):
+            try:
+                return datetime.fromisoformat(i.get("owner_since") or i.get("updated") or i.get("created")).timestamp()
+            except (TypeError, ValueError):
+                return now
+        return f"{owner} {len(rows)} (oldest {(now - min(t(i) for i in rows)) / 86400:.0f} d)"
+    other = len([i for i in iss if (i.get("owner") or "") not in ("operator", "planner", "dev")])
+    lines.append(f"\nQueues: you {len(mine)}, {q('planner')}, {q('dev')}"
+                 + (f", other agents {other}" if other else "") + ". mo.lan/issues")
     return lines
 
 
