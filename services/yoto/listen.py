@@ -12,7 +12,7 @@ apart from one events + status report request per connection, so the log starts 
 
 Every player on the account is recorded (2026-10-23, when the travel Mini joined): the main one
 (YOTO_DEVICE_ID) to listen.jsonl as before, each other to listen-<deviceId>.jsonl. Only the main
-player gets brightguard, freshstart and nightvolume; they change its settings, and nobody asked for that on the
+player gets brightguard, freshstart, nightvolume and idlestart; they change its settings, and nobody asked for that on the
 others. A player that is off just leaves its session idle until it comes back.
 
 Each line: {"t": arrival unix time (ms precision), "topic": "events|status|response|...", "m": payload}.
@@ -29,6 +29,7 @@ import yoto
 import brightguard
 import freshstart
 import nightvolume
+import idlestart
 
 LOG = Path(os.environ.get("YOTO_LISTEN_LOG", str(Path.home() / ".local/share/moprox/yoto/listen.jsonl")))
 SESSION = 45 * 60          # reconnect with a fresh access token well inside its lifetime
@@ -48,6 +49,8 @@ GUARD = brightguard.Guard()
 FRESH = freshstart.Guard()
 NIGHTVOL = nightvolume.Guard()
 NIGHTVOL.seed(LOG)
+IDLE = idlestart.Guard()
+IDLE.seed(LOG)
 
 
 def session(tok, dev, log=LOG, guards=True):
@@ -86,6 +89,10 @@ def session(tok, dev, log=LOG, guards=True):
             NIGHTVOL.feed(topic, m, time.time())
         except Exception as e:
             print("<3>nightvolume: %s: %s" % (type(e).__name__, e), flush=True)
+        try:                                 # nor the Radioapan idle restart
+            IDLE.feed(topic, m, time.time())
+        except Exception as e:
+            print("<3>idlestart: %s: %s" % (type(e).__name__, e), flush=True)
 
     c.on_connect = on_connect
     c.on_message = on_message
