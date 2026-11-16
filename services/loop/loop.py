@@ -1176,7 +1176,8 @@ def exercise_block(led, agent):
             + f"\nWrite {out} as a JSON list, one object per tool above: "
               '{"tool": "<exact name>", "ok": true|false|null, "note": "<what you did and saw, '
               'one or two sentences>"}. For each failure, also fix it or file it on the issue '
-              "board (file_issue); never work around a broken tool and say nothing.")
+              "board (file_issue, owner=dev when the source is out of your reach, never "
+              "owner=operator); never work around a broken tool and say nothing.")
 
 
 def record_exercise(led, cyc, agent):
@@ -1304,8 +1305,12 @@ def open_issues():
     return ("\n\nOPEN ISSUES (mo.lan/issues, filed by a human or an agent, and closed only "
             "deliberately):\n" + "\n".join(out)
             + "\nAn issue with owner=operator is NOT yours to close: it needs a decision, a "
-              "credential or a hand on a machine you cannot reach. You may still do the part of it "
-              "that is code. Say which part you did and what remains.")
+              "credential or a hand on a physical device. You may still do the part of it "
+              "that is code. Say which part you did and what remains."
+              "\nWhen YOU file one: owner=operator is only for those three things, and every such "
+              "issue becomes a red line in the operator's weekly roundup. A code or config change "
+              "in a repo or on a host you cannot reach (webscout, mcp-google, logview, a unit that "
+              "needs a restart) is owner=dev: the dev sessions can reach all of them.")
 
 
 def recent_findings(led, n=30):

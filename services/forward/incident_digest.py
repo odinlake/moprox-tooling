@@ -232,8 +232,8 @@ def _counts(url):
 TIERS = [("new", "🔴", "New"), ("unexplained", "🟠", "Unexplained"), ("fixing", "🟡", "Fixing"),
          ("standing", "🔵", "Long-standing"), ("explained", "⚪", "Explained")]
 BY_DISPOSITION = {"operator": "new", "known": "unexplained", "actionable": "fixing", "noise": "explained"}
-# An operator issue with no category behind it this week is long-standing once it is this old.
-STANDING_DAYS = 30
+# An operator issue with no category behind it this week is new for one roundup, then long-standing.
+NEW_DAYS = 8
 
 
 def tier_of(meta):
@@ -318,7 +318,10 @@ def weekly(now):
         except (TypeError, ValueError):
             age = 0
         t = issue_title(i).replace(" — ", ": ")     # operator: no em dashes in what he reads
-        rows.append(("standing" if age >= STANDING_DAYS else "new", 0, t, f"{t}, on you"))
+        # "New" means new since the last roundup. An issue older than that which he has not acted
+        # on is long-standing, whatever its age: on 2026-11-16 nine issues went out as "New" for the
+        # second Monday running.
+        rows.append(("new" if age < NEW_DAYS else "standing", 0, t, f"{t}, on you"))
 
     lines = ["🔧 Weekly estate roundup, by priority"]
     for tier, dot, label in TIERS:
