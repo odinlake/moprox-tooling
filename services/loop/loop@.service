@@ -31,4 +31,8 @@ Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbi
 # Backstop only; the harness's idle watchdog is the one that distinguishes stuck from slow.
 TimeoutStartSec=7200
 KillMode=control-group
+# Each cycle gets its own /tmp, deleted when the cycle ends. On claude-loop /tmp is tmpfs (RAM, 4 GiB
+# guest) and cycles left repo-sized scratch there: 3.2 GB from burndown cycle 242 alone, and the same
+# build-up halted both agents 2026-11-11..16. Anything worth keeping belongs under the state dir.
+PrivateTmp=yes
 ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/loop/loop.py %i
