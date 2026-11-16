@@ -395,6 +395,15 @@ def queue(ident, wanted=(), volume=None, sleep=2700, rest="shuffle", dry=False):
 MAX_CHAPTERS, MAX_SECONDS = 100, 5 * 3600
 
 
+def seconds_of(chapters):
+    """The audio on a card, counted the way the MAX_SECONDS ceiling above counts it: a chapter's
+    own duration, or the sum of its tracks' where it carries none. A caller that trims a full card
+    to make room (godnattkvart.py) has to use this and not its own sum, or it trims the wrong
+    amount and append still refuses."""
+    return sum(c.get("duration") or sum(t.get("duration") or 0 for t in c.get("tracks") or [])
+               for c in chapters)
+
+
 def append(ident, path, title, tok):
     """Add one recording to the end of an existing playlist, leaving every other chapter alone.
 
@@ -426,8 +435,7 @@ def append(ident, path, title, tok):
         if any(t.get("trackUrl") == url for t in ch.get("tracks") or []):
             return {"cardId": cid, "card": card.get("title"), "status": "already",
                     "chapter": i, "title": ch.get("title"), "chapters": len(chapters)}
-    secs = sum(c.get("duration") or sum(t.get("duration") or 0 for t in c.get("tracks") or [])
-               for c in chapters) + (info.get("duration") or 0)
+    secs = seconds_of(chapters) + (info.get("duration") or 0)
     if len(chapters) + 1 > MAX_CHAPTERS or secs > MAX_SECONDS:
         sys.exit("%s is full: %d chapters, %.1f h with this one (limits %d, %d h)"
                  % (card.get("title"), len(chapters) + 1, secs / 3600, MAX_CHAPTERS, MAX_SECONDS // 3600))
