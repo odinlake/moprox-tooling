@@ -2,7 +2,7 @@
 """Night-time sleep-timer guard for the children's Yoto. Run every 10 min by yoto-sleepguard.timer.
 
     20:30-08:00  if the player is playing and has no sleep timer running, set one:
-                 22:00-05:00 -> 20 min, otherwise 45 min.
+                 22:00-05:00 -> 30 min, otherwise 45 min.
 
 Anything started from a physical card, the player's buttons or Yoto's own app runs with no timer at
 all (there is no default; a stream such as Sleep Radio plays forever), which is the gap this closes.
@@ -30,7 +30,7 @@ def wanted(now):
     t = now.time()
     if not (t >= START or t < END):
         return None
-    return 20 * 60 if (t >= DEEP_START or t < DEEP_END) else 45 * 60
+    return 30 * 60 if (t >= DEEP_START or t < DEEP_END) else 45 * 60
 
 
 def report(link, wait=8):
