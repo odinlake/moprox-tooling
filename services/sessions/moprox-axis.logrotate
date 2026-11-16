@@ -1,0 +1,14 @@
+# Bounds the "MX Axis Mundi" PTY log (~50 MB/day of 1 Hz status-screen repaints). Axis has no weekly
+# cycle to archive it the way dev-cycle.sh does for the other sessions, and must not get one.
+# copytruncate because `script` keeps the file open; axis-launch.sh runs it with -a (O_APPEND) so the
+# truncate leaves no sparse hole once the server has been restarted with that flag.
+#   sudo install -o root -g root -m644 /opt/moprox-tooling/services/sessions/moprox-axis.logrotate /etc/logrotate.d/moprox-axis
+/home/mikael/.local/state/moprox-dev/axis.log {
+    su mikael mikael
+    weekly
+    rotate 2
+    copytruncate
+    compress
+    missingok
+    notifempty
+}

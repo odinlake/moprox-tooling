@@ -2,6 +2,7 @@
 #
 #   install -m644 services/sessions/moprox-axis.service /etc/systemd/system/
 #   install -m755 services/sessions/axis-launch.sh /usr/local/bin/moprox-axis-launch
+#   install -o root -g root -m644 services/sessions/moprox-axis.logrotate /etc/logrotate.d/moprox-axis
 #   systemctl daemon-reload && systemctl enable --now moprox-axis
 #
 # The dev trio, coach and bard are each ONE long-lived thread. Axis is the opposite: a Remote Control

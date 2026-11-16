@@ -62,7 +62,8 @@ ExecStartPre=/usr/bin/flock /home/mikael/.config/claude-dev/.trust.lock /usr/loc
 ExecStartPre=/usr/local/bin/moprox-creds-check --gate
 # Wait (≤~60s) for real egress to Anthropic before launching; exit non-zero so Restart retries with backoff.
 ExecStartPre=/bin/sh -c 'n=0; until curl -sS --max-time 5 -o /dev/null https://api.anthropic.com/ 2>/dev/null; do n=$((n+1)); [ "$n" -ge 30 ] && echo "moprox-dev@%i: no egress to api.anthropic.com after ~60s" >&2 && exit 1; sleep 2; done'
-# Record each session's PTY to a per-instance log (rotated by logrotate.d/moprox-dev) so a wedged /
+# Record each session's PTY to a per-instance log (bounded by moprox-dev-cycle: script truncates it on
+# each weekly restart and dev-cycle.sh keeps two dated <id>.log.YYYYMMDD copies) so a wedged /
 # zombied bridge is observable after the fact — the failure text ("Session creation failed" /
 # "Remote credentials fetch failed") only ever appears on-screen, and /dev/null hid it (CC #57715).
 ExecStartPre=/bin/mkdir -p /home/mikael/.local/state/moprox-dev
