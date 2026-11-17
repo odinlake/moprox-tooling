@@ -208,12 +208,24 @@ def check_jsonl_newest(lane, skips):
     names the payload evidence that makes a row count. Lanes whose timestamp comes from the event
     itself — `notifications`, whose `ts` is the captured event's own clock — need no `require`,
     because there no event means no row.
+
+    What that misses is a REAL event from a device about to go dark again. A dying tablet wakes,
+    posts "Battery less than 15%" and a Telegram digest inside 4 s, and goes flat: two genuine rows
+    that buy a full `max_age_h` of green. On 2026-11-14 one such burst turned a 481 h outage green
+    for 24 h, and two more on 2026-11-16 read as its recovery (i-20261117-150857). The optional lane
+    key `min_distinct_hours` (int) is the answer: rows passing `require` must fall in at least that
+    many distinct UTC clock hours of the trailing `max_age_h`, or the lane is stale. Absent, the
+    verdict is exactly the newest-age one above.
     """
+    floor = lane.get("min_distinct_hours")
+    if floor is not None and (isinstance(floor, bool) or not isinstance(floor, int) or floor < 1):
+        raise ValueError(f"min_distinct_hours must be a positive int, got {floor!r} — the lane is "
+                         f"NOT being evaluated")
     paths = expand(lane["glob"])
     if not paths:
         return f"no files match {lane['glob']}"
     require = lane.get("require")
-    newest, seen = None, 0
+    newest, seen, stamps = None, 0, []
     for r in read_jsonl(paths, skips):
         seen += 1
         if require and not _match(r, require):
@@ -221,6 +233,8 @@ def check_jsonl_newest(lane, skips):
         t = parse_ts(r.get(lane["field"]))
         if t is not None and (newest is None or t > newest):
             newest = t
+        if t is not None and floor is not None:
+            stamps.append(t)
     if newest is None:
         if require and seen:
             return (f"{seen} record(s) present, none of them carrying data — no row satisfies "
@@ -231,7 +245,43 @@ def check_jsonl_newest(lane, skips):
         what = "newest record carrying data" if require else "newest record"
         return (f"{what} is {age:.1f} h old (limit {lane['max_age_h']} h), "
                 f"at {datetime.fromtimestamp(newest, timezone.utc).isoformat(timespec='seconds')}")
+    if floor is not None:
+        return _distinct_hours_breach(stamps, floor, lane["max_age_h"], newest)
     return None
+
+
+def _iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+
+
+def _distinct_hours_breach(stamps, floor, max_age_h, newest):
+    """Breach text if rows in the trailing window span fewer than `floor` distinct clock hours.
+
+    Also names the last time the lane MET the floor — the newest row whose own trailing window held
+    >= floor distinct hours — because that, not the burst row, is when arrival actually stopped.
+    One pass over the sorted stamps with a sliding window of hour-bucket counts.
+    """
+    now, span = time.time(), max_age_h * HOUR
+    have = len({int(t // HOUR) for t in stamps if now - span < t <= now})
+    if have >= floor:
+        return None
+    stamps = sorted(stamps)
+    counts, lo, met = {}, 0, None
+    for t in stamps:
+        h = int(t // HOUR)
+        counts[h] = counts.get(h, 0) + 1
+        while stamps[lo] <= t - span:
+            g = int(stamps[lo] // HOUR)
+            counts[g] -= 1
+            if not counts[g]:
+                del counts[g]
+            lo += 1
+        if len(counts) >= floor:
+            met = t
+    last = (f"last met at {_iso(met)}, {(now - met) / HOUR:.1f} h ago" if met is not None
+            else "never met in the archive")
+    return (f"rows in only {have} distinct clock hour(s) of the last {max_age_h} h (floor "
+            f"{floor}) — newest {_iso(newest)}, {(now - newest) / HOUR:.1f} h ago; floor {last}")
 
 
 OPERATORS = ("equals", "matches", "notnull", "at_least", "nonempty")
