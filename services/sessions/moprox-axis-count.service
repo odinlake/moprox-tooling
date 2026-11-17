@@ -1,0 +1,10 @@
+# Telegram warning when MX Axis Mundi has more than 25 of its 32 chat slots open. See axis-count.py.
+#   install -m644 services/sessions/moprox-axis-count.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now moprox-axis-count.timer
+[Unit]
+Description=Warn when MX Axis Mundi is near its chat capacity
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/sessions/axis-count.py

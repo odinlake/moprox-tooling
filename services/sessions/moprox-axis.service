@@ -46,6 +46,14 @@ ExecStartPre=/bin/ln -sfn /home/mikael/projects/moprox-memory /home/mikael/.clau
 # keep "claude-dev". See axis-launch.sh.
 ExecStart=+/usr/bin/unshare --uts /usr/local/bin/moprox-axis-launch
 TimeoutStartSec=120
+# Idle chats live in swap, not RAM (operator, 2026-11-17: "a convo I won't use for a week doesn't have
+# to reside in ram"). Every open chat is a live claude process of ~200 MB, and the kernel only swaps
+# under box-wide pressure, so idle chats stayed resident and the old --capacity 8 was really a RAM
+# budget. MemoryHigh is a soft ceiling for THIS unit only: above it the kernel reclaims Axis's coldest
+# pages into swap (8 GB, see moprox-homelab infra/vms/claude-dev/cloud-init.yaml) instead of anyone's
+# else, and nothing is killed. A chat untouched for days just takes a second or two to page back in.
+# That is what lets axis-launch.sh run --capacity 32; axis-count.py warns on Telegram above 25.
+MemoryHigh=1536M
 Restart=always
 RestartSec=5
 RestartSteps=4

@@ -11,5 +11,5 @@
 set -eu
 python3 -c 'import socket; socket.sethostname("MX Axis Mundi")'
 exec setpriv --reuid=mikael --regid=mikael --init-groups -- \
-  /usr/bin/script -aqfec "/home/mikael/.local/bin/claude remote-control --name 'MX Axis Mundi' --remote-control-session-name-prefix MX --spawn same-dir --capacity 8 --permission-mode bypassPermissions" \
+  /usr/bin/script -aqfec "/home/mikael/.local/bin/claude remote-control --name 'MX Axis Mundi' --remote-control-session-name-prefix MX --spawn same-dir --capacity 32 --permission-mode bypassPermissions" \
   /home/mikael/.local/state/moprox-dev/axis.log

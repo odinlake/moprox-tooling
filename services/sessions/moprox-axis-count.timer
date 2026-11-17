@@ -1,0 +1,7 @@
+[Unit]
+Description=Check MX Axis Mundi chat count hourly
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+[Install]
+WantedBy=timers.target
