@@ -50,6 +50,20 @@ Restart=always
 RestartSec=5
 RestartSteps=4
 RestartMaxDelaySec=120
+# Server mode redraws its status screen once a second and script(1) relays every redraw to stdout,
+# so the journal got the whole screen at 1 Hz (13 rows/s with 8 chats open, 78% of the fleet journal).
+# journald discards rows matching these ("~" = deny), per unit, applied on daemon-reload without a
+# restart. They are Claude Code's own strings: a CLI update may reword them, and the check is
+# `journalctl -u moprox-axis --since -5min -o cat | sort | uniq -c | sort -rn | head` showing no
+# string at ~300. Session output, sudo lines and the ExecStartPre gates' stderr match none of them.
+# No backslashes or % on purpose, so unit-file unescaping cannot change them. The last is the bare \r.
+LogFilterPatterns=~space to show QR code
+LogFilterPatterns=~Or ask Claude to work in this folder from your projects
+LogFilterPatterns=~Continue coding in the Claude mobile app or https://claude[.]ai/code[?]environment=
+LogFilterPatterns=~Capacity: [0-9]+/[0-9]+
+LogFilterPatterns=~https://claude[.]ai/code/session_[A-Za-z0-9]+[?]from=cli
+LogFilterPatterns=~ Connected [^ ]+ private-data
+LogFilterPatterns=~^[[:cntrl:]]*$
 
 [Install]
 WantedBy=multi-user.target
