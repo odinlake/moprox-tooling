@@ -1,0 +1,16 @@
+# Daily summary of the loop agents to the firehose. See digest.py: since 2026-11-17 the firehose
+# carries only accepted work in real time, and this is where everything else is reported.
+[Unit]
+Description=moprox loop daily digest
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/environment
+EnvironmentFile=-/home/mikael/.config/claude-dev/telegram-firehose.env
+Environment=PATH=/home/mikael/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TimeoutStartSec=900
+ExecStart=/usr/bin/python3 /home/mikael/projects/moprox-tooling/services/loop/digest.py

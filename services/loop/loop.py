@@ -1212,7 +1212,7 @@ def record_exercise(led, cyc, agent):
         seen[t] = {"at": now, "cycle": cyc, "ok": ok if ok in (True, False) else None, "note": note}
         if ok is False:
             err(f"exercise: {t} FAILED when used: {note}", RuntimeError("tool exercise failed"))
-            notify.send(f"TOOL BROKEN: {t}\n{note}", agent)
+            notify.log(f"TOOL BROKEN: {t}\n{note}", agent, "tool-broken")
         else:
             say(f"  exercised {t}: {'ok' if ok else 'held/unsandboxed'}", 6, agent)
 
@@ -1489,7 +1489,8 @@ def creds_skip(led, why, agent):
     if time.time() - last > 12 * 3600:
         led["creds_warned_at"] = time.time()
         save_ledger(led)
-        notify.send(msg, agent)
+        err(f"loop[{agent}]: {msg}", RuntimeError("loop credentials unusable"))
+        notify.log(msg, agent, "creds")
     return 0
 
 
@@ -2178,8 +2179,8 @@ def main():
         for g in gaps:
             err(f"preflight: {g}", RuntimeError("declared capability unavailable"))
         say(f"preflight: {len(gaps)} declared capabilities unavailable", 4, agent)
-        notify.send("PREFLIGHT — %d declared capabilities unavailable:\n%s"
-                    % (len(gaps), "\n".join("- " + g for g in gaps[:20])), agent)
+        notify.log("PREFLIGHT — %d declared capabilities unavailable:\n%s"
+                    % (len(gaps), "\n".join("- " + g for g in gaps[:20])), agent, "preflight")
         prompt += ("\n\nDEGRADED — these were declared available to you and are NOT:\n"
                    + "\n".join("- " + g for g in gaps)
                    + "\nDo not work around them silently; if one blocks the increment you chose, "
@@ -2215,7 +2216,7 @@ def main():
             led["halted_at"] = time.time()        # a failed probe: wait a full interval again
         save_ledger(led)
         say(f"✗ cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", 4, agent)
-        notify.send(f"cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", agent)
+        notify.log(f"cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", agent, "strike")
         return 1
 
     accepted = rejected = disputed = 0
@@ -2239,17 +2240,17 @@ def main():
                 notify.send("LANDED %s %s\n%s\n\nwhy: %s\nfiles: %s\nevidence: %s"
                             % (prop.get("repo"), extra.get("sha"), prop.get("item", "?"),
                                _clip(prop.get("why", ""), 400),
-                               ", ".join(extra.get("files") or []), _clip(detail, 300)), agent)
+                               ", ".join(extra.get("files") or []), _clip(detail, 300)), agent, "landed")
             elif status == "disputed":
                 disputed += 1
                 row["objections"] = extra.get("objections")
                 row["evidence"] = detail
                 led.setdefault("disputed", []).append(row)
                 say(f"⚑ DISPUTED (not landed)  {item}", 4, agent)
-                notify.send("DISPUTED: the change passed its differential and the audit objected, "
+                notify.log("DISPUTED: the change passed its differential and the audit objected, "
                             "so it was NOT landed\n%s\n\n%s"
                             % (prop.get("item", "?"), "\n".join(extra.get("objections") or [])),
-                            agent)
+                            agent, "disputed")
             else:
                 rejected += 1
                 row["why"] = detail
@@ -2258,9 +2259,11 @@ def main():
                 # A change that verified and then failed to reach origin is not the same event as
                 # one that failed its own check, and only one of them needs a human.
                 if extra.get("unlanded"):
-                    notify.send("UNLANDED: the change passed every gate and the push failed. The "
+                    err(f"loop[{agent}]: cycle {cyc} change passed every gate and the push "
+                        f"failed: {item}", RuntimeError("verified change not landed"))
+                    notify.log("UNLANDED: the change passed every gate and the push failed. The "
                                 "work is in the cycle's patch archive, not on origin.\n%s\n\n%s"
-                                % (prop.get("item", "?"), detail), agent)
+                                % (prop.get("item", "?"), detail), agent, "unlanded")
             f.unlink(missing_ok=True)
             continue
 
@@ -2280,8 +2283,8 @@ def main():
                      "verify": _src(prop.get("verify") or "", SRC_MAX),
                      "objections": objections})
                 say(f"⚑ DISPUTED  {claim}", 4, agent)
-                notify.send("DISPUTED — the verifier passed but the audit objected\n%s\n\n%s"
-                            % (prop.get("claim", "?"), "\n".join(objections)), agent)
+                notify.log("DISPUTED — the verifier passed but the audit objected\n%s\n\n%s"
+                            % (prop.get("claim", "?"), "\n".join(objections)), agent, "disputed")
                 f.unlink(missing_ok=True)
                 continue
             accepted += 1
@@ -2295,7 +2298,7 @@ def main():
                 say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
             notify.send("FINDING (verified)\n%s\n\nwhy: %s\nevidence: %s"
                         % (prop.get("claim", "?"), _clip(prop.get("why", ""), 400),
-                           _clip(detail, 300)), agent)
+                           _clip(detail, 300)), agent, "finding")
         else:
             rejected += 1
             led.setdefault("tried", []).append({"cycle": cyc, "claim": prop.get("claim"),
@@ -2328,12 +2331,12 @@ def main():
     if iid:
         intent("close", iid, f"{accepted} accepted, {disputed} disputed, {rejected} rejected")
 
-    # Report the cycle's own last line. A cycle that found nothing still reports: silence is what
-    # made thirteen toolless cycles invisible, and "nothing worth doing" is a legitimate result the
-    # operator is entitled to see. Only rejected-only cycles stay quiet-ish — they still say so.
+    # Record the cycle's own last line. A cycle that found nothing still reports: silence is what
+    # made thirteen toolless cycles invisible. Since 2026-11-17 it reports into the daily digest
+    # (digest.py), not a post per cycle: the operator found one post an hour excessive.
     closing = _clip((res or {}).get("result") or "(no closing line)", 600)
-    notify.send("cycle %d · %d accepted, %d disputed, %d rejected · $%.2f · %dm%02ds\n\n%s"
-                % (cyc, accepted, disputed, rejected, cost, secs // 60, secs % 60, closing), agent)
+    notify.log("cycle %d · %d accepted, %d disputed, %d rejected · $%.2f · %dm%02ds\n\n%s"
+                % (cyc, accepted, disputed, rejected, cost, secs // 60, secs % 60, closing), agent, "cycle")
     return 0
 
 

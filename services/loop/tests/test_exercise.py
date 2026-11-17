@@ -16,6 +16,7 @@ errs, sent = [], []
 loop.err = lambda msg, exc=None: errs.append(msg)
 loop.warn = lambda msg: errs.append("warn:" + msg)
 loop.notify.send = lambda msg, agent="": sent.append(msg)
+loop.notify.log = lambda msg, agent="", kind="": sent.append(msg)   # since 2026-11-17 a broken tool goes to the daily digest
 loop.say = lambda *a, **k: None
 TOOLS = {f"mcp__s__t{i}": f"tool {i}" for i in range(5)}
 loop.mcp_inventory = lambda caps: (dict(TOOLS), [])
@@ -36,7 +37,7 @@ ex = led["exercised"]
 ok.append(("ok stamped", ex["mcp__s__t2"]["ok"] is True and ex["mcp__s__t2"]["cycle"] == 7))
 ok.append(("failure stamped False", ex["mcp__s__t3"]["ok"] is False))
 ok.append(("failure reaches err", any("t3 FAILED" in e for e in errs)))
-ok.append(("failure notified", any("TOOL BROKEN" in m for m in sent)))
+ok.append(("failure recorded for the digest", any("TOOL BROKEN" in m for m in sent)))
 ok.append(("unreported stays due (not stamped)", "mcp__s__t4" not in ex))
 ok.append(("unreported warned", any("warn:" in e and "t4" in e for e in errs)))
 ok.append(("report consumed", not (tmp / "exercise.json").exists()))

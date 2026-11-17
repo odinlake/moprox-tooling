@@ -1,0 +1,8 @@
+[Unit]
+Description=Post the loop's daily digest
+[Timer]
+# After the loop's last hourly wake (23:00), so the digest covers the whole day.
+OnCalendar=*-*-* 23:45
+Persistent=true
+[Install]
+WantedBy=timers.target
