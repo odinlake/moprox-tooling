@@ -68,6 +68,7 @@
       "mcp__agent-write__append_agent_doc": "only to a doc you created in /agent/exercise",
       "mcp__agent-write__replace_agent_doc": "only a doc you created in /agent/exercise",
       "mcp__mcp-google__get_gmail_attachment_content": "saves to local disk: use a recent attachment, then delete the file",
+      "mcp__mcp-google__get_drive_file_download_url": "saves to local disk: use a small recent Drive file (e.g. a .txt from search_drive_files with order_by='modifiedTime desc'), then delete the file",
       "mcp__webscout__click": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
       "mcp__webscout__fill": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done; never submit a form",
       "mcp__webscout__press": "in a session YOU opened with open_session on a public page (e.g. https://en.wikipedia.org/wiki/Special:Random); close it when done",
