@@ -8,7 +8,8 @@ which is exactly what the firehose group exists to prevent.
 
 Plain text, no MarkdownV2. A firehose carries claims, paths and shell fragments — the characters
 MarkdownV2 requires escaping — and a post that fails to render is worse than one that is merely
-plain. The formatted lane (coach) has a human reading it; this one does not.
+plain. That is why this lane is unformatted, unlike coach's: what it carries, not who reads it.
+The operator is a member of the firehose group, so write every post as one the operator may read.
 
 Posting is best-effort but NEVER silent: a failed post is an err, because "the agent said nothing"
 and "the agent could not speak" look identical from the outside, and that confusion has already
