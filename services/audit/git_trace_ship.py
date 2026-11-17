@@ -19,6 +19,7 @@ import errlog  # noqa: E402
 
 TRACE_DIR = Path(os.environ.get("GIT_TRACE_DIR", "/var/log/git-trace2"))
 STALE = 3600            # a file with no exit event after this long: ship it as "no exit seen"
+BUDGET = 30             # seconds of work per run; the rest waits for the next minute (unit times out at 50)
 MUTATING = {"commit", "push", "pull", "fetch", "merge", "rebase", "reset", "checkout", "switch",
             "restore", "worktree", "stash", "branch", "tag", "cherry-pick", "revert", "clone", "am",
             "apply", "rm", "mv", "clean", "init", "remote", "gc", "prune", "update-ref", "notes",
@@ -65,8 +66,9 @@ def read_only(sub, rest):
 
 
 def parse(path):
-    rec = {"env": {}}
-    for line in path.read_text(errors="replace").splitlines():
+    text = path.read_text(errors="replace")
+    rec = {"env": {}, "bytes": len(text)}
+    for line in text.splitlines():
         try:
             e = json.loads(line)
         except ValueError:
@@ -106,12 +108,19 @@ def ship(rec, path):
 
 
 def main():
-    now, shipped = time.time(), 0
-    for p in sorted(TRACE_DIR.iterdir()) if TRACE_DIR.is_dir() else []:
+    t0 = now = time.time()
+    shipped = running = nbytes = deferred = 0
+    files = sorted(TRACE_DIR.iterdir()) if TRACE_DIR.is_dir() else []
+    for i, p in enumerate(files):
+        if time.time() - t0 > BUDGET:
+            deferred = len(files) - i
+            break
         try:
             age = now - p.stat().st_mtime
             rec = parse(p)
+            nbytes += rec["bytes"]
             if "code" not in rec and age < STALE:
+                running += 1
                 continue                # still running (a long push); next minute
             ship(rec, p)
             shipped += 1
@@ -120,8 +129,8 @@ def main():
             continue                    # benign: git's own trace2 sentinel handling removed it
         except Exception as e:
             errlog.skip(f"git_trace_ship.py: {p.name}", e)
-    print(f"git-trace: {shipped} file(s) processed")
-
+    print(f"git-trace: {shipped} file(s) processed, {running} still running, {deferred} deferred, "
+          f"{len(files)} listed, {nbytes} bytes read, {time.time() - t0:.1f}s")
 
 if __name__ == "__main__":
     main()

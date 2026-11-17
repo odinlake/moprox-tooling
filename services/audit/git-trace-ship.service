@@ -4,3 +4,10 @@ Description=Ship git trace2 records of state-changing git commands to the journa
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 @AUDIT@/git_trace_ship.py
+# Never outbid the agents it audits on a 2-core guest. On 2026-11-11 claude-loop recorded runs of
+# up to 268.8 s CPU against a 1-minute timer (normal max 3.4 s). The script also stops itself after
+# BUDGET seconds; the timeout is the backstop and fails the unit loudly.
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+TimeoutStartSec=50s
