@@ -155,6 +155,9 @@ AGENT_FLAGS = {
     "bard-curate": ["--model", "sonnet",
                     "--dangerously-skip-permissions",
                     "--disallowedTools", CURATE_DENY,
+                    # webscout's real browser: a publisher or book site behind a Cloudflare check
+                    # refuses curl, and without this bard gave up on the cover (2026-11-16).
+                    "--mcp-config", str(AGENTS["bard-curate"] / "mcp.json"), "--strict-mcp-config",
                     "--add-dir", str(YOTO_SHARE), str(DOCINDEX_DL), str(REPOS[1]), str(SHARED_MEM)],  # variadic: keep last
 }
 
