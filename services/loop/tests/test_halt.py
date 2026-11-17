@@ -17,8 +17,18 @@ assert loop.halt_gate(led, 1000) == "first" and led["halted_at"] == 1000
 assert loop.halt_gate(led, 1000 + 3600) == "quiet"            # the hourly wake-ups say nothing new
 assert led["strikes"] == loop.MAX_STRIKES and led["inflight"]
 assert loop.halt_gate(led, 1000 + H + 1) == "probe"
-assert led["strikes"] == loop.MAX_STRIKES - 1 and led["inflight"] is None
-assert loop.halt_gate(led, 1000 + H + 2) == "run"             # the probe cycle itself proceeds
+# the probe leaves the saved ledger STILL halted, stamped now: main() saves it before the agent
+# runs, so a probe killed outright (oom-kill) must not turn every later wake into a bare "run"
+assert led["strikes"] == loop.MAX_STRIKES and led["inflight"] is None
+assert led["halted_at"] == 1000 + H + 1
+assert loop.halt_gate(led, 1000 + H + 2) == "quiet"           # a killed probe: wait an interval
+assert loop.halt_gate(led, 1000 + 2 * H + 1) == "probe"       # ... then one more fresh cycle
+# 3 days of the real timer grid (07..23:00 hourly) from a fresh halt, every probe killed:
+led, launched = {"strikes": loop.MAX_STRIKES}, 0
+for d in range(3):
+    for h in range(7, 24):
+        launched += loop.halt_gate(led, 1.8e9 + d * 86400 + (h - 7) * 3600) in ("run", "probe")
+assert launched <= 3 * 24 / loop.HALT_RETRY_H + 1, launched   # a cycle per interval, not per wake
 # a failed probe (main() bumps strikes and restarts the clock) is quiet for a whole interval again
 led["strikes"] = loop.MAX_STRIKES; led["halted_at"] = 5000
 assert loop.halt_gate(led, 5000 + H - 1) == "quiet"

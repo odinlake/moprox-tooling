@@ -1339,7 +1339,14 @@ def halt_gate(led, now):
         return "first"
     if now - float(led["halted_at"]) < HALT_RETRY_H * 3600:
         return "quiet"
-    led["strikes"] = MAX_STRIKES - 1              # one more bad cycle halts again, silently
+    # The probe must leave a ledger that is STILL halted, because the caller saves it before the
+    # agent runs and a probe killed outright (oom-kill, 5 times 2026-10-24..11-11) never reaches
+    # the strike path. Demoting strikes to MAX_STRIKES-1 with a stale stamp made every later wake
+    # a bare "run": 45 of 51 wakes over 3 days launched a cycle (analyst c968). So: strikes stays
+    # at the threshold and the stamp moves to now. A killed probe waits a full interval again; a
+    # bad one takes a strike and re-stamps; a clean one pops halted_at and zeroes strikes.
+    led["strikes"] = MAX_STRIKES
+    led["halted_at"] = now
     led["inflight"] = None                        # fresh: never the cycle that got it halted
     return "probe"
 
@@ -2102,6 +2109,7 @@ def main():
     if dead:
         return creds_skip(led, f"credentials are dead ({why})", agent)
 
+    since = led.get("halted_at")                  # halt_gate re-stamps it on a probe
     gate = halt_gate(led, time.time())
     if gate == "first":
         report_halt(led, agent)
@@ -2112,7 +2120,7 @@ def main():
             f"{HALT_RETRY_H:g}h (reported once, on the issue board)", 6, agent)
         return 0
     if gate == "probe":
-        say(f"halted since {_iso(led['halted_at'])}: trying one fresh cycle", 5, agent)
+        say(f"halted since {_iso(since)}: trying one fresh cycle", 5, agent)
 
     cap = float(conf.get("budget_cap_usd") or BUDGET_CAP)
     spent = spent_recently(BUDGET_H, agent)
