@@ -40,14 +40,17 @@ def pull(name, target):
         raise RuntimeError("%s returned %d lines, none parseable — refusing to replace" % (name, len(lines)))
     # A ledger only ever grows. A short read (truncated transfer, half-written file) must NOT
     # overwrite a longer one, or the page silently loses history and looks merely "quiet".
+    # Compare what we STORE against what we stored last time: every non-blank line is written,
+    # including the ones errlog.skip() tolerated above, so comparing the parseable count against
+    # the stored count makes one corrupt row refuse every run that adds nothing new.
     old = len(dest.read_text().splitlines()) if dest.exists() else 0
-    if good < old:
+    if len(lines) < old:
         raise RuntimeError("%s returned %d rows but we already hold %d — refusing to shrink"
-                           % (name, good, old))
+                           % (name, len(lines), old))
     tmp = dest.with_suffix(".jsonl.tmp")
     tmp.write_text("\n".join(lines) + "\n")
     tmp.rename(dest)
-    return good, good - old
+    return good, len(lines) - old
 
 
 def main():
