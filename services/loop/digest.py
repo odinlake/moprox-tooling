@@ -99,7 +99,7 @@ def write(events, hours):
                            capture_output=True, text=True, timeout=600)
         text = (r.stdout or "").strip()
         if r.returncode == 0 and len(text) > 80:
-            return text.replace("—", ",")
+            return text.replace(" \u2014 ", ", ").replace("\u2014", "-")   # operator rule: no em dashes
         err("digest: claude -p returned nothing usable; posting the plain digest",
             RuntimeError(f"rc={r.returncode} stderr={(r.stderr or '')[:300]}"))
     except Exception as exc:
