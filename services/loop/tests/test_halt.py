@@ -30,6 +30,18 @@ for d in range(3):
         launched += loop.halt_gate(led, 1.8e9 + d * 86400 + (h - 7) * 3600) in ("run", "probe")
 assert launched <= 3 * 24 / loop.HALT_RETRY_H + 1, launched   # a cycle per interval, not per wake
 # a failed probe (main() bumps strikes and restarts the clock) is quiet for a whole interval again
-led["strikes"] = loop.MAX_STRIKES; led["halted_at"] = 5000
+led = {"strikes": loop.MAX_STRIKES, "halted_at": 1000}
+assert loop.halt_gate(led, 1000 + H + 1) == "probe"
+loop.take_strike(led, now=5000)                               # the probe came back bad
+assert led["strikes"] == loop.MAX_STRIKES, led["strikes"]     # "strike 3/3", not 4/3
+assert led["halted_at"] == 5000
 assert loop.halt_gate(led, 5000 + H - 1) == "quiet"
+assert loop.halt_gate(led, 5000 + H + 1) == "probe"
+# not halted: a bad cycle counts up to the threshold, and the gate then halts
+led = {"strikes": 0}
+for _ in range(loop.MAX_STRIKES):
+    assert loop.halt_gate(led, 100) == "run"
+    loop.take_strike(led, now=100)
+assert led["strikes"] == loop.MAX_STRIKES and "halted_at" not in led
+assert loop.halt_gate(led, 100) == "first"
 print("ok: halt gate")

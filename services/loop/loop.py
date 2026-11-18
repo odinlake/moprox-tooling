@@ -1342,13 +1342,25 @@ def halt_gate(led, now):
     # The probe must leave a ledger that is STILL halted, because the caller saves it before the
     # agent runs and a probe killed outright (oom-kill, 5 times 2026-10-24..11-11) never reaches
     # the strike path. Demoting strikes to MAX_STRIKES-1 with a stale stamp made every later wake
-    # a bare "run": 45 of 51 wakes over 3 days launched a cycle (analyst c968). So: strikes stays
-    # at the threshold and the stamp moves to now. A killed probe waits a full interval again; a
-    # bad one takes a strike and re-stamps; a clean one pops halted_at and zeroes strikes.
+    # a bare "run": with every probe killed, 13 of 15 wakes over 3 days launched a cycle on
+    # loop@burndown's installed 5-wake grid (45 of 51 on the analyst's hourly one; analyst c969).
+    # So: strikes stays at the threshold and the stamp moves to now. A killed probe waits a full
+    # interval again; a bad one re-stamps (see take_strike); a clean one pops halted_at and
+    # zeroes strikes.
     led["strikes"] = MAX_STRIKES
     led["halted_at"] = now
     led["inflight"] = None                        # fresh: never the cycle that got it halted
     return "probe"
+
+
+def take_strike(led, now=None):
+    """A bad cycle. While halted (a failed probe) strikes is already at MAX_STRIKES, where
+    halt_gate left it: adding one more made the counter read "strike 4/3" in the firehose and the
+    digest. The gate only tests >= MAX_STRIKES, so this changes what is said, not what is done."""
+    if led.get("halted_at"):
+        led["halted_at"] = time.time() if now is None else now   # failed probe: a full interval again
+    else:
+        led["strikes"] = led.get("strikes", 0) + 1
 
 
 def _halt_issue(agent, led, note=""):
@@ -2215,13 +2227,11 @@ def main():
     log_usage(agent, res, outcome)
 
     if outcome != "ok":
-        led["strikes"] = led.get("strikes", 0) + 1
+        take_strike(led)
         # Resume a bad cycle ONCE. `inflight or ...` kept the same label for ever, so one cycle
         # that could not finish was resumed until it had burned all three strikes by itself:
         # analyst 946 -> 947, 948 and burndown 237 -> 238, 239 on 2026-11-11, both halted for 5 days.
         led["inflight"] = None if inflight else f"cycle {cyc} ({outcome})"
-        if led.get("halted_at"):
-            led["halted_at"] = time.time()        # a failed probe: wait a full interval again
         save_ledger(led)
         say(f"✗ cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", 4, agent)
         notify.log(f"cycle {cyc} {outcome} — strike {led['strikes']}/{MAX_STRIKES}", agent, "strike")
