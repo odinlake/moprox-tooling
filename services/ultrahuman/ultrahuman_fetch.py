@@ -270,6 +270,50 @@ def scalars(d, payload):
         rec["efficiency"]    = qm.get("EFFICIENCY")
         rec["sleep_avg_hr"]  = qm.get("AVG HEART RATE")
         rec["sleep_avg_hrv"] = qm.get("AVG HRV")
+
+    # The newest instant in this row that the RING set. Every other clock here is the fetch loop's
+    # own calendar date, which is why the freshness lane — `field: "date"`, resolved by check.py's
+    # parse_ts to 00:00 UTC of the day DESCRIBED — reports a calendar offset and never
+    # elapsed-since-the-ring-reported. Over the 226 archived days carrying a reading the last one
+    # lands a median 22.97 h after that anchor (p05 3.98, p95 23.98). Epoch seconds, as bedtime_*
+    # already are; None on a day the ring said nothing.
+    #
+    # Zero is not a reading. `steps` is a 5-min grid the vendor fills with zeros across the whole
+    # day whether or not the ring was on — 51011 of its 57224 archived bins are 0 — and on
+    # 2026-06-21, 07-03 and 07-04 a 284-288-bin all-zero grid is the ONLY thing in the payload, so
+    # a max over raw timestamps would stamp those dark days at 22:59/23:59 and certify them. hr,
+    # temp and hrv carry no 0 and no null on any archived day, so one numeric-and-nonzero rule over
+    # the four series IS the steps-only filter and needs no per-series exception.
+    #
+    # `bedtime_end` is the fifth candidate because the series are not the only thing the ring
+    # stamps, and dropping it does not merely lose precision: on 2026-07-06 the payload carries a
+    # complete scored night (TOTAL SLEEP 23100 s, sleep_rhr 45, bedtime 20:51->04:01Z) and NO
+    # non-zero hr/temp/hrv/steps bin at all, so a series-only rule yields None on a day this row's
+    # own consumer — the ultrahuman lane, whose `require` names `total_sleep_s` — counts as data.
+    # It is also the newest ring instant on 11 further days (2026-03-30..06-29, by 1.57-4.41 h).
+    # With it folded in, `last_sample_ts is None` holds on exactly the 18 days has_measurement()
+    # refuses, over all 244 payloads archived to 2026-11-19. `bedtime_start` is not a candidate: it
+    # is never later than bedtime_end and never present without it on any of those days.
+    # `night_rhr` is excluded on purpose: it is the trailing series above, stamped at each day's
+    # midnight, and it keeps serving a dead ring's last reading.
+    #
+    # NOT YET READ BY ANYTHING. Pointing the ultrahuman freshness lane's `field` at this is the
+    # other half (i-20261118-144201) and is deliberately a separate change: the field only exists
+    # on rows the fetcher has rewritten since, so re-pointing the lane in the same commit would make
+    # it breach "no usable 'last_sample_ts' value" until the next run.
+    last = None
+    for key in ("hr", "temp", "hrv", "steps"):
+        o = by.get(key)
+        for x in ((o.get("values") if isinstance(o, dict) else None) or []):
+            if not isinstance(x, dict):
+                continue
+            t, v = x.get("timestamp"), x.get("value")
+            if t and isinstance(v, (int, float)) and v != 0:
+                last = t if last is None else max(last, t)
+    be = rec.get("bedtime_end")
+    if isinstance(be, (int, float)) and not isinstance(be, bool) and be:
+        last = be if last is None else max(last, be)
+    rec["last_sample_ts"] = last
     return rec
 
 
