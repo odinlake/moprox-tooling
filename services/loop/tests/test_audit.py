@@ -28,6 +28,8 @@ import loop
 tmp = Path(tempfile.mkdtemp(prefix="audit-"))
 loop.OBJECTIONS = tmp / "objections"
 loop.log_usage = lambda *a, **k: None
+loop.TRANSCRIPTS = tmp / "transcripts"     # never the real session dir
+loop.TRANSCRIPTS.mkdir()
 loop.LENSES = [("check", "does the verifier test the claim"), ("claim", "does the claim overrun")]
 
 passed = failed = 0
@@ -326,6 +328,52 @@ try:
         check("died -> LensFailed", True, str(exc)[:60])
 finally:
     subprocess.run = real
+
+print("\n--- a killed lens keeps its session transcript ---------------------------")
+# A timeout discards stdout, but the claude CLI has already written the session to
+# ~/.claude/projects/-home-mikael/<uuid>.jsonl. It must be found by its prompt, not by recency, and
+# archived as a bounded tail that the death notice points at (analyst c987 [claim]).
+def killed(cmd, **k):
+    prompt = cmd[2]
+    other = loop.TRANSCRIPTS / "decoy.jsonl"     # newest file, wrong prompt: must not be picked
+    recs = [{"type": "queue-operation", "operation": "enqueue", "content": prompt},
+            {"type": "user", "message": {"role": "user", "content": prompt}}]
+    for i in range(12):
+        recs.append({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": f"thinking aloud {i}"},
+            {"type": "tool_use", "name": "Bash", "input": {"command": f"grep n{i}"}}]}})
+        recs.append({"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": f"RESULT-{i:02d}"}]}})
+    recs.append({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "the anchor count is 5 of 20 — this refutes the claim"}]}})
+    (loop.TRANSCRIPTS / f"{k.get('timeout')}-{len(list(loop.TRANSCRIPTS.iterdir()))}.jsonl"
+     ).write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    other.write_text(json.dumps({"type": "queue-operation", "content": "some other prompt"}) + "\n")
+    raise subprocess.TimeoutExpired(cmd="claude", timeout=420)
+objs = with_run(killed)
+tp = tmp / "objections" / "c0-check-timeout-transcript.txt"
+body = tp.read_text() if tp.exists() else ""
+check("the dead lens's transcript tail is archived", tp.exists())
+check("it holds the work in flight when killed",
+      "this refutes the claim" in body and "RESULT-11" in body and "grep n11" in body)
+check("bounded: only the last 8 tool results",
+      "RESULT-04" in body and "RESULT-03" not in body, f"{len(body)} chars")
+check("both attempts are kept", body.count("#### attempt") == 2, str(body.count("#### attempt")))
+check("the death notice points at it, and still blocks",
+      len(objs) == 2 and str(tp) in objs[0] and objs[0].startswith("[check] LENS DID NOT COMPLETE"))
+check("the decoy session was not picked", "some other prompt" not in body)
+real = subprocess.run
+subprocess.run = lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd="c", timeout=1))
+try:
+    for f in loop.TRANSCRIPTS.iterdir():
+        f.unlink()
+    objs = loop.adversarial({"claim": "c2", "why": "w", "verify": "v", "expect": "e"}, "ev",
+                            "analyst", cyc=1)
+finally:
+    subprocess.run = real
+check("no transcript -> plain death notice, nothing archived",
+      len(objs) == 2 and "transcript" not in objs[0]
+      and not (tmp / "objections" / "c1-check-timeout-transcript.txt").exists())
 
 print(f"\n{passed}/{passed + failed} passed")
 sys.exit(1 if failed else 0)

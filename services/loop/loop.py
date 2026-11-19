@@ -631,6 +631,97 @@ def _verdict(out):
     raise LensFailed(f"verdict was not valid JSON ({best if best is not None else first})")
 
 
+TRANSCRIPTS = HOME / ".claude/projects/-home-mikael"   # refute() runs claude with cwd=$HOME
+TAIL_RESULTS = 8          # tool_result blocks kept from a dead lens's transcript
+TAIL_BLOCK = 6000         # chars per kept block
+
+
+def _dead_transcript(prompt, t0):
+    """_find_dead_transcript, which must never turn a LensFailed into a crash of the cycle."""
+    try:
+        return _find_dead_transcript(prompt, t0)
+    except Exception as exc:
+        err("dead-lens transcript: recovery failed, the death notice goes out without it", exc)
+        return ""
+
+
+def _find_dead_transcript(prompt, t0):
+    """The bounded tail of the session a dead refuter left on disk, or "" if it cannot be found.
+
+    A timeout discards the child's stdout, so before this the only record of a killed lens was the
+    harness's own one-line death notice — and its advice, "re-propose it unchanged", had the analyst
+    publish over refutations that were on screen when the lens was killed (c987's [claim] slot). The
+    claude CLI keeps the session anyway: cwd=$HOME puts it in TRANSCRIPTS/<uuid>.jsonl, ~30 days.
+
+    Matched exactly, never newest-file: the session's first record carries the prompt verbatim
+    (a `queue-operation` enqueue, or the first user message), restricted to files written since the
+    subprocess started at t0 — the LENS_TRIES retry sends the identical prompt, and the earlier
+    attempt's file stopped changing before this one began. Kept: every assistant text, a one-line
+    note per tool call, and the last TAIL_RESULTS tool results — these files run 200-300 KB.
+    """
+    try:
+        cands = [f for f in TRANSCRIPTS.glob("*.jsonl") if f.stat().st_mtime >= t0 - 2]
+    except OSError as exc:
+        warn(f"dead-lens transcript: cannot list {TRANSCRIPTS}: {exc}")
+        return ""
+    hit = None
+    for f in sorted(cands, key=lambda f: f.stat().st_mtime, reverse=True):
+        try:
+            with open(f, errors="replace") as fh:
+                for _, ln in zip(range(12), fh):
+                    rec = json.loads(ln)
+                    first = rec.get("content") if rec.get("type") == "queue-operation" else \
+                        (rec.get("message") or {}).get("content") if rec.get("type") == "user" else None
+                    if isinstance(first, str):
+                        if first == prompt:
+                            hit = f
+                        break
+        except (OSError, ValueError) as exc:
+            # A session being written concurrently can end mid-line; it is not ours, or not yet.
+            warn(f"dead-lens transcript: skipped {f.name}: {exc}")
+            continue
+        if hit:
+            break
+    if not hit:
+        warn(f"dead-lens transcript: no session in {TRANSCRIPTS} since t0 carries this prompt")
+        return ""
+    events, skips = [], Skips(f"parsing dead-lens transcript {hit.name}")
+    with open(hit, errors="replace") as fh:
+        for ln in fh:
+            try:
+                rec = json.loads(ln)
+            except ValueError as exc:
+                skips.add(exc)
+                continue
+            msg = rec.get("message") or {}
+            c = msg.get("content")
+            if not isinstance(c, list) or rec.get("type") not in ("assistant", "user"):
+                continue
+            for b in c:
+                t = b.get("type")
+                if t == "text" and rec["type"] == "assistant":
+                    events.append(("text", b.get("text", "")))
+                elif t == "tool_use":
+                    events.append(("call", f"{b.get('name')} {_clip(json.dumps(b.get('input')), 400)}"))
+                elif t == "tool_result":
+                    r = b.get("content")
+                    if isinstance(r, list):
+                        r = "\n".join(x.get("text", "") for x in r if isinstance(x, dict))
+                    events.append(("result", str(r or "")))
+    skips.report()
+    results = [i for i, (k, _) in enumerate(events) if k == "result"]
+    keep = set(results[-TAIL_RESULTS:])
+    out = [f"# dead lens session {hit.name} ({len(results)} tool results, last "
+           f"{len(keep)} kept)\n"]
+    for i, (k, v) in enumerate(events):
+        if k == "result" and i not in keep:
+            continue
+        if k == "result" and len(v) > TAIL_BLOCK:
+            v = v[:TAIL_BLOCK] + f"\n… [{len(v) - TAIL_BLOCK} more chars cut]"
+        out.append(f"--- {k}\n{v}\n")
+    return "\n".join(out)
+
+
 def refute(prop, evidence, lens, agent, tree=None):
     """Spawn one independent skeptic. Returns a defect string, or None if it found nothing.
 
@@ -665,17 +756,22 @@ def refute(prop, evidence, lens, agent, tree=None):
            "--add-dir", str(HOME / "projects/moprox-tooling"),
            str(HOME / "projects/private-data"), str(HOME / "projects/moprox-memory")
            ] + ([str(tree)] if tree else [])
+    t0 = time.time()
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=REFUTE_MAX_S,
                            stdin=subprocess.DEVNULL, cwd=str(HOME))
     except subprocess.TimeoutExpired:
         warn(f"refuter[{name}] timed out after {REFUTE_MAX_S}s — claim not audited on this lens")
-        raise LensFailed(f"timed out after {REFUTE_MAX_S}s") from None
+        exc = LensFailed(f"timed out after {REFUTE_MAX_S}s")
+        exc.transcript = _dead_transcript(prompt, t0)    # adversarial() archives it
+        raise exc from None
     out = (r.stdout or "").strip()
     if r.returncode != 0:
         err(f"refuter[{name}] exited {r.returncode} — claim not audited on this lens",
             RuntimeError(_clip(r.stderr or out, 200)))
-        raise LensFailed(f"exited {r.returncode}: {_clip(r.stderr or out, 200)}")
+        exc = LensFailed(f"exited {r.returncode}: {_clip(r.stderr or out, 200)}")
+        exc.transcript = _dead_transcript(prompt, t0)
+        raise exc
     # Unwrap the json envelope: {result, usage, total_cost_usd, ...}. The verdict is the last JSON
     # object inside `result`, exactly as before. If the format ever changes, fall back to reading
     # stdout raw — the audit still runs, it just goes unledgered, and that says so.
@@ -732,7 +828,7 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
         return []
     objections = []
     for lens in (CHANGE_LENSES if prop.get("patch") else LENSES):
-        reply = None
+        reply, tails = None, []
         for attempt in range(1, max(1, LENS_TRIES) + 1):
             try:
                 d = refute(prop, evidence, lens, agent, tree=tree)
@@ -740,6 +836,24 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
                 d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on this lens "
                      f"({exc}). This is not a defect in the claim: re-propose it unchanged.")
                 reply = getattr(exc, "reply", None)
+                if getattr(exc, "transcript", ""):
+                    tails.append(f"#### attempt {attempt}/{max(1, LENS_TRIES)}: {exc}\n"
+                                 + exc.transcript)
+                # A killed lens has no verdict, but its session does: what it read and what it was
+                # writing when killed. Archive the tail beside the objection and point the death
+                # notice at it, so the next cycle reads the work before "re-propose it unchanged"
+                # publishes over a refutation that was on screen (c987 [claim]).
+                if tails:
+                    tp = OBJECTIONS / f"c{cyc}-{lens[0]}-timeout-transcript.txt"
+                    try:
+                        OBJECTIONS.mkdir(parents=True, exist_ok=True)
+                        tp.write_text("\n\n".join(tails))
+                        d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on "
+                             f"this lens ({exc}). The killed run's transcript tail is at {tp}: "
+                             f"READ IT before re-proposing — if it shows the skeptic finding a "
+                             f"defect, answer that; otherwise re-propose it unchanged.")
+                    except OSError as e:
+                        warn(f"could not archive dead-lens transcript for cycle {cyc}: {e}")
                 # Retry ONLY a lens that said nothing inspectable — timeout, non-zero exit, empty
                 # stdout. There the skeptic refuted nothing and endorsed nothing, so re-running it
                 # is a re-run, not an override. A lens that DID speak and could not be parsed even
