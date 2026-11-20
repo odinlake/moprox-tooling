@@ -41,8 +41,23 @@ def log_in(text, msg_id=None, reply_to=None, to=None):
     _append(LOG, {"dir": "in", "from": "operator", "to": to, "msg_id": msg_id,
                   "reply_to": reply_to, "text": text})
 
+def _unit():
+    """The systemd service this process runs in, or None. Recorded on every outbound post so
+    `regen` (services/forward/regen.py) can let an agent re-run whatever posted in its name."""
+    try:
+        for ln in open("/proc/self/cgroup"):
+            last = ln.strip().rsplit("/", 1)[-1]
+            if last.endswith(".service"):
+                return last
+    except OSError:
+        pass          # not Linux / no procfs: the post is still logged, just without its unit
+    return None
+
 def log_out(agent, text, msg_id=None):
-    _append(LOG, {"dir": "out", "from": agent, "msg_id": msg_id, "text": text})
+    rec = {"dir": "out", "from": agent, "msg_id": msg_id, "text": text}
+    u = _unit()
+    if u: rec["unit"] = u
+    _append(LOG, rec)
 
 def _load(path, n=None):
     if not path.exists(): return []

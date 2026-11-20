@@ -58,9 +58,6 @@ TRAINING_DATA = HOME / ".cache/moprox-dashboard-ghpages/dashboard/data/training"
 CONVO_TOOL = "Bash(convo:*)"            # restricted: agents may run ONLY the `convo` helper, no free bash
 DRIVE_TOOL = "Bash(drive-put:*)"        # ...plus the one-verb Drive uploader (services/drive/drive-put)
 SHOPPING_TOOL = "Bash(shopping:*)"      # the household shopping list in HA (services/shopping)
-# valet regenerates and posts the crash-risk gauges on request ("Regenerate and post the crash risk
-# gauges", 2026-11-20, refused at the permission prompt). The production script only, by full path.
-MARKET_TOOL = "Bash(python3 /opt/moprox-tooling/services/forward/market_chart.py:*)"
 YOTO_TOOL = "Bash(yoto:*)"              # bard's Yoto verb: player + playlist
 BOOKS_TOOL = "Bash(bookscout:*)"        # bard's books verb: Audible catalogue/library + review log
 THEMING_REPO = HOME / "projects/theming"               # the theme-ontology/theming working copy
@@ -126,7 +123,7 @@ AGENT_FLAGS = {
     # valet: morning brief + afternoon catch-up; reads (only) the Google Workspace MCP (read-only,
     # impersonating Mikael) for overnight email + calendar, scoped to ONLY this agent.
     "valet": ["--permission-mode", "acceptEdits",
-              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s,%s,%s,%s" % (CONVO_TOOL, DRIVE_TOOL, SHOPPING_TOOL, MARKET_TOOL),
+              "--allowedTools", "Read,Grep,Glob,Edit,Write,mcp__google,%s,%s,%s" % (CONVO_TOOL, DRIVE_TOOL, SHOPPING_TOOL),
               "--mcp-config", str(AGENTS["valet"] / "mcp.json"), "--strict-mcp-config",
               "--add-dir", str(SHARED_MEM), str(TG_FILES)],   # valet-memory.md lives in the memory store; variadic: keep last
     # theming: theme-ontology expert. Answers data questions via the totolo MCP (scoped to ONLY this
@@ -163,6 +160,22 @@ AGENT_FLAGS = {
                     "--mcp-config", str(AGENTS["bard-curate"] / "mcp.json"), "--strict-mcp-config",
                     "--add-dir", str(YOTO_SHARE), str(DOCINDEX_DL), str(REPOS[1]), str(SHARED_MEM)],  # variadic: keep last
 }
+
+# regen (operator, 2026-11-20): every agent the operator addresses on Telegram may re-run anything
+# that has posted in its name, e.g. valet regenerating the crash-risk gauges. The unit list is
+# derived by services/forward/regen.py from what actually posted as #<agent>, so this grant does not
+# need updating when a new job starts posting. It needs MOPROX_AGENT, which run_agent sets.
+REGEN_TOOL = "Bash(regen:*)"
+REGEN_NOTE = ("If the operator asks you to regenerate, refresh, redo or re-post something that was "
+              "posted on Telegram in your name by a scheduled job, run `regen list` to see the jobs "
+              "that post as you and `regen run <unit>` to re-run one. It posts the result itself.")
+TELEGRAM_AGENTS = ("coach", "dev", "steward", "valet", "theming", "bard")
+for _a in TELEGRAM_AGENTS:
+    _f = AGENT_FLAGS[_a]
+    if "--allowedTools" in _f:
+        _i = _f.index("--allowedTools") + 1
+        _f[_i] = _f[_i] + "," + REGEN_TOOL
+    AGENT_FLAGS[_a] = ["--append-system-prompt", REGEN_NOTE] + _f   # front: --add-dir is variadic, keep it last
 
 def _log_usage(agent, j):
     """Append one line of token accounting from the --output-format json result envelope (or an
@@ -243,6 +256,7 @@ def run_agent(agent, prompt, timeout=600, extra=None):
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
     env["PATH"] = "%s:%s" % (LOCAL_BIN, env.get("PATH", "/usr/bin:/bin"))   # claude shells out to node
+    env["MOPROX_AGENT"] = agent       # whose posts `regen` may re-run (services/forward/regen.py)
     cmd = [CLAUDE, "-p", prompt, "--output-format", "json"] + list(extra or []) + AGENT_FLAGS.get(agent, [])
     try:
         r = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
