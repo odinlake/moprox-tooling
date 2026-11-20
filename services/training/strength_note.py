@@ -37,6 +37,12 @@ both; the feed counts only the later one:
 
   strength_note.py --ex side-plank --sets 2 --secs 30 --supersedes 9c10c7f80c9b
 
+A row whose replacement was already written — or that simply did not happen — is retracted on its
+own, with no shape of its own. The movement and the session date are taken from the row it
+withdraws, so there is no new word to invent for either:
+
+  strength_note.py --supersedes 1e0035d7d4b4
+
 The id to pass it is printed on every append, and by --show, which is how you obtain one for a row
 written earlier:
 
@@ -213,12 +219,31 @@ def main(argv=None):
 
     if a.show:
         return show()
-    if a.ex is None:
+    # A RETRACTION ON ITS OWN: --supersedes and not one measurement. The three shape gates below do
+    # not apply to it, because it HAS no shape — it asserts only that the named row did not happen
+    # as written. Until now they were unconditional, so the sanctioned writer could not express it:
+    # the cheapest form they accept writes `reps: 1`, which is an entry, and the reader counts it.
+    #
+    # That is not a hypothetical. The three double-counts of
+    # moprox-memory/strength-log-supersession-unread are the reason `supersedes` exists, and they
+    # were still live 66 days after it shipped (i-20261120-141753) because their replacements —
+    # rows 35, 42 and 46 — were appended in September, so the "append the replacement and name it"
+    # form above cannot reach them. Retracting them needs a row that names and nothing else.
+    #
+    # The reader already honours one: a row carrying none of strength.MEASURES is a `note`, never
+    # an entry (strength.entries), and `supersedes` is resolved over the whole file BEFORE that
+    # classification, so a note retracts exactly as an entry does. Nothing downstream can assume
+    # every row has a shape either — 47 of the live log's 249 rows are already such notes.
+    retract_only = a.supersedes is not None and not any(
+        (a.sets is not None, a.sets_unknown, a.reps is not None, a.secs is not None,
+         a.kg is not None, a.rir is not None))
+    if a.ex is None and not retract_only:
         ap.error("give --ex MOVEMENT, or --show to read the log")
-    if (a.sets is None) != a.sets_unknown:
-        ap.error("give --sets N, or --sets-unknown if it was not tracked — not both, not neither")
-    if a.reps is None and a.secs is None:
-        ap.error("give --reps (weighted or bodyweight) or --secs (timed)")
+    if not retract_only:
+        if (a.sets is None) != a.sets_unknown:
+            ap.error("give --sets N, or --sets-unknown if it was not tracked — not both, not neither")
+        if a.reps is None and a.secs is None:
+            ap.error("give --reps (weighted or bodyweight) or --secs (timed)")
     if a.reps is not None and a.secs is not None:
         ap.error("--reps and --secs are different movement shapes; give one")
     # A per-set list STATES the set count, so it must not contradict the one the caller also gave.
@@ -245,7 +270,7 @@ def main(argv=None):
     # deleting it looks exactly like the retraction succeeding. So the caller is handed the ids and
     # made to choose — which is also the only place the ids are discoverable for rows appended
     # before they were printed.
-    sup = None
+    sup, ex = None, None
     if a.supersedes is not None:
         hit = strength.resolve(a.supersedes, log_rows())
         if not hit:
@@ -258,10 +283,29 @@ def main(argv=None):
                                                           (h.get("note") or "")[:50])
                                   for h in hit)))
         sup = strength.rid(hit[0])
+        # A retraction's movement and session date are the withdrawn row's, taken from it rather
+        # than retyped. That is the whole vocabulary question answered: a sentinel `ex` ("retraction")
+        # would be a word no reader knows, and a `date` of today would plant a note on a day with no
+        # session — this backlog is September rehab work. Both still yield to an explicit flag, and
+        # neither is inherited for a REPLACEMENT row: the live corrections change the movement key
+        # (14 Sep's `heel-raise-SL-loaded` was replaced by `heel-raise-bent-knee-SL-loaded`), so
+        # inheriting there would quietly file the new work under the old name.
+        if retract_only:
+            if a.ex is None:
+                # VERBATIM, not through the normaliser below: that one is for what a human typed,
+                # and this value was already written. `heel-raise-straight-knee-SL-loaded`
+                # lowercased is a movement name the corpus does not use, so normalising an
+                # inherited key would make the retraction name a near-miss of the row it withdraws.
+                ex = hit[0].get("ex")
+                if not isinstance(ex, str) or not ex.strip():
+                    ap.error("--supersedes %s names a row with no movement to inherit — give --ex"
+                             % a.supersedes)
+            if a.date is None and isinstance(hit[0].get("date"), str):
+                a.date = hit[0]["date"]
 
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
-           "ex": a.ex.strip().lower().replace(" ", "-")}
+           "ex": ex if ex is not None else a.ex.strip().lower().replace(" ", "-")}
     # An even session stays a bare number, exactly as every row written before this did. Emitting
     # [10] for `--reps 10` would change the shape — and therefore the content id — of every row
     # this writer appends from now on, for no gain: strength.per_set() reads a list, and a list of
