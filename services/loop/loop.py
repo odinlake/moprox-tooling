@@ -634,6 +634,10 @@ def _verdict(out):
 TRANSCRIPTS = HOME / ".claude/projects/-home-mikael"   # refute() runs claude with cwd=$HOME
 TAIL_RESULTS = 8          # tool_result blocks kept from a dead lens's transcript
 TAIL_BLOCK = 6000         # chars per kept block
+# Transcript tails of killed attempts whose lens a LATER attempt rescued, for the most recent
+# adversarial() call only. The rescue's verdict replaces the death notice that named the file, so
+# without this list an accepted claim's tail is on disk with nothing naming it (c993-check).
+ORPHANED_TAILS = []
 
 
 def _dead_transcript(prompt, t0):
@@ -824,11 +828,12 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
     is a bounded digest, and a disputed claim is published nowhere else, so the ledger's copy of the
     objection was the only copy — and it was cut at 300 chars.
     """
+    del ORPHANED_TAILS[:]
     if not ADVERSARIAL:
         return []
     objections = []
     for lens in (CHANGE_LENSES if prop.get("patch") else LENSES):
-        reply, tails = None, []
+        reply, tails, archived = None, [], None
         for attempt in range(1, max(1, LENS_TRIES) + 1):
             try:
                 d = refute(prop, evidence, lens, agent, tree=tree)
@@ -848,6 +853,7 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
                     try:
                         OBJECTIONS.mkdir(parents=True, exist_ok=True)
                         tp.write_text("\n\n".join(tails))
+                        archived = tp
                         d = (f"[{lens[0]}] LENS DID NOT COMPLETE — the claim was not audited on "
                              f"this lens ({exc}). The killed run's transcript tail is at {tp}: "
                              f"READ IT before re-proposing — if it shows the skeptic finding a "
@@ -867,6 +873,17 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
                         f"{attempt + 1}/{max(1, LENS_TRIES)}", 6, agent)
                     continue
             break
+        # The pointer to the archive lives in the death notice, and a later attempt that completes
+        # replaces that notice with its own verdict. Carry the path out: onto the objection if the
+        # rescue raised one, and to the caller's accepted entry (ORPHANED_TAILS) if it did not. It
+        # adds no objection, so no verdict changes.
+        if archived and not (d and str(archived) in d):
+            note = (f"a killed refute[{lens[0]}] attempt was rescued on a later attempt; the dead "
+                    f"run's transcript tail is at {archived} and nothing else names it")
+            ORPHANED_TAILS.append(str(archived))
+            say(f"  ⚠ {note}", 4, agent)
+            if d:
+                d = d + f" [{note}]"
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
         if reply:
             # Next to the objection it caused, for the same reason the objection is kept at all: a
@@ -1077,13 +1094,15 @@ def change_gate(prop, cyc, agent):
         say(f"✓ differential PASS  {len(files)} file(s): {', '.join(files[:6])}", 6, agent)
 
         objections = adversarial(prop, detail, agent, cyc, tree=wt)
+        tails_killed = list(ORPHANED_TAILS)
         if objections:
             return "disputed", detail, {"objections": objections, "files": files}
 
         sha, why = land(prop, wt, files, head, cyc, agent)
         if not sha:
             return "rejected", f"verified but NOT landed: {why}", {"files": files, "unlanded": True}
-        return "accepted", detail, {"files": files, "sha": sha}
+        return "accepted", detail, {"files": files, "sha": sha,
+                                    "killed_lens_tails": tails_killed}
     finally:
         _git(["worktree", "remove", "--force", str(wt)], d)
         _git(["worktree", "prune"], d)
@@ -2367,6 +2386,8 @@ def main():
             if status == "accepted":
                 accepted += 1
                 row["sha"] = extra.get("sha")
+                if extra.get("killed_lens_tails"):
+                    row["killed_lens_tails"] = extra["killed_lens_tails"]
                 led.setdefault("accepted", []).append(row)
                 say(f"✓ LANDED {extra.get('sha')}  {item}  [{detail}]", 6, agent)
                 notify.send("LANDED %s %s\n%s\n\nwhy: %s\nfiles: %s\nevidence: %s"
@@ -2425,7 +2446,10 @@ def main():
                  # Kept so a later audit can see what was actually run. Without it a retro-audit
                  # has to reconstruct the check from the claim, which is exactly the guesswork the
                  # verifier exists to remove.
-                 "verify": _src(prop.get("verify") or "", SRC_MAX)})
+                 "verify": _src(prop.get("verify") or "", SRC_MAX),
+                 # A lens that was killed once and then passed the claim on its retry: the dead
+                 # run's transcript is the only record of what that skeptic was reading.
+                 **({"killed_lens_tails": list(ORPHANED_TAILS)} if ORPHANED_TAILS else {})})
             if promote(prop, detail, agent):
                 say(f"  → memory: {prop.get('novelty_key')}.md committed + pushed", 6, agent)
             notify.send("FINDING (verified)\n%s\n\nwhy: %s\nevidence: %s"

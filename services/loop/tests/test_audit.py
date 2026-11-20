@@ -375,5 +375,37 @@ check("no transcript -> plain death notice, nothing archived",
       len(objs) == 2 and "transcript" not in objs[0]
       and not (tmp / "objections" / "c1-check-timeout-transcript.txt").exists())
 
+# A lens killed once and rescued by the retry: the rescue's verdict must not orphan the archive.
+def _rescued(second):
+    n = {"i": 0}
+    def fake(prop, evidence, lens, agent, tree=None):
+        n["i"] += 1
+        if lens[0] == loop.LENSES[0][0] and n["i"] == 1:
+            e = loop.LensFailed("timed out after 420s")
+            e.transcript = "TAIL-OF-THE-KILLED-RUN"
+            raise e
+        return second if lens[0] == loop.LENSES[0][0] else None
+    return fake
+real_refute, real_tries = loop.refute, loop.LENS_TRIES
+loop.LENS_TRIES = 2
+try:
+    first = loop.LENSES[0][0]
+    tp = tmp / "objections" / f"c7-{first}-timeout-transcript.txt"
+    loop.refute = _rescued("a real defect")
+    objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=7)
+    check("rescue + objection: the objection names the killed run's tail",
+          len(objs) == 1 and objs[0].startswith("a real defect") and str(tp) in objs[0]
+          and loop.ORPHANED_TAILS == [str(tp)], repr(objs))
+    loop.refute = _rescued(None)
+    objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=7)
+    check("rescue + no objection: still accepted, the tail is handed to the caller",
+          objs == [] and loop.ORPHANED_TAILS == [str(tp)] and tp.exists(), repr(objs))
+    loop.refute = lambda *a, **k: None
+    objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=8)
+    check("no death: nothing carried over from the previous call",
+          objs == [] and loop.ORPHANED_TAILS == [])
+finally:
+    loop.refute, loop.LENS_TRIES = real_refute, real_tries
+
 print(f"\n{passed}/{passed + failed} passed")
 sys.exit(1 if failed else 0)
