@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Send feedback or a bug report to Anthropic. Thin wrapper so agents can run `anthropic-feedback ...`.
+# Resolves send.py next to itself, so the installed link runs the production tree (/opt), never
+# whatever happens to be checked out in ~/projects.
+exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/send.py" "$@"
