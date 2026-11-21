@@ -79,7 +79,7 @@ DATE_SOURCES = ASSERTABLE_SOURCES + ["clock", "unknown"]
 # different axes and --supersedes does not touch --status.
 #
 # `ts` is not a name either, and this log is a worse offender than the strength log it shares the
-# shape with: 26 of its 48 live rows share a timestamp with at least one other, in ten groups, the
+# shape with: 28 of its 48 live rows share a timestamp with at least one other, in ten groups, the
 # widest six rows across. The log's ONE id-bearing retraction proves the point by failing at it —
 # it cites `ts 2026-08-02T16:19:06`, and that second carries FOUR rows: the cold it means, plus a
 # sore throat and two medications. A ts-keyed retraction there silently drops a live antibiotic
@@ -103,7 +103,7 @@ def rid(r):
 def resolve(ref, rows):
     """Every row in `rows` that `ref` names — by rid, by an rid prefix, or by `ts`.
 
-    `ts` is accepted because it is what an agent reading the log has in front of it, and on 22 of
+    `ts` is accepted because it is what an agent reading the log has in front of it, and on 20 of
     the 48 live rows it IS unambiguous. Ambiguity is not resolved here; it is returned, so the
     caller has to decide. Both callers refuse.
 
