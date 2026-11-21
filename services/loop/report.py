@@ -67,10 +67,13 @@ def main():
     if accepted:
         items = []
         for a in accepted:
-            items.append("\n[cycle %s] %s%s\n  evidence: %s"
+            tails = a.get("killed_lens_tails") or []
+            items.append("\n[cycle %s] %s%s\n  evidence: %s%s"
                          % (a.get("cycle", "?"), a.get("claim") or a.get("item") or "?",
                             (" -> %s %s" % (a.get("repo"), a.get("sha"))) if a.get("sha") else "",
-                            (a.get("evidence") or "")[:300]))
+                            (a.get("evidence") or "")[:300],
+                            ("\n  killed lens transcript: %s" % ", ".join(map(str, tails)))
+                            if tails else ""))
         msgs += chunks("ACCEPTED (verifier passed)", items)
 
     if tried and not only_accepted:

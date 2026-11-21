@@ -391,11 +391,23 @@ loop.LENS_TRIES = 2
 try:
     first = loop.LENSES[0][0]
     tp = tmp / "objections" / f"c7-{first}-timeout-transcript.txt"
-    loop.refute = _rescued("a real defect")
+    # refute() returns "[lens] defect", up to OBJ_MAX long. The pointer goes right after the tag:
+    # the digest's last rung clips an objection to 400 chars, and a pointer at the END was eaten.
+    loop.refute = _rescued(f"[{first}] a real defect " + "x" * 1500)
     objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=7)
     check("rescue + objection: the objection names the killed run's tail",
-          len(objs) == 1 and objs[0].startswith("a real defect") and str(tp) in objs[0]
-          and loop.ORPHANED_TAILS == [str(tp)], repr(objs))
+          len(objs) == 1 and str(tp) in objs[0] and "a real defect" in objs[0]
+          and loop.ORPHANED_TAILS == [str(tp)], repr(objs)[:160])
+    check("the lens tag stays first, the pointer survives a 400-char clip with the defect",
+          objs[0].startswith(f"[{first}] [") and str(tp) in loop._clip(objs[0], 400)
+          and "a real defect" in loop._clip(objs[0], 400), objs[0][:200])
+    check("a rescued objection is not mistaken for a lens death",
+          loop.death_defect(7, objs[0]) == "" and "LENS DID NOT COMPLETE" not in objs[0])
+    loop.refute = _rescued("untagged defect")
+    objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=9)
+    check("an untagged objection still gets the pointer, in front",
+          len(objs) == 1 and objs[0].startswith("[a killed earlier attempt")
+          and objs[0].endswith("untagged defect"), repr(objs))
     loop.refute = _rescued(None)
     objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=7)
     check("rescue + no objection: still accepted, the tail is handed to the caller",
@@ -404,6 +416,15 @@ try:
     objs = loop.adversarial({"claim": "c3"}, "ev", "analyst", cyc=8)
     check("no death: nothing carried over from the previous call",
           objs == [] and loop.ORPHANED_TAILS == [])
+    # The silent rescue is ACCEPTED, so the row's killed_lens_tails is the pointer's only home, and
+    # ledger_digest is the only path from the ledger into the next prompt. It must pass it through.
+    led = {"open": [], "tried": [], "disputed": [],
+           "accepted": [{"cycle": 7, "claim": "c3", "killed_lens_tails": [str(tp), str(tp) + "2"]},
+                        {"cycle": 8, "claim": "c4"}]}
+    acc = json.loads(loop.ledger_digest(led))["accepted"]
+    check("the digest shows an accepted row's killed-lens tails, every one whole",
+          acc[0].get("killed_lens_tails") == [str(tp), str(tp) + "2"]
+          and "killed_lens_tails" not in acc[1], repr(acc)[:200])
 finally:
     loop.refute, loop.LENS_TRIES = real_refute, real_tries
 

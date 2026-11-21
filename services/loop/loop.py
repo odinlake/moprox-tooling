@@ -883,7 +883,14 @@ def adversarial(prop, evidence, agent, cyc=0, tree=None):
             ORPHANED_TAILS.append(str(archived))
             say(f"  ⚠ {note}", 4, agent)
             if d:
-                d = d + f" [{note}]"
+                # FIRST after the lens tag, never at the end: ledger_digest clips an objection to
+                # 400 chars on its last rung, and an appended pointer survived on 2 of 18 live
+                # objections. The tag stays at offset 0 because death_defect and
+                # ledger_digest.objection read the lens name from it. Short form, so the
+                # skeptic's own defect keeps most of that budget.
+                tag, sep, rest = d.partition("] ")
+                ptr = f"[a killed earlier attempt left its transcript tail at {archived}]"
+                d = f"{tag}] {ptr} {rest}" if sep and d.startswith("[") else f"{ptr} {d}"
         say(f"  {'✗' if d else '·'} refute[{lens[0]}]: {d or 'no objection'}", 6, agent)
         if reply:
             # Next to the objection it caused, for the same reason the objection is kept at all: a
@@ -2110,6 +2117,10 @@ def ledger_digest(led, budget=26000):
         for k in ("why", "note", "operator_note"):
             if e.get(k):
                 d[k] = _clip(e[k], 300)
+        # The only reader of a silently rescued lens's transcript pointer: the claim was accepted,
+        # so no objection names the path and this row is the one place it is written down.
+        if e.get("killed_lens_tails"):
+            d["killed_lens_tails"] = [_clip(p, 200) for p in e["killed_lens_tails"]]
         if objs:
             d["objections"] = [objection(e.get("cycle"), o, olen)
                                for o in (e.get("objections") or [])[:objs]]
