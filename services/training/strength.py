@@ -598,7 +598,21 @@ def build():
         v = volume(r)
         src = kg_src(r)
         e = {"ex": r["ex"]}
-        for k in ("sets", "reps", "reps_sets", "kg", "kg_sets", "secs", "rir", "note"):
+        # `band` is the RESISTANCE on an accessory done against a rubber band, and for those rows it
+        # is the only load there is: the log's 2026-09-15 entry says "Record the colour each time so
+        # resistance progression is trackable", and 2026-09-25 states the measurement rule outright
+        # — "Measure = band colour + setup + reps to the burn". It was absent from both whitelists
+        # below, so of those three components only `reps` reached the panel: the colour was dropped
+        # here and survived into the artifact as English inside `note`, which nothing renders.
+        # Measured on the live log 2026-11-21: 5 rows carry it, 3 of them entries (2026-09-15 green,
+        # 09-23 and 09-25 yellow), and deleting the key from all 5 — or rewriting every value to a
+        # nonsense colour — left the rebuilt feed BYTE-IDENTICAL. It is deliberately NOT in MEASURES:
+        # the 09-29 row is "Unmeasured by agreement ... band colour logged only", i.e. the colour
+        # alone does not make a row a strength entry, and promoting it there would reclassify that
+        # row and 09-15's first half out of `notes`. This publishes what the row holds; it does not
+        # change which rows are entries. Not priced in kilograms and never multiplied into `volume`:
+        # colour-to-tension mapping differs by brand, so it is a relative marker and the log says so.
+        for k in ("sets", "reps", "reps_sets", "kg", "kg_sets", "secs", "rir", "band", "note"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 e[k] = val
@@ -616,7 +630,12 @@ def build():
             s["sets"] += int(r["sets"])
 
         m = {"date": d}
-        for k in ("sets", "reps", "reps_sets", "kg", "kg_sets", "secs", "rir"):
+        # Same key on the movement row, because `best` is picked from these and a banded accessory
+        # has neither `kg` nor `secs`: it falls to the reps tie-break, so band-foot-inversion's best
+        # published as "18 reps" with no colour on it — and the log's own 09-25 note says the yellow
+        # band "alone is too light", i.e. two sessions at the same rep count are not comparable
+        # unless the colour travels with them.
+        for k in ("sets", "reps", "reps_sets", "kg", "kg_sets", "secs", "rir", "band"):
             val = load(r) if k == "kg" else r.get(k)
             if val is not None:
                 m[k] = val

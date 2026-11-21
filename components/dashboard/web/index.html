@@ -498,8 +498,20 @@ async function loadStrength(){
   // the single load rather than being summarised into it; `kg` is untouched and still carries the
   // top set to the movement `best` cell, where "45 kg × 10" is what the log says.
   const nk = e => e.kg_sets ? `${e.kg_sets.join("/")} kg` : `${e.kg} kg`;
-  const dose = e => e.secs!=null ? `${nx(e)}${e.secs}s`
-                  : (e.kg!=null ? `${nx(e)}${nr(e)} @ ${asm(nk(e),e)}` : `${nx(e)}${nr(e)}`);
+  // Fourth shape: the load is not a weight at all. An accessory done against a rubber band carries
+  // `band` and no `kg`, and for those rows the colour is the whole of the resistance — the log's
+  // 2026-09-25 band-foot-inversion entry states the rule, "Measure = band colour + setup + reps to
+  // the burn". Without this the dose rendered the rep count alone, so the 23 Sep (yellow) and 15 Sep
+  // (green) sessions read as the same work at different rep counts, and the movement's best read
+  // "18 reps" bare. Rendered as a WORD and never as a number: colour-to-tension mapping differs by
+  // brand, so it is a relative marker, strength.py does not price it in kilograms and never
+  // multiplies it into `volume`, and this must not imply it is comparable across brands. Appended
+  // to every dose shape rather than taking the `kg` slot, so a row carrying both a load and a band
+  // shows both instead of one hiding the other.
+  const nbd = e => e.band!=null
+    ? ` <span title="resistance band colour, as the log records it — a relative marker only: colour-to-tension mapping differs by brand">${esc(e.band)} band</span>` : "";
+  const dose = e => e.secs!=null ? `${nx(e)}${e.secs}s${nbd(e)}`
+                  : (e.kg!=null ? `${nx(e)}${nr(e)} @ ${asm(nk(e),e)}${nbd(e)}` : `${nx(e)}${nr(e)}${nbd(e)}`);
   // Per movement: current best + a bare progression line. One session in, the line is a dot; that is
   // honest, and it fills in without any change here.
   const spark = m => {
@@ -512,8 +524,8 @@ async function loadStrength(){
   };
   const movs = Object.entries(d.movements).sort((a,b)=>a[0].localeCompare(b[0])).map(([ex,m])=>{
     const b = m.best || {};
-    const best = b.secs!=null ? `${b.secs}s`
-               : (b.kg!=null ? asm(`${b.kg} kg × ${nr(b)}`,b) : `${nr(b)} reps`);
+    const best = b.secs!=null ? `${b.secs}s${nbd(b)}`
+               : (b.kg!=null ? `${asm(`${b.kg} kg × ${nr(b)}`,b)}${nbd(b)}` : `${nr(b)} reps${nbd(b)}`);
     return `<tr><td>${esc(ex)}</td><td class="num">${best}</td><td class="num">${m.n}</td><td>${spark(m)}</td></tr>`;
   }).join("");
   const sess = d.sessions.slice(0,8).map(s=>{
