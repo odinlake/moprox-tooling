@@ -1,0 +1,15 @@
+name: deploy-pages
+on: { push: { branches: [gh-pages] } }
+permissions: { contents: read, pages: write, id-token: write }
+concurrency: { group: pages, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: "${{ steps.dep.outputs.page_url }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: "." }
+      - id: dep
+        uses: actions/deploy-pages@v4
