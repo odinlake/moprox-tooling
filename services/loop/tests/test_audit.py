@@ -425,6 +425,29 @@ try:
     check("the digest shows an accepted row's killed-lens tails, every one whole",
           acc[0].get("killed_lens_tails") == [str(tp), str(tp) + "2"]
           and "killed_lens_tails" not in acc[1], repr(acc)[:200])
+    # A rescue can sit in a cycle that ends DISPUTED or unlanded (7 of the first 22 did): those rows
+    # carry the pointer too, and the digest passes it through from `disputed` and `tried` alike.
+    led = {"open": [], "accepted": [],
+           "disputed": [{"cycle": 9, "claim": "c5", "objections": ["[x] no"],
+                         "killed_lens_tails": [str(tp)]}, {"cycle": 10, "claim": "c6"}],
+           "tried": [{"cycle": 11, "kind": "change", "item": "c7", "killed_lens_tails": [str(tp)]}]}
+    dig = json.loads(loop.ledger_digest(led))
+    check("the digest shows a disputed row's and an unlanded row's killed-lens tails",
+          dig["disputed"][0].get("killed_lens_tails") == [str(tp)]
+          and "killed_lens_tails" not in dig["disputed"][1]
+          and dig["tried"][0].get("killed_lens_tails") == [str(tp)], repr(dig)[:300])
+    # Every row literal and change_gate return that follows adversarial() must name the tails.
+    import ast
+    tree = ast.parse(Path(loop.__file__).read_text())
+    gate = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "change_gate")
+    rets = [ast.unparse(r) for r in ast.walk(gate) if isinstance(r, ast.Return)
+            and any(k in ast.unparse(r) for k in ("'disputed'", "'unlanded'", "'accepted'"))]
+    check("change_gate names the tails on its disputed, unlanded and accepted returns",
+          len(rets) == 3 and all("killed_lens_tails" in r for r in rets), repr(rets)[:300])
+    src = Path(loop.__file__).read_text()
+    check("both claim rows and the change row carry killed_lens_tails",
+          src.count('**({"killed_lens_tails": list(ORPHANED_TAILS)} if ORPHANED_TAILS else {})') == 2
+          and 'if extra.get("killed_lens_tails"):\n                row["killed_lens_tails"]' in src)
 finally:
     loop.refute, loop.LENS_TRIES = real_refute, real_tries
 

@@ -1103,11 +1103,13 @@ def change_gate(prop, cyc, agent):
         objections = adversarial(prop, detail, agent, cyc, tree=wt)
         tails_killed = list(ORPHANED_TAILS)
         if objections:
-            return "disputed", detail, {"objections": objections, "files": files}
+            return "disputed", detail, {"objections": objections, "files": files,
+                                        "killed_lens_tails": tails_killed}
 
         sha, why = land(prop, wt, files, head, cyc, agent)
         if not sha:
-            return "rejected", f"verified but NOT landed: {why}", {"files": files, "unlanded": True}
+            return "rejected", f"verified but NOT landed: {why}", {"files": files, "unlanded": True,
+                                                                  "killed_lens_tails": tails_killed}
         return "accepted", detail, {"files": files, "sha": sha,
                                     "killed_lens_tails": tails_killed}
     finally:
@@ -2117,8 +2119,8 @@ def ledger_digest(led, budget=26000):
         for k in ("why", "note", "operator_note"):
             if e.get(k):
                 d[k] = _clip(e[k], 300)
-        # The only reader of a silently rescued lens's transcript pointer: the claim was accepted,
-        # so no objection names the path and this row is the one place it is written down.
+        # The only reader of a silently rescued lens's transcript pointer: that lens raised no
+        # objection, so nothing else names the path, whether the row is accepted, disputed or tried.
         if e.get("killed_lens_tails"):
             d["killed_lens_tails"] = [_clip(p, 200) for p in e["killed_lens_tails"]]
         if objs:
@@ -2394,11 +2396,13 @@ def main():
                    "source": prop.get("source"), "repo": prop.get("repo"),
                    "files": extra.get("files"), "why": prop.get("why"),
                    "check": _src(prop.get("check") or "", SRC_MAX)}
+            # Whatever the outcome: a disputed or unlanded change ran the same audit, and a lens
+            # rescued in silence there has no other row to name its dead run's transcript.
+            if extra.get("killed_lens_tails"):
+                row["killed_lens_tails"] = extra["killed_lens_tails"]
             if status == "accepted":
                 accepted += 1
                 row["sha"] = extra.get("sha")
-                if extra.get("killed_lens_tails"):
-                    row["killed_lens_tails"] = extra["killed_lens_tails"]
                 led.setdefault("accepted", []).append(row)
                 say(f"✓ LANDED {extra.get('sha')}  {item}  [{detail}]", 6, agent)
                 notify.send("LANDED %s %s\n%s\n\nwhy: %s\nfiles: %s\nevidence: %s"
@@ -2445,7 +2449,10 @@ def main():
                 led.setdefault("disputed", []).append(
                     {"cycle": cyc, "claim": prop.get("claim"), "evidence": detail,
                      "verify": _src(prop.get("verify") or "", SRC_MAX),
-                     "objections": objections})
+                     "objections": objections,
+                     # As on the accepted row below: a lens rescued in silence beside the one
+                     # that objected leaves its dead run's transcript named nowhere else.
+                     **({"killed_lens_tails": list(ORPHANED_TAILS)} if ORPHANED_TAILS else {})})
                 say(f"⚑ DISPUTED  {claim}", 4, agent)
                 notify.log("DISPUTED — the verifier passed but the audit objected\n%s\n\n%s"
                             % (prop.get("claim", "?"), "\n".join(objections)), agent, "disputed")
