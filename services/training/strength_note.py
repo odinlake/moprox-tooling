@@ -24,6 +24,11 @@ A load that was NOT read back off the machine is marked as such, with --kg-src a
 
   strength_note.py --ex seated-row --sets 2 --reps 10 --kg 35 --kg-src assumed
 
+An accessory done against a RUBBER BAND has no kg; the colour is the resistance, and the log asks
+for it every session because progression is only trackable across sessions that name it:
+
+  strength_note.py --ex band-foot-inversion --sets 3 --reps 15 --band yellow
+
 A session whose set count was never tracked says so, rather than losing the load with it:
 
   strength_note.py --ex heel-raise-SL-loaded --sets-unknown --reps 10 --kg 32
@@ -195,6 +200,36 @@ def main(argv=None):
                     help="where --kg came from: 'stated' (read off the machine) or 'assumed' "
                          "(the prescription, not read back). Omit if you do not know.")
     ap.add_argument("--secs", type=int, help="seconds per set, for timed movements (plank etc)")
+    # The load on an accessory done against a rubber band, where the colour IS the resistance —
+    # there is no kg to read. The log states its own measurement rule on 2026-09-25,
+    # "Measure = band colour + setup + reps to the burn", and asks for the colour every time
+    # (2026-09-15: "Record the colour each time so resistance progression is trackable").
+    #
+    # strength.py has published the key since 3a0f5e27 and index.html renders it, but this word has
+    # never existed here: `band` occurs 0 times in this file and `git log -S band` over it returns
+    # no commit, ever (moprox-memory/strength-key-four-drop-points-band-writer-open, measured
+    # 2026-11-22). So all 5 live band rows were necessarily hand-written JSON that went around this
+    # script — which is the mechanism the --sets-unknown comment above blames by name, and the
+    # reason that same producer has `sets_uncertain` and `date_uncertain` on disk, invented words
+    # no reader has ever looked at.
+    #
+    # NOT `choices=`, unlike --kg-src. That one is a closed set; this one is not: the log says
+    # outright that "colour-to-tension mapping differs by brand, so it is only a relative marker",
+    # and a vocabulary fixed to today's green/yellow would send the next band's colour straight
+    # back around the CLI — the exact failure this flag exists to end. Normalised like --ex instead,
+    # because it is the same kind of value: a word a human typed, which the panel then matches
+    # across sessions.
+    #
+    # And deliberately NOT a movement shape: it does not satisfy the --reps/--secs gate below and
+    # does not count as a measurement for a bare retraction. strength.py leaves `band` out of
+    # MEASURES on purpose — the 2026-09-29 row is "Unmeasured by agreement ... band colour logged
+    # only", so the colour alone does not make a row an entry — and a writer that accepted it as a
+    # shape would hand the reader rows it classifies the other way. So this emits the colour onto a
+    # row that has a dose; it does not invent a fourth shape.
+    ap.add_argument("--band", metavar="COLOUR",
+                    help="resistance band colour, for an accessory done against a band rather "
+                         "than a weight (green, yellow). The colour ALONE — the panel appends the "
+                         "word 'band' itself. Not a dose: give --reps with it.")
     ap.add_argument("--rir", type=float, help="reps in reserve — how many were left. 0 = to failure")
     # The vocabulary for "that earlier row was wrong". Without it the only way to retract is prose,
     # and prose is what nothing reads: three live cases where a correction was appended, said so in
@@ -264,6 +299,13 @@ def main(argv=None):
     # recorded a provenance it did not.
     if a.kg_src and not a.kg:
         ap.error("--kg-src describes --kg; give a non-zero --kg or drop it")
+    # An empty colour is a caller error, not an omission, and it has to be LOUD. Dropping it the way
+    # --note's default is dropped would append the row with no `band` key at all, i.e. publish a
+    # banded accessory as though the band were never used — and on these rows the colour is the only
+    # load there is, so the quiet version loses the entire measurement.
+    band = None if a.band is None else a.band.strip().lower()
+    if a.band is not None and not band:
+        ap.error("--band takes the band's colour (green, yellow); give one or drop the flag")
 
     # Resolved BEFORE the append, and refused rather than guessed at. An ambiguous reference is the
     # one thing this field must never absorb: the row it does not name is a real set of work, and
@@ -312,7 +354,7 @@ def main(argv=None):
     # one says nothing a number does not.
     reps = None if a.reps is None else (a.reps[0] if len(a.reps) == 1 else a.reps)
     for k, v in (("sets", a.sets), ("reps", reps), ("kg", a.kg), ("kg_src", a.kg_src),
-                 ("secs", a.secs), ("supersedes", sup),
+                 ("band", band), ("secs", a.secs), ("supersedes", sup),
                  ("rir", a.rir), ("note", a.note or None), ("agent", a.agent or None)):
         if v is not None:
             rec[k] = v
