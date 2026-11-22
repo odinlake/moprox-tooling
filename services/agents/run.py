@@ -175,7 +175,48 @@ for _a in TELEGRAM_AGENTS:
     if "--allowedTools" in _f:
         _i = _f.index("--allowedTools") + 1
         _f[_i] = _f[_i] + "," + REGEN_TOOL
-    AGENT_FLAGS[_a] = ["--append-system-prompt", REGEN_NOTE] + _f   # front: --add-dir is variadic, keep it last
+
+# CLAUDE.md @imports do NOT load under `claude -p` (measured 2026-11-22, CLI 2.1.330): asked from
+# its own dir, coach could not give the max HR in its @training-context.md nor any line of its
+# @coach-memory.md, and valet never saw its own "closed, never surface again" notes, so it kept
+# nagging about things the operator had told it were done. Every agent notebook (@<agent>-memory.md)
+# was write-only. So the harness expands the imports itself, fresh on every run, and hands them over
+# with --append-system-prompt-file. Each file is capped: a notebook that grew past the cap keeps its
+# head (the how-to-use-me section) and its newest entries, and says where the full file is.
+IMPORT_CAP = 40000          # chars per imported file
+IMPORT_HEAD = 8000
+
+
+def _imports(agent):
+    import re
+    root = AGENTS[agent]
+    try:
+        text = (root / "CLAUDE.md").read_text()
+    except OSError:
+        return ""
+    out = []
+    for name in dict.fromkeys(re.findall(r"(?<![\w`])@([A-Za-z0-9_.\-/]+\.md)\b", text)):
+        f = root / name
+        try:
+            body = f.read_text()
+        except OSError as exc:
+            print("run.py: %s imports %s, which cannot be read: %s" % (agent, name, exc), file=sys.stderr)
+            continue
+        if len(body) > IMPORT_CAP:
+            body = (body[:IMPORT_HEAD] + "\n\n[... %d chars omitted: the full file is %s; Read it for "
+                    "older entries ...]\n\n" % (len(body) - IMPORT_CAP, f.resolve())
+                    + body[-(IMPORT_CAP - IMPORT_HEAD):])
+        out.append("===== %s (imported by your CLAUDE.md; this is its current content) =====\n%s"
+                   % (name, body))
+    return "\n\n".join(out)
+
+
+def _appended(agent):
+    """Everything run_agent appends to the system prompt for this agent, or ''."""
+    parts = [_imports(agent)]
+    if agent in TELEGRAM_AGENTS:
+        parts.append(REGEN_NOTE)
+    return "\n\n".join(x for x in parts if x)
 
 def _log_usage(agent, j):
     """Append one line of token accounting from the --output-format json result envelope (or an
@@ -257,12 +298,23 @@ def run_agent(agent, prompt, timeout=600, extra=None):
            if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")}
     env["PATH"] = "%s:%s" % (LOCAL_BIN, env.get("PATH", "/usr/bin:/bin"))   # claude shells out to node
     env["MOPROX_AGENT"] = agent       # whose posts `regen` may re-run (services/forward/regen.py)
-    cmd = [CLAUDE, "-p", prompt, "--output-format", "json"] + list(extra or []) + AGENT_FLAGS.get(agent, [])
+    import tempfile
+    appended = _appended(agent)
+    tf = None
+    if appended:
+        tf = tempfile.NamedTemporaryFile("w", prefix="agent-%s-" % agent, suffix=".md", delete=False)
+        tf.write(appended); tf.close()
+    cmd = ([CLAUDE, "-p", prompt, "--output-format", "json"] + list(extra or [])
+           + (["--append-system-prompt-file", tf.name] if tf else [])
+           + AGENT_FLAGS.get(agent, []))      # last: they end in a variadic --add-dir
     try:
         r = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         _log_usage(agent, {"_error": "timeout"})
         raise RuntimeError("timed out after %ds — too big a task to finish in one go" % timeout)
+    finally:
+        if tf:
+            os.unlink(tf.name)
     if r.returncode != 0:
         why = _diagnose(r.stdout, r.stderr)
         _log_usage(agent, {"_error": "exit %d: %s" % (r.returncode, why)})
