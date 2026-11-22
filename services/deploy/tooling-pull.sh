@@ -242,14 +242,25 @@ restart_group() {   # restart_group <regex over the changed paths> <label> <unit
   fi
 }
 changed=$(git diff --name-only "$before" "$after")
-restart_group '^services/(agents|forward)/' "agent daemons" \
+# services/lib/ is in BOTH regexes rather than a group of its own. Every one of the five units named
+# below reaches it: walking each ExecStart's import graph over this repo's own modules,
+# dispatcher/yoto-web/yoto-listen reach errlog AND tokenlock, telegram-poll and discord-theming
+# reach errlog -- so a lib change is a code change for all five and the old comment here ("a
+# services/lib change still restarts nothing at all") named a real deployment stop. Two of the five
+# services/lib commits in the 90 days to 2026-11-22 touched services/lib ALONE (131f7d32 "a skip
+# report names every distinct reason", b6c61ddf "one refresher at a time for every rotating
+# credential"), so the trigger shape is not hypothetical; both predate this restart block, which is
+# why nothing has been measurably lost yet. A third group would have been the obvious shape and is
+# wrong: 895cb24a touched services/lib AND services/agents, and under a separate group that commit
+# restarts dispatcher twice in the same run. Widening keeps one sudo call per group, which is what
+# /etc/sudoers.d/tooling-pull was written for.
+restart_group '^services/(agents|forward|lib)/' "agent daemons" \
   dispatcher.service telegram-poll.service discord-theming.service
-restart_group '^services/yoto/' "yoto daemons" yoto-web.service yoto-listen.service
+restart_group '^services/(yoto|lib)/' "yoto daemons" yoto-web.service yoto-listen.service
 # Not here, deliberately. claude-login-web.service holds a pending interactive login in server-side
 # state (76be2349 exists so one survives a page reload), so a timer restarting it would discard a
 # login somebody is sitting at a browser waiting for, and its unit file already says to restart it
 # by hand. shopping-web.service has the same defect and is left for its own change: it would be safe
 # to restart (its queue is on disk, shopping-pending.json, not in memory) but services/shopping has
-# not changed since 2026-10-06, so the omission has cost nothing measurable. And a services/lib
-# change still restarts nothing at all, though every unit named here imports errlog.
+# not changed since 2026-10-06, so the omission has cost nothing measurable.
 [ "$stale" = 0 ] || exit 1
