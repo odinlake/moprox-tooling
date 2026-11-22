@@ -42,6 +42,7 @@ import sport   # noqa: E402  — run | ride | strength | other: the estate's one
 
 DATA    = Path.home() / "projects/private-data/polar"
 LOG     = DATA / "strap-health.jsonl"          # one record per session, append-only
+INCOMING = DATA / "incoming"                   # polar_fetch's raw store: {summary, hr} per exercise
 BATTERY = DATA / "battery-changes.json"        # [{"date": "YYYY-MM-DD", "note": "..."}]
 SPEC_HOURS = 400                               # H10 rated battery life
 SETTLE_S   = 300                               # first 5 min: strap wetting/settling, not failure
@@ -165,13 +166,96 @@ def _days(a, b):
     return abs(int((time.mktime(time.strptime(b[:10], f)) - time.mktime(time.strptime(a[:10], f))) // 86400))
 
 
+def resolve(records):
+    """Collapse a rescored date to its newest analysed row.
+
+    The log is append-only and `record()` writes at most one analysed row per date, so a change to
+    `analyse()` is FORWARD-ONLY: every stored row keeps whatever the code of its day computed, and
+    the row that motivated the change is the one row it cannot reach. A correction is therefore a
+    LATER row carrying `rescored_at`, never an edit, and this is where the later row wins.
+
+    Only dates that carry such a row are collapsed, and only their ANALYSED rows: a usage row on
+    the same date is a second session on the battery clock and passes through untouched (2026-11-09
+    has one of each). A log with no `rescored_at` row is returned unchanged, so two analysed rows
+    that arrived without one are left both standing rather than silently halved.
+    See moprox-memory/append-only-log-fix-misses-its-own-row.md.
+    """
+    fixed = {r.get("date") for r in records if analysed(r) and r.get("rescored_at")}
+    if not fixed: return list(records)
+    out, seen = [], set()
+    for r in reversed(records):
+        if analysed(r) and r.get("date") in fixed:
+            if r.get("date") in seen: continue
+            seen.add(r.get("date"))
+        out.append(r)
+    out.reverse()
+    return out
+
+
 def load_log():
     if not LOG.exists(): return []
     out = []
     for ln in LOG.read_text().splitlines():
         try: out.append(json.loads(ln))
         except Exception as e: errlog.skip("strap_health.py: log line", e)
-    return out
+    return resolve(out)
+
+
+def run_traces():
+    """date -> (trace path, hr) for every date the raw store holds exactly ONE run trace for.
+
+    `record()` keeps the first analysed row it is given for a date, so a date with two run traces
+    does not identify which session the stored row came from. Those are returned separately and
+    skipped rather than guessed (0 of 67 run dates in the store on 2026-11-22).
+    """
+    seen = {}
+    for p in sorted(INCOMING.glob("exercise_*.json")):
+        try: d = json.loads(p.read_text())
+        except Exception as e:
+            errlog.skip("strap_health.py: raw trace %s" % p.name, e); continue
+        s = d.get("summary") or {}
+        if sport.kind(sport.ex_label(s)) != CALIBRATED: continue
+        date = (s.get("start_time") or "")[:10]
+        if date: seen.setdefault(date, []).append((p, d.get("hr") or []))
+    ambiguous = {k: [p.name for p, _ in v] for k, v in seen.items() if len(v) > 1}
+    return {k: v[0] for k, v in seen.items() if len(v) == 1}, ambiguous
+
+
+def rescore(write=False):
+    """Recompute every stored analysed row from its raw trace and report what its own code got wrong.
+
+    Without this there is no path from a fixed `analyse()` to a stored row at all: 385953af
+    (2026-11-11) made a dropout starting inside the settling window clip instead of vanish, and
+    11 days later 2026-11-09 still read `dropouts=0, dropout_s=0` beside its own `zeros_mid=2319`,
+    so the estate's worst recorded strap session was absent from `report`'s flagged census. A
+    replay cannot repair it: the per-date guard in `record()` makes the replay a no-op, and
+    removing the guard duplicates the row rather than correcting it.
+    """
+    recs = load_log()
+    traces, ambiguous = run_traces()
+    stale, missing = [], []
+    for r in recs:
+        if not analysed(r): continue
+        t = traces.get(r.get("date"))
+        if t is None: missing.append(r.get("date")); continue
+        new = analyse(t[1]); new["date"] = r["date"]
+        diff = sorted(k for k in new if k != "date" and r.get(k) != new[k])
+        if diff: stale.append((r, new, diff, t[0].name))
+    for r, new, diff, name in stale:
+        print("%s STALE on %s: %s  [%s]"
+              % (r["date"], name, ", ".join("%s %r->%r" % (k, r.get(k), new[k]) for k in diff),
+                 "rescored" if write else "dry run, pass --write"))
+        if write:
+            new["rescored_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            new["rescored_from"] = name
+            _append(new)
+    for date, names in sorted(ambiguous.items()):
+        print("%s NOT rescored: %d run traces in the raw store (%s) — the stored row names none of"
+              " them, so correcting it would be a guess" % (date, len(names), ", ".join(names)))
+    print("%d stale of %d analysed row(s) with a trace (%d row(s) have no trace in the raw store,"
+          " which keeps ~90 days)" % (len(stale), sum(1 for r in recs if analysed(r)) - len(missing),
+                                      len(missing)))
+    return stale
 
 
 def _append(row):
@@ -229,6 +313,8 @@ if __name__ == "__main__":
         cur = json.loads(BATTERY.read_text()) if BATTERY.exists() else []
         cur.append({"date": d, "note": " ".join(sys.argv[3:]) or "logged by strap_health"})
         BATTERY.write_text(json.dumps(cur, indent=1)); print("logged battery change", d)
+    elif cmd == "rescore":
+        rescore(write="--write" in sys.argv[2:])
     else:
         recs = load_log()
         changes = json.loads(BATTERY.read_text()) if BATTERY.exists() else []
