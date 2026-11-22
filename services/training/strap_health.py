@@ -32,6 +32,11 @@ THE PREDICTOR THAT ACTUALLY WORKS IS USE, NOT SIGNAL
   drain hours >> session hours: Polar's own advice is to detach it after every session. When hours
   since the last change are far below 400 and the battery is dying anyway, that IS the finding —
   it says the sensor is being left attached, which is fixable.
+
+THE CHANGE LOG (battery-changes.json)
+  Each entry carries `kind`: `cell` (coin cell replaced), `pod` (a different H10 pod put in use) or
+  `note` (anything else about the strap). Only cell and pod restart the drain clock and the 14-day
+  corroboration window; a note resets nothing, and a missing kind is reported and read as a note.
 """
 import json, statistics as st, sys, time
 from pathlib import Path
@@ -43,7 +48,15 @@ import sport   # noqa: E402  — run | ride | strength | other: the estate's one
 DATA    = Path.home() / "projects/private-data/polar"
 LOG     = DATA / "strap-health.jsonl"          # one record per session, append-only
 INCOMING = DATA / "incoming"                   # polar_fetch's raw store: {summary, hr} per exercise
-BATTERY = DATA / "battery-changes.json"        # [{"date": "YYYY-MM-DD", "note": "..."}]
+# [{"date": "YYYY-MM-DD", "kind": "cell" | "pod" | "note", "note": "..."}] — the file doubles as a
+# strap diary, so `kind` says what an entry IS:
+#   cell  the coin cell was replaced            } hardware events: restart the drain clock and the
+#   pod   a different H10 pod was put in use    } 14-day corroboration leash (see last_reset)
+#   note  anything else (diagnosis, purchase record, settings): resets NOTHING
+# A missing or unknown kind is read as a note and reported at err level, never guessed.
+BATTERY = DATA / "battery-changes.json"
+RESETS  = ("cell", "pod")
+KINDS   = RESETS + ("note",)
 SPEC_HOURS = 400                               # H10 rated battery life
 SETTLE_S   = 300                               # first 5 min: strap wetting/settling, not failure
 STEADY     = (600, 2400)                       # 10:00-40:00, the window that is genuinely steady
@@ -104,12 +117,34 @@ def analysed(rec):
     return "dropouts" in rec
 
 
+def last_reset(changes):
+    """(date, kind) of the newest HARDWARE event in the change log, or (None, None).
+
+    Only `cell` and `pod` entries count. battery-changes.json became a strap diary — 5 of its first
+    8 entries were diagnosis and a purchase record — and max(date) over every entry let any note
+    pose as "the last battery change". An entry whose kind is missing or unknown is treated as a
+    note, which degrades to "no reset known" rather than suppressing a real `replace`, and is
+    reported so it gets fixed instead of silently never counting.
+    """
+    best = (None, None)
+    for c in changes or []:
+        k = c.get("kind")
+        if k not in KINDS:
+            errlog.err("strap_health.py: battery-changes.json entry dated %s has kind %r, not one of"
+                       " %s — read as a note, it resets nothing" % (c.get("date"), k, "|".join(KINDS)))
+            continue
+        if k in RESETS and c.get("date") and (best[0] is None or c["date"] >= best[0]):
+            best = (c["date"], k)
+    return best
+
+
 def hours_since_change(records, changes):
-    """Session hours since the last logged battery change — the real predictor, when it is logged."""
-    if not changes: return None, None
-    last = max(c["date"] for c in changes)
+    """(date, session hours since, kind) for the last cell change or pod swap — the real predictor,
+    when it is logged. (None, None, None) when no hardware event is logged."""
+    last, kind = last_reset(changes)
+    if last is None: return None, None, None
     h = sum(r["minutes"] for r in records if r.get("date", "") >= last) / 60.0
-    return last, round(h, 1)
+    return last, round(h, 1), kind
 
 
 def verdict(records, changes=None):
@@ -126,16 +161,26 @@ def verdict(records, changes=None):
     if not recs: return "ok", "no sessions analysed"
     cur = recs[-1]
     hits = [r for r in recs if flagged(r)]
-    last_change, hours = hours_since_change(everything, changes or [])
+    last_change, hours, change_kind = hours_since_change(everything, changes or [])
     age = ""
-    if hours is not None:
+    if change_kind == "pod":
+        # Hours on a swapped-in pod are not its cell's age, so no spec comparison is drawn from them.
+        age = (" Pod swapped %s: %.0f h of sessions on it since; the age of its cell is not known."
+               % (last_change, hours))
+    elif hours is not None:
         age = " Battery changed %s: %.0f h of sessions since (spec ~%d h)." % (last_change, hours, SPEC_HOURS)
         if hours < 0.25 * SPEC_HOURS:
             age += (" That is well inside spec, so a failing battery would point at the sensor being"
                     " left clipped to a damp strap between runs — detach it and it should last.")
     if not flagged(cur):
         return "ok", "strap clean (no mid-session dropouts, no 1 s jumps >=5 bpm)." + age
-    recent = [r for r in hits if r["date"] < cur["date"]][-1:]
+    # "Two inside a fortnight" is evidence about one cell in one pod: a flagged run from before
+    # either was swapped says nothing about what he is wearing now, so it cannot corroborate.
+    # `>=` as in hours_since_change: a session on the change day is on the new hardware.
+    # Only this pairing is scoped; the single-session `signals >= 2` path and `report`'s census
+    # stay whole-log. See moprox-memory/log-repair-arms-the-corroboration-leash.md.
+    recent = [r for r in hits if r["date"] < cur["date"]
+              and (last_change is None or r["date"] >= last_change)][-1:]
     # ONE vote per independent family. analyse() counts jumps5 as #(dz>=5) and jumps8 as #(dz>=8)
     # over the same dz, so jumps8 is NESTED inside jumps5 — 0 of the log's 139 rows violate it, and
     # no trace can. Counting them as two made any jumps8>0 reach `replace` on a single phenomenon
@@ -311,7 +356,8 @@ if __name__ == "__main__":
     if cmd == "battery-changed":
         d = sys.argv[2]
         cur = json.loads(BATTERY.read_text()) if BATTERY.exists() else []
-        cur.append({"date": d, "note": " ".join(sys.argv[3:]) or "logged by strap_health"})
+        cur.append({"date": d, "kind": "cell",
+                    "note": " ".join(sys.argv[3:]) or "logged by strap_health"})
         BATTERY.write_text(json.dumps(cur, indent=1)); print("logged battery change", d)
     elif cmd == "rescore":
         rescore(write="--write" in sys.argv[2:])
