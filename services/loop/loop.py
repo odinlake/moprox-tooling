@@ -17,7 +17,8 @@ things the agent cannot opt out of because they happen *around* it:
 Published narration: we re-emit the model's own `thinking` / `text` / `tool_use` as short readable
 lines on stdout, which systemd puts in the journal and the fleet lane ships to logview (mo.lan/logs).
 `tool_result` is deliberately DROPPED — it is the only block that reaches megabytes, and the UI
-collapses it too. Full fidelity stays in ~/.claude/projects/<slug>/*.jsonl on the box for 90 days.
+collapses it too. Full fidelity stays in ~/.claude/projects/<slug>/*.jsonl on the box for
+`cleanupPeriodDays` (90, set in ~/.claude/settings.json on claude-loop; the CLI default is 30).
 """
 import fcntl, json, os, queue, re, shutil, signal, subprocess, sys, threading, time
 from datetime import datetime

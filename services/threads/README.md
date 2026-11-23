@@ -35,5 +35,8 @@ ln -sf /opt/moprox-tooling/services/threads/thread-search /home/mikael/.local/bi
 ```
 Optionally raise retention so the *source* sticks around longer too (defence in depth):
 `~/.claude/settings.json` → `"cleanupPeriodDays": 90`.
+claude-loop carries the same key (set 2026-11-23, i-20261123-090828) but deliberately not the
+archiver: the loop's narration is already in the journal and logview, and ~41 headless sessions a
+day would swamp thread-search.
 
 Run the archiver once by hand any time: `python3 services/threads/archive.py`.
