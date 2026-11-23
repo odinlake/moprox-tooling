@@ -176,13 +176,22 @@ for _a in TELEGRAM_AGENTS:
         _i = _f.index("--allowedTools") + 1
         _f[_i] = _f[_i] + "," + REGEN_TOOL
 
-# CLAUDE.md @imports do NOT load under `claude -p` (measured 2026-11-22, CLI 2.1.330): asked from
-# its own dir, coach could not give the max HR in its @training-context.md nor any line of its
-# @coach-memory.md, and valet never saw its own "closed, never surface again" notes, so it kept
-# nagging about things the operator had told it were done. Every agent notebook (@<agent>-memory.md)
-# was write-only. So the harness expands the imports itself, fresh on every run, and hands them over
-# with --append-system-prompt-file. Each file is capped: a notebook that grew past the cap keeps its
-# head (the how-to-use-me section) and its newest entries, and says where the full file is.
+# On claude-dev (CLI 2.1.330) none of the agents' CLAUDE.md @imports loads natively. Headless mode
+# is not the cause; measured 2026-11-23 with `claude -p ... --tools ""`, a plain in-project
+# `@file.md ` does load. Two separate things keep ours dark:
+#   1. the target lives outside the project dir: every agent notebook (@<agent>-memory.md) is a
+#      symlink into ~/projects/moprox-memory (probably an external-includes approval that -p never
+#      gives; not proved, and claude-loop on 2.1.223 does load them);
+#   2. a `.` or `,` straight after the path: coach's `@training-context.md.` and `@part_c_gaps.md.`
+# The effect was that every notebook was write-only: coach could not give the max HR from its
+# training context, and valet never saw its own "closed, never surface again" notes, so it kept
+# nagging about things the operator had told it were done. So the harness expands the imports
+# itself, fresh on every run, and hands them over with --append-system-prompt-file. Each file is
+# capped: a notebook that grew past the cap keeps its head (the how-to-use-me section) and its
+# newest entries, and says where the full file is.
+# Both paths must not be live at once: do not make the native import work (delete those periods,
+# approve external includes, replace the symlinks) without removing this expander, or the same
+# content is sent twice on every run. moprox-memory/claude-p-ignores-claude-md-imports has it all.
 IMPORT_CAP = 40000          # chars per imported file
 IMPORT_HEAD = 8000
 
