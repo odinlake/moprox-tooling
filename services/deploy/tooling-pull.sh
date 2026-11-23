@@ -263,9 +263,15 @@ restart_group '^services/(yoto|lib)/' "yoto daemons" yoto-web.service yoto-liste
 # Not here, deliberately. claude-login-web.service holds a pending interactive login in server-side
 # state (76be2349 exists so one survives a page reload), so a timer restarting it would discard a
 # login somebody is sitting at a browser waiting for, and its unit file already says to restart it
-# by hand. shopping-web.service has the same defect and is left for its own change: it would be safe
-# to restart (its queue is on disk, shopping-pending.json, not in memory) but services/shopping has
-# not changed since 2026-10-06, so the omission has cost nothing measurable.
+# by hand. shopping-web.service is not restarted for a WEAKER reason, and the difference is kept on
+# the record rather than flattened into "the same defect": nothing of its is in memory (both the
+# list and the queue are files, shopping.json and shopping-pending.json), so a bounce costs at most
+# an in-flight flush_pending, which the next HA push repeats because the queue file is only unlinked
+# after the send succeeds. What stops a restart_group line is not this unit, it is sudo: the gate's
+# rule was written for the three agent daemons (moprox-memory/tooling-pull-gate-sudo-record) and
+# whether it covers shopping-web.service is not readable from the host the loop agents land on. A
+# restart this script is refused exits 1 on every services/shopping deploy thereafter, so the
+# restart is a decision for whoever can read /etc/sudoers.d/tooling-pull. Recorded below meanwhile.
 #
 # BUT A DEPLOY THAT REACHES AN OMITTED UNIT SAYS SO. claude-login-web is Restart=always and imports
 # services/lib/errlog at module scope (server.py inserts ../lib and imports it), so it is the SIXTH
@@ -291,9 +297,15 @@ restart_group '^services/(yoto|lib)/' "yoto daemons" yoto-web.service yoto-liste
 #
 # Deliberately `say` and not `<3>`: the exclusion is correct, so this is a record and not an alarm,
 # and an err line on every lib deploy trains the operator to skip the one that matters.
-# shopping-web is NOT reported, because its only lib route is lazy (`import tg` inside
-# flush_pending), so what it has pinned depends on when it last flushed -- a different staleness
-# shape, and not one this script can state in one line.
+# SHOPPING-WEB IS RECORDED ON ITS EXECSTART AND ON NOTHING ELSE, and the earlier version of this
+# comment gave a reason that names a different path. It said shopping-web cannot be reported because
+# its only lib route is lazy (`import tg` inside flush_pending) -- true of services/forward/tg.py,
+# and no basis for silence, because the interpreter pins services/shopping/shopping.py itself at
+# exec and that file's module-scope imports are all stdlib. Its eager closure is therefore exactly
+# one file: the same per-file shape as above with one alternative instead of two, and the one path on
+# which this unit has the one-line staleness this field states. Via the lazy route it is pinned to
+# whatever it last flushed, so a services/forward or services/lib deploy has no one-line shape and
+# gets none here -- that is the clause that survives, and it is about tg.py, not about shopping.py.
 #
 # `left-stale=<unit>` IS A FIELD AND THAT IS THE POINT. The set of daemons a deploy left on the old
 # module has to be recoverable from the deploy's own output by something other than a human reading
@@ -307,4 +319,6 @@ left_stale() {   # left_stale <regex over the changed paths> <unit> <why it is n
 }
 left_stale '^services/(sessions/login-web/server\.py|lib/errlog\.py)$' claude-login-web.service \
            "a restart discards a pending interactive login held in server-side state"
+left_stale '^services/shopping/shopping\.py$' shopping-web.service \
+           "a timer may not restart it: the sudoers rule covering this unit cannot be read from the deploying host"
 [ "$stale" = 0 ] || exit 1
