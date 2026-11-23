@@ -244,13 +244,16 @@ restart_group() {   # restart_group <regex over the changed paths> <label> <unit
 changed=$(git diff --name-only "$before" "$after")
 # services/lib/ is in BOTH regexes rather than a group of its own. Every one of the five units named
 # below reaches it: walking each ExecStart's import graph over this repo's own modules,
-# dispatcher/yoto-web/yoto-listen reach errlog AND tokenlock, telegram-poll and discord-theming
-# reach errlog -- so a lib change is a code change for all five and the old comment here ("a
-# services/lib change still restarts nothing at all") named a real deployment stop. Two of the five
+# yoto-web/yoto-listen reach errlog AND tokenlock (both via services/yoto/yoto.py); the other three
+# reach errlog alone -- so a lib change is a code change for all five and the old comment here ("a
+# services/lib change still restarts nothing at all") named a real deployment stop. One of the five
 # services/lib commits in the 90 days to 2026-11-22 touched services/lib ALONE (131f7d32 "a skip
-# report names every distinct reason", b6c61ddf "one refresher at a time for every rotating
-# credential"), so the trigger shape is not hypothetical; both predate this restart block, which is
-# why nothing has been measurably lost yet. A third group would have been the obvious shape and is
+# report names every distinct reason"), so the trigger shape is not hypothetical; it predates this
+# restart block, which is why nothing has been measurably lost yet. b6c61ddf "one refresher at a
+# time for every rotating credential" is NOT a second witness, though an earlier version of this
+# comment counted it as one: it touched services/yoto/yoto.py as well, so the shipped
+# '^services/yoto/' already restarted the two units that reach tokenlock, which is every unit that
+# change could have stranded. A third group would have been the obvious shape and is
 # wrong: 895cb24a touched services/lib AND services/agents, and under a separate group that commit
 # restarts dispatcher twice in the same run. Widening keeps one sudo call per group, which is what
 # /etc/sudoers.d/tooling-pull was written for.
@@ -263,4 +266,45 @@ restart_group '^services/(yoto|lib)/' "yoto daemons" yoto-web.service yoto-liste
 # by hand. shopping-web.service has the same defect and is left for its own change: it would be safe
 # to restart (its queue is on disk, shopping-pending.json, not in memory) but services/shopping has
 # not changed since 2026-10-06, so the omission has cost nothing measurable.
+#
+# BUT A DEPLOY THAT REACHES AN OMITTED UNIT SAYS SO. claude-login-web is Restart=always and imports
+# services/lib/errlog at module scope (server.py inserts ../lib and imports it), so it is the SIXTH
+# eager lib importer among this repo's seven long-lived units -- and the widening above restarts
+# five of the six, says "restarted agent daemons", and exits 0. That is a success report over a
+# daemon left on the pre-deploy module, which is the complaint this file's own header makes about a
+# failure reaching the journal with no reason in it. It is also the half of the record the widening
+# deleted ("a services/lib change still restarts nothing at all, though every unit named here
+# imports errlog"), a sentence that was about exactly the two units this comment excludes.
+#
+# THE TRIGGER IS THIS UNIT'S EAGER CLOSURE, FILE BY FILE, AND NOT A DIRECTORY -- unlike the groups
+# above, and for a reason. claude-login-web import-pins exactly two files here: its ExecStart
+# services/sessions/login-web/server.py and services/lib/errlog.py. A '^services/lib/' trigger is
+# wrong on 2 of the 5 services/lib commits in the 90 days to 2026-11-22 -- b6c61ddf (tokenlock.py +
+# lib/tests/) and ae459e85 (webscout.py), modules neither errlog.py nor server.py imports -- and
+# wrong in the dangerous direction: an over-restart above costs a bounce, while this line asks for a
+# restart that DISCARDS a pending login. login-web/index.html is deliberately not a trigger either:
+# the handler re-reads it per request, so a deploy serves the new page without one.
+# THE RESIDUAL, since the regex cannot notice it itself: if server.py ever gains a second module-
+# scope services/lib import, add it below, or a commit touching that module alone leaves this daemon
+# stale in silence. The commit adding such an import must touch server.py, so it fires this line
+# once, and that is the whole warning.
+#
+# Deliberately `say` and not `<3>`: the exclusion is correct, so this is a record and not an alarm,
+# and an err line on every lib deploy trains the operator to skip the one that matters.
+# shopping-web is NOT reported, because its only lib route is lazy (`import tg` inside
+# flush_pending), so what it has pinned depends on when it last flushed -- a different staleness
+# shape, and not one this script can state in one line.
+#
+# `left-stale=<unit>` IS A FIELD AND THAT IS THE POINT. The set of daemons a deploy left on the old
+# module has to be recoverable from the deploy's own output by something other than a human reading
+# the English around it -- the same reason `deployed $before -> $after` above puts the shas where
+# `id=`/`scope=` put theirs. Prose cannot be checked against what the run actually did; a field can,
+# because the units named here must be exactly the ones no `systemctl restart` above was given.
+left_stale() {   # left_stale <regex over the changed paths> <unit> <why it is not restarted here>
+  printf '%s\n' "$changed" | grep -qE "$1" || return 0
+  say "deploy $before -> $after left-stale=$2 ($3);" \
+      "it keeps serving the pre-deploy module until someone runs: sudo systemctl restart $2"
+}
+left_stale '^services/(sessions/login-web/server\.py|lib/errlog\.py)$' claude-login-web.service \
+           "a restart discards a pending interactive login held in server-side state"
 [ "$stale" = 0 ] || exit 1
