@@ -54,8 +54,9 @@ def episodes():
         d = datetime.datetime.fromtimestamp(ms / 1000, TZ).date()
         files = (e.get("broadcast") or {}).get("broadcastfiles") or []
         audio = files[0]["url"] if files else ((e.get("listenpodfile") or {}).get("url"))
-        # SR declares the episode's length beside its url. make_room needs it BEFORE the file is
-        # uploaded, and nothing on this host can measure the audio (no ffprobe).
+        # SR declares the episode's length beside its url. make_room runs on Yoto's transcoded
+        # duration (myo.append's `room` hook); this is the fallback for when Yoto declares none,
+        # since nothing on this host can measure the audio (no ffprobe).
         secs = (files[0] if files else (e.get("listenpodfile") or {})).get("duration")
         if audio:
             out.append((d, audio, int(secs or SLOT)))
@@ -98,7 +99,12 @@ def make_room(tok, secs):
     godnattkvart is full: 20 chapters, 5.0 h with this one (limits 100, 5 h)" at 20 x 15 min, while
     the old pre-trim only counted chapters and saw 20 of 100. SR keeps each episode online ~30
     days, so a dropped chapter is gone for good: that is the intended trade for a card whose
-    newest episode plays first."""
+    newest episode plays first.
+
+    Passed to myo.append as its `room` hook, so it runs after the upload succeeded and `secs` is
+    the transcoded duration the ceiling is actually checked against -- not SR's declared one, which
+    trims the wrong amount in either direction (too little and append refuses after the deletion,
+    too much and an episode is destroyed for space nobody needed)."""
     import time
     chapters = myo.chapters_of(CARD, tok)
     keep = list(chapters)
@@ -135,8 +141,8 @@ def main():
         if not os.path.isfile(path):
             urllib.request.urlretrieve(url, path + ".part")
             os.replace(path + ".part", path)
-        make_room(tok, secs)
-        r = myo.append(CARD, path, title_for(d), tok)
+        r = myo.append(CARD, path, title_for(d), tok,
+                       room=lambda s, fallback=secs: make_room(tok, s or fallback))
         print(json.dumps(r, ensure_ascii=False))
         if r.get("status") == "added":
             added.append(title_for(d))

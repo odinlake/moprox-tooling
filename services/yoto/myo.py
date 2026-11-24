@@ -404,7 +404,7 @@ def seconds_of(chapters):
                for c in chapters)
 
 
-def append(ident, path, title, tok):
+def append(ident, path, title, tok, room=None):
     """Add one recording to the end of an existing playlist, leaving every other chapter alone.
 
     For the family's home recordings ("Pappa läser ...", "Akiko läser ..."), which docwatch routes here
@@ -412,7 +412,15 @@ def append(ident, path, title, tok):
     not on disk, so a rebuild is not an option: this uploads the new file and POSTs the existing
     chapters plus one, through set_order so the cover and other metadata survive. Idempotent on the
     audio: a file whose transcode is already on the card is reported, not added twice.
-    Phone recordings arrive as .m4a; they go up as MP3 like every other file this tool has sent."""
+    Phone recordings arrive as .m4a; they go up as MP3 like every other file this tool has sent.
+
+    `room(seconds)`: optional hook for a caller that makes space on a full card by deleting
+    chapters (godnattkvart.py). It is called HERE rather than before the call, because a caller
+    that trims first pays for it twice: the upload can still fail, and the deleted chapter is gone
+    (SR keeps each episode ~30 days) with nothing added in its place -- and the caller can only
+    guess the length to trim for, while the ceiling below is checked against the TRANSCODED
+    duration this hook is handed. Not called on the idempotent path: a re-run of an episode
+    already on the card needs no space."""
     import subprocess, tempfile
     cid = card_of(ident, tok)
     if not os.path.isfile(path):
@@ -435,6 +443,11 @@ def append(ident, path, title, tok):
         if any(t.get("trackUrl") == url for t in ch.get("tracks") or []):
             return {"cardId": cid, "card": card.get("title"), "status": "already",
                     "chapter": i, "title": ch.get("title"), "chapters": len(chapters)}
+    if room:
+        room(info.get("duration") or 0)
+        d = req("GET", "/content/" + cid, tok)       # the hook rewrites the card; re-read it
+        card = d.get("card") or d
+        chapters = ((card.get("content") or {}).get("chapters")) or []
     secs = seconds_of(chapters) + (info.get("duration") or 0)
     if len(chapters) + 1 > MAX_CHAPTERS or secs > MAX_SECONDS:
         sys.exit("%s is full: %d chapters, %.1f h with this one (limits %d, %d h)"
