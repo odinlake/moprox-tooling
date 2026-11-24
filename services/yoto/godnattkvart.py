@@ -157,6 +157,18 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except SystemExit as e:
+        # myo reports a fatal condition with sys.exit("<reason>") -- the card ceiling (myo.py:453),
+        # an API error, a transcode timeout, a missing file -- and SystemExit is NOT an Exception,
+        # so the clause below never saw any of them. journald then filed the only sentence naming
+        # the cause at PRIORITY=6: measured 2026-11-16T07:16:32Z, "Radioapans godnattkvart is full:
+        # 20 chapters, 5.0 h with this one (limits 100, 5 h)", three journal indices before
+        # systemd's own PRIORITY=3 "Failed to start yoto-godnattkvart.service", which names nothing.
+        # A string code IS that reason, so it goes out through errlog.die (err level, then exit 1);
+        # an int is a deliberately chosen status and is left exactly as it was.
+        if isinstance(e.code, str):
+            errlog.die(e.code)
+        raise
     except Exception as e:
         errlog.err("godnattkvart.py: updating the Radioapan card", e)
         raise
