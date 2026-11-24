@@ -57,12 +57,18 @@ entry:
 Prose cannot retract: nothing downstream reads it. A correction names the row it replaces, with
 --supersedes above, and an `ex` that claims to correct is refused here.
 
+A movement the log has NEVER SEEN is refused unless you say it is new. `ex` is matched exactly
+across sessions, so a shorter spelling of an existing lift is a different movement and its panel
+stops. The refusal lists the keys that exist; a genuinely new movement repeats with --new-ex:
+
+  strength_note.py --ex nordic-curl --new-ex --sets 2 --reps 5
+
 The id to pass it is printed on every append, and by --show, which is how you obtain one for a row
 written earlier:
 
   strength_note.py --show
 """
-import argparse, json, os, re, sys, time
+import argparse, difflib, json, os, re, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -170,6 +176,60 @@ def log_rows():
     return rows
 
 
+# Which movement keys EXIST, and what to offer when the one typed is not among them.
+#
+# `--ex` is free text and the reader matches it exactly (strength.PROGRESS, and every movement's
+# history), so a near-miss is not an error anywhere downstream: it is a new movement with one row.
+# Measured (i-20261124-192305): between 9 and 18 Nov 2026 `row`, `leg-curl` and `calf-raise` were
+# typed for `seated-row`, `leg-curl-technogym-isotonic` and `standing-barbell-calf-raise`. Six rows
+# went in at rc=0 with nothing on stderr, three progression panels stopped at 6 Nov for two and a
+# half weeks, and `skipped` stayed 0. The prose rule against inventing names was already in the
+# coach's instructions and did not prevent it.
+#
+# Deliberately NOT `choices=` and not an alias table: the September rehab block coined thirteen
+# one-row movements legitimately, and a closed vocabulary would send those back to hand-written
+# JSON. --new-ex keeps them on the CLI, as a declared act and not an accident.
+#
+# Known = the `ex` of every LIVE row carrying a dose, plus the PROGRESS keys (so an empty log still
+# knows the weights day). Retracted rows are dropped, so a re-filed alias stops being known; prose
+# rows are dropped, so a marker (SESSION-END) never becomes a movement. `sets_detail` counts as a
+# dose beside strength.MEASURES because progress() reads those rows as work.
+def known_ex(rows):
+    """{ex: [live dose-row count, last date]} over the log, plus strength.PROGRESS keys at 0."""
+    gone = strength.superseded(rows)
+    known = {}
+    for r in rows:
+        ex = r.get("ex")
+        if not isinstance(ex, str) or not ex.strip() or strength.rid(r) in gone:
+            continue
+        if all(r.get(k) is None for k in strength.MEASURES) and r.get("sets_detail") is None:
+            continue
+        n = known.setdefault(ex, [0, ""])
+        n[0] += 1
+        n[1] = max(n[1], str(r.get("date") or ""))
+    for p in strength.PROGRESS:
+        known.setdefault(p[0], [0, ""])
+    return known
+
+
+def candidates(name, known, limit=8):
+    """Known keys the caller most plausibly meant by `name`, best first.
+
+    Hyphen-token overlap FIRST, then difflib. difflib alone does not find `seated-row` from `row`
+    (ratio 0.46, under any cutoff that keeps noise out), and that is the exact miss this exists
+    for, so the token match is not optional."""
+    toks = set(name.lower().split("-")) - {""}
+    shared = [(len(toks & set(k.lower().split("-"))), known[k][0], k) for k in known]
+    out = [k for n, _, k in sorted((s for s in shared if s[0]), key=lambda s: (-s[0], -s[1], s[2]))]
+    low = {}
+    for k in known:
+        low.setdefault(k.lower(), k)
+    for m in difflib.get_close_matches(name.lower(), list(low), n=limit, cutoff=0.6):
+        if low[m] not in out:
+            out.append(low[m])
+    return out[:limit]
+
+
 # How a row written earlier is NAMED, and why reading the log is not enough to do it.
 #
 # --supersedes takes a content id. The append prints one, which covers the row you have just
@@ -207,7 +267,11 @@ def main(argv=None):
     # Not `required=True` any more, because --show writes nothing and has no movement. Absence is
     # still an error for every other invocation, checked below: forgetting --ex must not become a
     # way to read the log.
-    ap.add_argument("--ex", help="movement, lowercase-hyphenated (seated-row, goblet-squat)")
+    ap.add_argument("--ex", help="movement, lowercase-hyphenated (seated-row, goblet-squat). Must "
+                                 "be a key the log already has, unless --new-ex is passed.")
+    ap.add_argument("--new-ex", action="store_true",
+                    help="--ex is a movement the log has never seen, and that is intended. Without "
+                         "this an unknown --ex is refused and the existing keys are listed.")
     ap.add_argument("--sets", type=int)
     # Not "--sets optional". Forgetting a set count and declaring one unknown are different acts,
     # and only one of them should be possible by accident — so --sets stays mandatory unless this
@@ -385,9 +449,13 @@ def main(argv=None):
     # deleting it looks exactly like the retraction succeeding. So the caller is handed the ids and
     # made to choose — which is also the only place the ids are discoverable for rows appended
     # before they were printed.
+    # Read ONCE, for both checks that need the log: an unparseable line is reported by log_rows()
+    # and must not be reported twice for one append.
+    gated = not a.note_only and not retract_only
+    rows = log_rows() if (a.supersedes is not None or gated) else []
     sup, ex = None, None
     if a.supersedes is not None:
-        hit = strength.resolve(a.supersedes, log_rows())
+        hit = strength.resolve(a.supersedes, rows)
         if not hit:
             ap.error("--supersedes %s names no row in %s" % (a.supersedes, LOG))
         if len(hit) > 1:
@@ -425,9 +493,36 @@ def main(argv=None):
     # spelling of the log's own vocabulary on disk — which is what this flag exists to stop.
     # Whitespace still folds to hyphens: `ex` is one token either way.
     name = None if a.ex is None else a.ex.strip().replace(" ", "-")
+    # THE UNKNOWN-MOVEMENT GATE (see known_ex). A refusal BEFORE the append, not a warning after
+    # it: a stderr line beside rc=0 is what an agent does not read, and by then the row is in an
+    # append-only file. Only a dose row is asked — prose markers are not movements, and a bare
+    # retraction inherited its `ex` verbatim from a row already on disk.
+    if gated:
+        known = known_ex(rows)
+        name = name.lower()
+        if name not in known:
+            # Eight live keys carry capitals (`heel-raise-bent-knee-SL-loaded`) and this writer
+            # lowercases what is typed, so without this the refusal would name a key the caller
+            # cannot write. A case-only match to exactly one known key IS that key, and is written
+            # in the spelling the log already has. Two spellings differing only in case: refuse,
+            # do not pick.
+            same = [k for k in known if k.lower() == name]
+            if len(same) == 1:
+                name = same[0]
+            elif not a.new_ex:
+                cand = same or candidates(name, known)
+                listing = "\n".join(
+                    "  %-38s %s" % (k, "%d row%s, last %s" % (known[k][0], "s" * (known[k][0] != 1),
+                                                              known[k][1] or "?")
+                                    if known[k][0] else "no rows yet (a dashboard panel key)")
+                    for k in cand) or "  (nothing close; --show lists every row)"
+                ap.error("--ex %s is not a movement this log has seen. Closest existing keys:\n%s\n"
+                         "if it is one of these, use that key; if it is a new movement, repeat "
+                         "with --new-ex" % (name, listing))
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
-           "ex": ex if ex is not None else (name if a.note_only else name.lower())}
+           # `name` for a dose row is already lowercased, or a known key in the log's own spelling.
+           "ex": ex if ex is not None else (name if (a.note_only or gated) else name.lower())}
     # An even session stays a bare number, exactly as every row written before this did. Emitting
     # [10] for `--reps 10` would change the shape — and therefore the content id — of every row
     # this writer appends from now on, for no gain: strength.per_set() reads a list, and a list of
