@@ -48,12 +48,21 @@ withdraws, so there is no new word to invent for either:
 
   strength_note.py --supersedes 1e0035d7d4b4
 
+A row that is PROSE and not work — a session remark, a caveat addressed to whoever reads the Polar
+recording, a disclosure — says so and carries no dose. The reader counts it as a note, never an
+entry:
+
+  strength_note.py --ex SESSION-END --note-only --note "right hamstring quiet throughout"
+
+Prose cannot retract: nothing downstream reads it. A correction names the row it replaces, with
+--supersedes above, and an `ex` that claims to correct is refused here.
+
 The id to pass it is printed on every append, and by --show, which is how you obtain one for a row
 written earlier:
 
   strength_note.py --show
 """
-import argparse, json, os, sys, time
+import argparse, json, os, re, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -83,6 +92,26 @@ LOG = Path(os.environ.get("STRENGTH_LOG",
 # independent reading on all 28 rows today; it is one rephrasing away from not doing, and it fails
 # toward the claim. This is the field that ends the parse.
 KG_SRC = ("stated", "assumed")
+
+
+# A prose row's `ex` is a MARKER, not a movement, and it must not be a claim that some other row is
+# wrong. That claim has a field (`supersedes`), and when it is made in prose instead, nothing
+# downstream reads it: moprox-memory/strength-log-correction-row-type-unresolved measured 6 rows of
+# `ex: "CORRECTION"`, every one appended after `supersedes` shipped, 5 of them naming content the
+# live feed went on publishing uncorrected — four of those a published MEASURE, including an OHP
+# load published as 27.5 kg beside the same artifact's own note reading "21 Oct 28 x 9/9/8".
+#
+# The stems are that fact's own correction-marker list (supersedes|CORRECTS|CLARIFIES|RESOLVES|
+# AMENDMENT|CORRECTION|REPLACES), so the writer's rule and the census that found the rows agree on
+# one vocabulary. `COMPLETES` is deliberately NOT here: "complete" is a plausible spelling of a
+# legitimate session marker (the log's own is SESSION-END), and a false refusal sends the row back
+# to the hand-written path this flag exists to close. Checked against every `ex` in the live log
+# 2026-11-24: three values match, and all three are the defect — `CORRECTION`,
+# `heel-raise-order-correction`, `calf-raise-leg-press-LOAD-CORRECTION`.
+#
+# Only the `ex`, never the `note`. Prose is allowed to EXPLAIN a correction — that is what the
+# replacement row's note is for. What it may not do is be the correction.
+CORRECTION_MARKER = re.compile(r"supersed|correct|clarif|resolv|amend|replace", re.I)
 
 
 # One count per set, because that is how an uneven session is actually done — and because the log
@@ -247,6 +276,26 @@ def main(argv=None):
     ap.add_argument("--show", action="store_true",
                     help="print the log as JSONL with each row's id, and `superseded_by` on rows "
                          "a later row has retracted. Writes nothing.")
+    # PROSE, as a shape of its own. The reader has always classified a row carrying none of
+    # strength.MEASURES as a `note` rather than an entry, and publishes the count beside `skipped`
+    # — "free-standing session prose, attached to a movement name or to a marker of its own" — but
+    # this writer has never been able to write one, because the two shape gates below are
+    # unconditional for anything that is not a bare retraction.
+    #
+    # Measured on the live log 2026-11-24: 264 rows, 51 of them notes, and 40 are pure prose
+    # (ts/date/ex/note/agent and nothing else), every one `agent: coach`, 2026-09-08..2026-11-23.
+    # Only the 3 carrying `supersedes` were writable here. So 40 rows necessarily went around this
+    # script, which is the mechanism the --sets-unknown and --band comments above blame by name,
+    # and the invented vocabulary it produced is on disk beside them: `sets_detail`, `rest_s`,
+    # `exercise_uncertain`, and 6 rows of `ex: "CORRECTION"` that correct nothing a reader sees.
+    #
+    # Declared, not inferred from the absence of a dose: forgetting --reps must stay an error, for
+    # the reason --sets-unknown exists at all. Only one of "no dose" and "a dose I forgot to type"
+    # should be reachable by accident.
+    ap.add_argument("--note-only", action="store_true",
+                    help="this row is PROSE, not work: a session remark, a caveat, a disclosure. "
+                         "Needs --note and takes no dose flag. The reader counts it as a note, "
+                         "never an entry. A CORRECTION is not prose — use --supersedes.")
     ap.add_argument("--date", help="YYYY-MM-DD; default today. Resolve 'Friday' yourself.")
     ap.add_argument("--note", default="")
     ap.add_argument("--agent", default=os.environ.get("AGENT_ID", ""))
@@ -274,7 +323,31 @@ def main(argv=None):
          a.kg is not None, a.rir is not None))
     if a.ex is None and not retract_only:
         ap.error("give --ex MOVEMENT, or --show to read the log")
-    if not retract_only:
+    # Declared prose: the shape gates do not apply, because this row HAS no shape. What does apply
+    # is that it must say something, that it must not carry half a dose, and that it must not be a
+    # correction. A `--note-only --supersedes <id>` row is a prose replacement for a prose row and
+    # is fine: it names what it withdraws, which is the whole difference.
+    if a.note_only:
+        dose = [n for n, given in (("--sets", a.sets is not None), ("--sets-unknown", a.sets_unknown),
+                                   ("--reps", a.reps is not None), ("--secs", a.secs is not None),
+                                   ("--kg", a.kg is not None), ("--kg-src", a.kg_src is not None),
+                                   ("--rir", a.rir is not None), ("--band", a.band is not None))
+                if given]
+        if dose:
+            # --band among them on purpose: a colour with no dose is a note to the reader, so the
+            # panel never renders it, and this flag must not become the way to write one.
+            ap.error("--note-only is a row with no dose; drop %s, or drop --note-only"
+                     % ", ".join(dose))
+        if not a.note.strip():
+            ap.error("--note-only needs --note: the prose IS the row")
+        if a.ex is not None and CORRECTION_MARKER.search(a.ex):
+            # Refused on what the CALLER typed, not on an `ex` inherited from --supersedes: that
+            # value is already in the log, and a retraction of a CORRECTION row has to be able to
+            # name it.
+            ap.error("--ex %s claims an earlier row is wrong, and nothing downstream reads prose: "
+                     "append the corrected row with --supersedes <id>, or retract the wrong row on "
+                     "its own with --supersedes <id>. Ids: --show." % a.ex)
+    if not retract_only and not a.note_only:
         if (a.sets is None) != a.sets_unknown:
             ap.error("give --sets N, or --sets-unknown if it was not tracked — not both, not neither")
         if a.reps is None and a.secs is None:
@@ -345,9 +418,16 @@ def main(argv=None):
             if a.date is None and isinstance(hit[0].get("date"), str):
                 a.date = hit[0]["date"]
 
+    # A prose MARKER keeps its case; a movement key does not. Lowercasing is there because `ex` is
+    # matched across sessions to build a movement's history, and a marker is matched across
+    # nothing: notes are classified out before any movement key exists. The live log's markers are
+    # upper (21 `SESSION-END`, 3 `HR-TRACE-CAVEAT`), so lowercasing one here would put a second
+    # spelling of the log's own vocabulary on disk — which is what this flag exists to stop.
+    # Whitespace still folds to hyphens: `ex` is one token either way.
+    name = None if a.ex is None else a.ex.strip().replace(" ", "-")
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
-           "ex": ex if ex is not None else a.ex.strip().lower().replace(" ", "-")}
+           "ex": ex if ex is not None else (name if a.note_only else name.lower())}
     # An even session stays a bare number, exactly as every row written before this did. Emitting
     # [10] for `--reps 10` would change the shape — and therefore the content id — of every row
     # this writer appends from now on, for no gain: strength.per_set() reads a list, and a list of
