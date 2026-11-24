@@ -9,7 +9,14 @@ Never `except Exception: pass`, and never substitute a plausible-looking value o
 import errlog                                   # services/lib/errlog.py
 except Exception as e: errlog.skip("file.py: parsing X", e); continue   # per-record loops
 except Exception as e: errlog.err("uploading Y", e); raise              # one-off failures
+errlog.die("feed X is empty: nothing to publish")                       # fatal: err level, then exit 1
 ```
+
+`errlog.die(reason)` is for a fatal condition this process cannot continue past. **Not**
+`sys.exit(reason)`: journald files an un-prefixed stderr line at `PRIORITY=6`, so the only err-level
+record a dead unit leaves is systemd's cause-free "Failed to start ...". It is not an exception, so
+the sentence above does not catch it; the mechanism and a dated measurement are in `die()`'s
+docstring. (A hand-run CLI path, where nobody queries a journal, may keep `sys.exit(reason)`.)
 
 `errlog` prints a `<3>`/`<4>` syslog prefix, which journald turns into a real `PRIORITY` — so it
 reaches the fleet sink and `search_logs(priority=3)` with no logging config. `skip()` aggregates and
