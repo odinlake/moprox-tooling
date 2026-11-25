@@ -148,7 +148,12 @@ def main():
     ap.parse_args()
 
     if not AUTH_FILE.exists():
-        sys.exit(f"no device registration at {AUTH_FILE} — run audible_bootstrap.py once, interactively")
+        # The only sentence that names this cause, and `sys.exit(reason)` filed it below the level
+        # anything queries: the message reaches stderr with no `<N>` prefix, so journald records it
+        # at PRIORITY=6 and the one err-level trace of a dead run is systemd's own cause-free
+        # "Failed to start audible-fetch.service". die() is err level and then exit 1 — same
+        # status, same wording, same non-zero exit that raises the unit-failed incident.
+        errlog.die(f"no device registration at {AUTH_FILE} — run audible_bootstrap.py once, interactively")
 
     # Cheap and idempotent: the library refreshes only when the 60-minute access token has expired.
     # Under tokenlock and re-read inside it, so an interactive run racing the timer cannot replay a
