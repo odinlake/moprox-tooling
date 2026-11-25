@@ -259,6 +259,12 @@ def main():
         # Keeping the prior file is right — a blank panel is worse than a stale one — but doing it
         # SILENTLY hid a six-day outage (logrotate left dnsmasq writing to the rotated inode, so
         # every scrape re-parsed a 210 MB log and timed out). Say so, and say how stale it is.
+        #
+        # The word WARNING in the prose was not the level. journald reads a `<N>` prefix and only a
+        # `<N>` prefix, so this line reached the journal at PRIORITY=6 and no priority<=4 query saw
+        # it — measured on the one row it has left in the retained window, claude-dev
+        # 2026-10-27T00:12:02Z "WARNING: dns feed not updated: curl exit 22 ... error: 500",
+        # prio 6. Same <4> convention as the push retry above.
         prev = DATA / "dns/blocked.json"
         age = ""
         if prev.exists():
@@ -267,7 +273,7 @@ def main():
             except (ValueError, KeyError):
                 age = ", keeping the previous file"
         why = (e.stderr or "").strip().splitlines()
-        print(f"WARNING: dns feed not updated: curl exit {e.returncode} from {DNS_EXPORTER}{age}"
+        print(f"<4>update: dns feed not updated: curl exit {e.returncode} from {DNS_EXPORTER}{age}"
               + (f": {why[-1]}" if why else ""), file=sys.stderr)
 
     # training — rebuild when the raw Polar input changed (avoids the expensive parse), or when the
@@ -359,13 +365,27 @@ def report_child_error(e):
     returned non-zero exit status 128` and nothing else — argv and a number. Thirteen publish
     failures between 2026-07-17 and 2026-08-14 left no trace of what git actually said, and their
     exit codes (128 nine times, 1 four times) say they were not even all the same fault.
+
+    Getting it into the journal is not the same as getting it to a level anything reads. journald
+    takes the priority from a `<N>` prefix at the START of the line, which is why run_child's
+    success path re-emits a child's stderr verbatim. This function did the opposite on both counts:
+    its own summary carried no prefix, and `  stderr: <line>` moved the child's prefix off the
+    front — so a child that correctly called errlog.err() before dying had its PRIORITY=3 line
+    re-filed at 6 by the very function written to make the cause visible. The whole cause of a dead
+    run therefore sat below every priority<=4 query, leaving systemd's cause-free "Failed to start"
+    as the only err-level record, which is the trap errlog.die()'s docstring documents.
+
+    A child's own level is kept (it chose it); a line that set none is part of a failure that is
+    ending this run, so it goes out at err.
     """
     cmd = " ".join(map(str, e.cmd)) if isinstance(e.cmd, (list, tuple)) else str(e.cmd)
-    print(f"FAILED: {cmd} -> exit {e.returncode}", file=sys.stderr)
+    print(f"<3>FAILED: {cmd} -> exit {e.returncode}", file=sys.stderr)
     for name, buf in (("stderr", e.stderr), ("stdout", e.stdout)):
         txt = buf.decode(errors="replace") if isinstance(buf, (bytes, bytearray)) else (buf or "")
         for line in txt.strip().splitlines():
-            print(f"  {name}: {line}", file=sys.stderr)
+            own = len(line) >= 3 and line[0] == "<" and line[1].isdigit() and line[2] == ">"
+            pfx, rest = (line[:3], line[3:]) if own else ("<3>", line)
+            print(f"{pfx}  {name}: {rest}", file=sys.stderr)
 
 
 if __name__ == "__main__":
