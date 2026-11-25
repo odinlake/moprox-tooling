@@ -463,21 +463,40 @@ def main():
     # Rebuild daily.jsonl from whatever raw days exist — idempotent, so a re-run after a backfill
     # repairs the flat table rather than appending duplicates.
     rows = []
-    for f in sorted(RAW.rglob("*.json.gz")):
+    # The write below is unconditional, so a stored day that stops decompressing is DELETED from
+    # the published table on this run and stays deleted -- and this except used to say so with a
+    # bare stderr print, which journald files at PRIORITY=6, below every priority query the estate
+    # owns. is_final() already catches the identical gzip/json failure at <4> sixty lines up; this
+    # is the same condition and gets the module's prescribed per-record idiom.
+    #
+    # Its OWN counter, not the `skips` above, for two reasons: that one's context says "classifying
+    # fetched payload", which this is not, and it is reported against `got` -- the ten-day fetch
+    # window, 11 days at most -- while this loop walks every archived day (250 at 2026-11-25). Fold
+    # them together and the 12th unreadable archive makes report() take its ALL-records branch and
+    # print "ALL 12 of 11 records unusable - treat the input as broken" about a tree where 238 days
+    # read perfectly. A false err is not an improvement on a true silence.
+    stored = errlog.Skips("ultrahuman: reading a stored payload for the daily rebuild")
+    archived = sorted(RAW.rglob("*.json.gz"))
+    for f in archived:
         try:
             rows.append(scalars(date.fromisoformat(f.stem.replace(".json", "")),
                                 json.loads(gzip.decompress(f.read_bytes()))))
         except Exception as ex:
-            print(f"skip {f.name}: {ex}", file=sys.stderr)
+            stored.add(ex)
     DAILY.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
     skips.report(total=got)
+    stored.report(total=len(archived))
     # Named only when it happened: has_measurement() reads all 221 archived payloads without
     # raising (measured 2026-10-27), and a clause that says "0 unreadable" every hour trains the
     # eye to skip the line. When it DOES happen the count may not hide inside `blank`, or the line
     # is back to denying what it cannot see.
     unread = f", {skips.n} unreadable" if skips.n else ""
+    # Same discipline, and the reason the row count needs it: "daily.jsonl has 249 rows" is a
+    # sentence about a 250-day archive that reads as success, because nothing in it is a number the
+    # reader can check. The dropped days are the difference.
+    lost = f" ({stored.n} archived day(s) dropped, unreadable)" if stored.n else ""
     print(f"fetched {got} day(s), {first_time} first-time, "
-          f"{blank} still carrying no measurement{unread}; daily.jsonl has {len(rows)} rows")
+          f"{blank} still carrying no measurement{unread}; daily.jsonl has {len(rows)} rows{lost}")
 
 
 if __name__ == "__main__":
