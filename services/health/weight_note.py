@@ -16,12 +16,17 @@ RULES OF USE (see also private-data/health/README.md, "weight.jsonl")
   - Two scales. The Salter is the primary series and the default. A Tanita reading is
     `--scale tanita` and is written with "reference": true, which readers exclude from means.
   - --approx is for a figure the operator quoted from memory, not a scale reading.
+  - --exclude REASON marks a reading that is real but must be left out of means and trends,
+    e.g. `--exclude illness` (fever, not eating or drinking normally). REASON is one short
+    lowercase token, written as "exclude": "<reason>"; the detail goes in --note. Do not mark
+    this in the note's prose ("ILL"): nothing reads that (i-20261125-210927).
   - Append-only. One call, one row.
 
   weight_note.py --kg 73.4 --time morning
   weight_note.py --kg 75.4 --time evening --scale tanita --note "same weigh-in as the Salter 75.0"
+  weight_note.py --kg 72.4 --time morning --exclude illness --note "fever 38 C since yesterday"
 """
-import argparse, json, os, sys
+import argparse, json, os, re, sys
 from datetime import date, datetime
 from pathlib import Path
 
@@ -52,6 +57,15 @@ def kg(s):
     return v
 
 
+def reason(s):
+    """One short lowercase token (illness, travel, ...). Free text belongs in --note."""
+    if not re.fullmatch(r"[a-z][a-z-]{1,19}", s):
+        raise argparse.ArgumentTypeError(
+            f"{s!r} is not a reason token (lowercase letters and '-', 2-20 chars, e.g. illness); "
+            "put the detail in --note")
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--kg", type=kg, required=True)
@@ -64,6 +78,9 @@ def main():
                     help="day of the weigh-in (YYYY-MM-DD); default today, local time")
     ap.add_argument("--approx", action="store_true",
                     help="a remembered or rounded figure, not a scale reading")
+    ap.add_argument("--exclude", type=reason, metavar="REASON",
+                    help="this reading is real but must be left out of means and trends, "
+                         "e.g. illness (fever, not eating or drinking normally)")
     ap.add_argument("--note", default="", help="context only; the clock belongs in ts, not here")
     ap.add_argument("--agent", default=os.environ.get("AGENT_ID", "unknown"))
     a = ap.parse_args()
@@ -75,6 +92,8 @@ def main():
            "scale": a.scale}
     if a.scale == "tanita":
         rec["reference"] = True
+    if a.exclude:
+        rec["exclude"] = a.exclude
     rec["note"] = a.note
 
     line = json.dumps(rec, ensure_ascii=False) + "\n"

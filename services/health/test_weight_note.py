@@ -35,6 +35,7 @@ class T(unittest.TestCase):
                          (73.4, "morning", "salter", "operator", "coach", False))
         self.assertEqual(r["date"], ts.date().isoformat())
         self.assertNotIn("reference", r)
+        self.assertNotIn("exclude", r)
         self.assertEqual(json.loads(p.stdout), r)
 
     def test_tanita_is_reference(self):
@@ -42,6 +43,23 @@ class T(unittest.TestCase):
         (r,) = self.rows()
         self.assertIs(r["reference"], True)
         self.assertEqual((r["scale"], r["note"]), ("tanita", "pair"))
+
+    def test_exclude_reason_is_a_field_before_note(self):
+        p = self.run_cli("--kg", "72.4", "--time", "morning", "--exclude", "illness",
+                         "--note", "fever 38 C")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        (r,) = self.rows()
+        self.assertEqual((r["exclude"], r["note"]), ("illness", "fever 38 C"))
+        self.assertNotIn("reference", r)
+        self.assertEqual(list(r)[-2:], ["exclude", "note"])
+
+    def test_tanita_and_exclude_carry_both(self):
+        self.run_cli("--kg", "75.5", "--time", "evening", "--scale", "tanita",
+                     "--exclude", "illness")
+        (r,) = self.rows()
+        self.assertIs(r["reference"], True)
+        self.assertEqual(r["exclude"], "illness")
+        self.assertEqual(list(r)[-3:], ["reference", "exclude", "note"])
 
     def test_unknown_time_is_null_and_date_is_kept(self):
         self.run_cli("--kg", "71", "--time", "unknown", "--date", "2026-08-23", "--approx")
@@ -62,6 +80,11 @@ class T(unittest.TestCase):
                      ["--kg", "nan", "--time", "morning"],
                      ["--kg", "heavy", "--time", "morning"],
                      ["--kg", "73.4", "--time", "morning", "--ts", "2026-01-01T00:00:00+00:00"],
+                     ["--kg", "73.4", "--time", "morning", "--exclude", "ILL today"],
+                     ["--kg", "73.4", "--time", "morning", "--exclude", ""],
+                     ["--kg", "73.4", "--time", "morning", "--exclude", "Illness"],
+                     ["--kg", "73.4", "--time", "morning", "--exclude", "x"],
+                     ["--kg", "73.4", "--time", "morning", "--exclude"],
                      ["--time", "morning"]):
             p = self.run_cli(*args)
             self.assertEqual(p.returncode, 2, args)
