@@ -13,10 +13,18 @@ errlog.die("feed X is empty: nothing to publish")                       # fatal:
 ```
 
 `errlog.die(reason)` is for a fatal condition this process cannot continue past. **Not**
-`sys.exit(reason)`: journald files an un-prefixed stderr line at `PRIORITY=6`, so the only err-level
-record a dead unit leaves is systemd's cause-free "Failed to start ...". It is not an exception, so
-the sentence above does not catch it; the mechanism and a dated measurement are in `die()`'s
-docstring. (A hand-run CLI path, where nobody queries a journal, may keep `sys.exit(reason)`.)
+`sys.exit(reason)`, and **not** `raise SystemExit(reason)` — CPython writes the same unprefixed
+stderr bytes for both, and journald files an un-prefixed stderr line at `PRIORITY=6`, so the only
+err-level record a dead unit leaves is systemd's cause-free "Failed to start ...". Neither is
+caught by the sentence above: `SystemExit` derives from `BaseException`, not `Exception`. The
+mechanism and a dated measurement are in `die()`'s docstring. (A hand-run CLI path, where nobody
+queries a journal, may keep either.)
+
+One case that is not a hand-run path: a **library** function whose callers catch its exit and read
+its message keeps its message-carrying `raise SystemExit(reason)`. `tg.creds()` is such a function —
+`docwatch.py` and `creds-check.py` both catch `BaseException` around `tg.send` *in order to* report
+the reason, and `die()` would hand them `SystemExit: 1` instead. The entry point that lets such an
+exit escape to systemd is where `die()` belongs.
 
 `errlog` prints a `<3>`/`<4>` syslog prefix, which journald turns into a real `PRIORITY` — so it
 reaches the fleet sink and `search_logs(priority=3)` with no logging config. `skip()` aggregates and
