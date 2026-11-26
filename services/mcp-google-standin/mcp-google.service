@@ -1,16 +1,20 @@
-# STAND-IN: Google Workspace MCP (read-broad, write-narrow) on claude-dev until the mcp-google LXC
-# exists. Service account + domain-wide delegation, impersonating one Workspace user; no OAuth2.1
-# (incompatible with SA), bound to the trusted subnet.
+# RETIRED -- THIS IS NOT THE UNIT THAT RUNS. Kept for reference only; do not edit it to change
+# production (a MemoryMax added here reaches nothing).
 #
-# Permissions use workspace-mcp's granular ladder, reordered by permissions-patch.py so that
-# gmail:drafts = readonly + compose (NO modify/trash) and a calendar:events level exists
-# (event-write without full calendar ACL). Re-run permissions-patch.py after any pip upgrade.
+# The stand-in on claude-dev was disabled when the mcp-google LXC went live (2026-07-04). The live
+# unit is moprox-homelab `services/mcp-google/systemd/mcp-google.service`, installed on host
+# mcp-google (CTID 107, 192.168.1.223) as /etc/systemd/system/mcp-google.service; verified
+# byte-identical to that repo copy on 2026-11-26 (i-20261126-144341). Its config is
+# /etc/mcp-google/mcp-google.env on the guest.
 #
-# DWD scope authorization (admin.google.com) gates what the SA may request — the union of all
-# enabled scopes is requested in ONE token, so an unauthorized scope breaks the WHOLE server.
-# Authorized scopes: gmail.readonly, gmail.compose, calendar.readonly, calendar.events,
-# drive.readonly, documents.readonly. To add write to another service, authorize its scope in DWD
-# FIRST, then raise its level here.
+# The *-patch.py scripts in this directory ARE live: they are run by hand against the LXC's venv
+# (see each script's docstring), e.g. from claude-dev:
+#   ssh -i ~/.ssh/claude-dev-ops agent@192.168.1.223 'sudo /opt/mcp-google/venv/bin/python -' < <patch>.py
+#   ssh ... 'sudo systemctl restart mcp-google'
+#
+# What the stand-in was: Google Workspace MCP (read-broad, write-narrow) on claude-dev. Service
+# account + domain-wide delegation, impersonating one Workspace user; no OAuth2.1 (incompatible
+# with SA), bound to the trusted subnet.
 [Unit]
 Description=Google Workspace MCP (workspace-mcp) — STAND-IN on claude-dev (read + gmail drafts + calendar events)
 After=network-online.target
