@@ -205,7 +205,18 @@ def log_rows():
 # --new-ex, i.e. a fifth alias — the gate pointed backwards at the thing it exists to stop.
 # The three keys occur on those two rows and on no other row in the log, so no prose marker and no
 # bare retraction is admitted with them.
-DOSE = strength.MEASURES + ("sets_detail", "mins", "kph", "grade_pct")
+#
+# KNOWN IS NOT WRITABLE (i-20261126-161256). The cardio keys make a word known so candidates() can
+# offer it; they do not make it a key this writer may append a strength dose under. With one
+# membership test answering both questions, `--ex treadmill-walk --sets 1 --secs 600` went from
+# rc=2 to an appended row that strength.py publishes as a strength entry (it carries MEASURES): a
+# session whose only movement is a treadmill walk, and with --kg a weighted panel and volume load.
+# Decision: cardio is outside this log's dose vocabulary. No --mins/--kph/--grade-pct — nothing
+# reads those keys, the corpus is the two September rows, and belt speed and incline now come from
+# the Technogym lane. A stated warm-up is PROSE here (--note-only), and cardio_only() is the second
+# question main() asks of a known key.
+STRENGTH_DOSE = strength.MEASURES + ("sets_detail",)
+DOSE = STRENGTH_DOSE + ("mins", "kph", "grade_pct")
 
 
 def known_ex(rows):
@@ -224,6 +235,23 @@ def known_ex(rows):
     for p in strength.PROGRESS:
         known.setdefault(p[0], [0, ""])
     return known
+
+
+def cardio_only(rows):
+    """The known keys held ONLY as cardio rows: at least one live dose row, and not one of them
+    carrying a strength dose (they are known through mins/kph/grade_pct alone). At least one row is
+    required on purpose — a strength.PROGRESS key with no rows yet has "all of zero rows" cardio,
+    and it is exactly the key a strength dose belongs under."""
+    gone = strength.superseded(rows)
+    seen = {}
+    for r in rows:
+        ex = r.get("ex")
+        if not isinstance(ex, str) or not ex.strip() or strength.rid(r) in gone:
+            continue
+        if all(r.get(k) is None for k in DOSE):
+            continue
+        seen[ex] = seen.get(ex, False) or any(r.get(k) is not None for k in STRENGTH_DOSE)
+    return {ex for ex, strong in seen.items() if not strong}
 
 
 def candidates(name, known, limit=8):
@@ -533,6 +561,14 @@ def main(argv=None):
                 ap.error("--ex %s is not a movement this log has seen. Closest existing keys:\n%s\n"
                          "if it is one of these, use that key; if it is a new movement, repeat "
                          "with --new-ex" % (name, listing))
+        # The second question, asked of a KNOWN key (direct hit or the case-only match above), and
+        # not overridden by --new-ex: the key is not new. See KNOWN IS NOT WRITABLE at DOSE.
+        if name in cardio_only(rows):
+            ap.error("--ex %s is a cardio key: this log holds it only as cardio rows "
+                     "(mins/kph/grade_pct), which the feed counts as notes. A --sets/--reps/--secs/"
+                     "--kg row under it would be published as strength work. Cardio is prose in "
+                     "this log; write it as:\n"
+                     "  --ex %s --note-only --note \"10 min, 6 kph, 4%%\"" % (name, name))
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or time.strftime("%Y-%m-%d"),
            # `name` for a dose row is already lowercased, or a known key in the log's own spelling.
