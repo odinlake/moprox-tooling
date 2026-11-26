@@ -192,8 +192,22 @@ def log_rows():
 #
 # Known = the `ex` of every LIVE row carrying a dose, plus the PROGRESS keys (so an empty log still
 # knows the weights day). Retracted rows are dropped, so a re-filed alias stops being known; prose
-# rows are dropped, so a marker (SESSION-END) never becomes a movement. `sets_detail` counts as a
-# dose beside strength.MEASURES because progress() reads those rows as work.
+# rows are dropped, so a marker (SESSION-END) never becomes a movement.
+#
+# A DOSE is wider than strength.MEASURES, and the gate's own suggestion list is why it has to be.
+# `sets_detail` is one because progress() reads those rows as work. The three CARDIO keys are the
+# others: `treadmill-walk` has two live rows (2026-09-08 and 09-10, `mins`/`kph`/`grade_pct`, the
+# second comparing its grade to the first) and not one strength.MEASURES field between them, so on
+# MEASURES alone the log's own movement is invisible to BOTH halves of this gate — the membership
+# test refuses `--ex treadmill-walk` at rc=2 as "not a movement this log has seen", and
+# candidates() cannot offer a key `known` does not hold, so a near-miss (`--ex treadmill-walking`)
+# is refused with "(nothing close; --show lists every row)". The refusal's own remedy is then
+# --new-ex, i.e. a fifth alias — the gate pointed backwards at the thing it exists to stop.
+# The three keys occur on those two rows and on no other row in the log, so no prose marker and no
+# bare retraction is admitted with them.
+DOSE = strength.MEASURES + ("sets_detail", "mins", "kph", "grade_pct")
+
+
 def known_ex(rows):
     """{ex: [live dose-row count, last date]} over the log, plus strength.PROGRESS keys at 0."""
     gone = strength.superseded(rows)
@@ -202,7 +216,7 @@ def known_ex(rows):
         ex = r.get("ex")
         if not isinstance(ex, str) or not ex.strip() or strength.rid(r) in gone:
             continue
-        if all(r.get(k) is None for k in strength.MEASURES) and r.get("sets_detail") is None:
+        if all(r.get(k) is None for k in DOSE):
             continue
         n = known.setdefault(ex, [0, ""])
         n[0] += 1
