@@ -15,6 +15,10 @@ RULES OF USE (see also private-data/health/README.md, "weight.jsonl")
     operator means it, or `unknown` (written as null).
   - Two scales. The Salter is the primary series and the default. A Tanita reading is
     `--scale tanita` and is written with "reference": true, which readers exclude from means.
+  - Every Tanita row carries "model", written here without being asked: HD-395 (the current
+    Tanita, TANITA_MODELS[0]) unless `--model BC-730` says the old one was used. Do not put the
+    model in --note. The Salter's model is not on record: its rows have no "model", and --model
+    with the Salter is refused (i-20261126-071240).
   - --approx is for a figure the operator quoted from memory, not a scale reading.
   - --exclude REASON marks a reading that is real but must be left out of means and trends,
     e.g. `--exclude illness` (fever, not eating or drinking normally). REASON is one short
@@ -37,6 +41,10 @@ LOG = Path(os.environ.get("WEIGHT_LOG",
                           Path.home() / "projects/private-data/health/weight.jsonl"))
 
 KG_MIN, KG_MAX = 40.0, 150.0
+
+# The first entry is the Tanita in use and the default. When the reference device changes
+# again, add the new model at the front: nothing else needs to change.
+TANITA_MODELS = ("HD-395", "BC-730")
 
 
 def iso_date(s):
@@ -74,6 +82,9 @@ def main():
                          "'unknown' writes null")
     ap.add_argument("--scale", choices=["salter", "tanita"], default="salter",
                     help="tanita rows are also written with reference: true")
+    ap.add_argument("--model", choices=TANITA_MODELS,
+                    help=f"which Tanita (with --scale tanita only); default {TANITA_MODELS[0]}, "
+                         "the current one")
     ap.add_argument("--date", type=iso_date,
                     help="day of the weigh-in (YYYY-MM-DD); default today, local time")
     ap.add_argument("--approx", action="store_true",
@@ -84,6 +95,9 @@ def main():
     ap.add_argument("--note", default="", help="context only; the clock belongs in ts, not here")
     ap.add_argument("--agent", default=os.environ.get("AGENT_ID", "unknown"))
     a = ap.parse_args()
+    if a.model and a.scale != "tanita":
+        ap.error("--model names a Tanita and needs --scale tanita; "
+                 "the Salter's model is not on record")
 
     rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "date": a.date or date.today().isoformat(),
@@ -91,6 +105,7 @@ def main():
            "kg": a.kg, "approx": a.approx, "source": "operator", "agent": a.agent,
            "scale": a.scale}
     if a.scale == "tanita":
+        rec["model"] = a.model or TANITA_MODELS[0]
         rec["reference"] = True
     if a.exclude:
         rec["exclude"] = a.exclude

@@ -36,6 +36,7 @@ class T(unittest.TestCase):
         self.assertEqual(r["date"], ts.date().isoformat())
         self.assertNotIn("reference", r)
         self.assertNotIn("exclude", r)
+        self.assertNotIn("model", r)
         self.assertEqual(json.loads(p.stdout), r)
 
     def test_tanita_is_reference(self):
@@ -43,6 +44,20 @@ class T(unittest.TestCase):
         (r,) = self.rows()
         self.assertIs(r["reference"], True)
         self.assertEqual((r["scale"], r["note"]), ("tanita", "pair"))
+
+    def test_tanita_model_defaults_to_the_current_one_right_after_scale(self):
+        self.run_cli("--kg", "75.4", "--time", "evening", "--scale", "tanita")
+        (r,) = self.rows()
+        self.assertEqual(r["model"], "HD-395")
+        keys = list(r)
+        self.assertEqual(keys[keys.index("scale"):], ["scale", "model", "reference", "note"])
+
+    def test_tanita_model_can_name_the_old_one(self):
+        p = self.run_cli("--kg", "75.4", "--time", "evening", "--scale", "tanita",
+                         "--model", "BC-730")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        (r,) = self.rows()
+        self.assertEqual((r["scale"], r["model"]), ("tanita", "BC-730"))
 
     def test_exclude_reason_is_a_field_before_note(self):
         p = self.run_cli("--kg", "72.4", "--time", "morning", "--exclude", "illness",
@@ -85,6 +100,10 @@ class T(unittest.TestCase):
                      ["--kg", "73.4", "--time", "morning", "--exclude", "Illness"],
                      ["--kg", "73.4", "--time", "morning", "--exclude", "x"],
                      ["--kg", "73.4", "--time", "morning", "--exclude"],
+                     ["--kg", "73.4", "--time", "morning", "--model", "HD-395"],   # salter
+                     ["--kg", "73.4", "--time", "morning", "--scale", "salter", "--model", "BC-730"],
+                     ["--kg", "75.4", "--time", "evening", "--scale", "tanita", "--model", "hd395"],
+                     ["--kg", "75.4", "--time", "evening", "--scale", "tanita", "--model"],
                      ["--time", "morning"]):
             p = self.run_cli(*args)
             self.assertEqual(p.returncode, 2, args)
