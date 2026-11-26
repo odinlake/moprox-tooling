@@ -7,10 +7,10 @@
 # byte-identical to that repo copy on 2026-11-26 (i-20261126-144341). Its config is
 # /etc/mcp-google/mcp-google.env on the guest.
 #
-# The *-patch.py scripts in this directory ARE live: they are run by hand against the LXC's venv
-# (see each script's docstring), e.g. from claude-dev:
-#   ssh -i ~/.ssh/claude-dev-ops agent@192.168.1.223 'sudo /opt/mcp-google/venv/bin/python -' < <patch>.py
-#   ssh ... 'sudo systemctl restart mcp-google'
+# The *-patch.py scripts that used to be in this directory moved to moprox-homelab
+# `services/mcp-google/` on 2026-11-26 (i-20261126-202531): all five patches to the live
+# workspace-mcp and `apply-patches.sh`, which runs them in order, live there and only there. See
+# that directory's README ("Patches to workspace-mcp").
 #
 # What the stand-in was: Google Workspace MCP (read-broad, write-narrow) on claude-dev. Service
 # account + domain-wide delegation, impersonating one Workspace user; no OAuth2.1 (incompatible
