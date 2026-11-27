@@ -624,5 +624,5 @@ if __name__ == "__main__":
         n, new, note = pull()
         print("WATTBIKE: %s" % note)
     except Exception as e:
-        print("WATTBIKE: direct pull failed: %s: %s" % (type(e).__name__, e))
-        sys.exit(1)
+        # wattbike-pull.service runs this: a fatal exit must reach the journal at err (CLAUDE.md).
+        errlog.die("wattbike: direct pull failed", e)

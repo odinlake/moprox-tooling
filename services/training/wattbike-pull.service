@@ -1,0 +1,21 @@
+# Whole-store Wattbike Hub pull, once a day, independent of Polar. Triggered by wattbike-pull.timer.
+# Install to /etc/systemd/system/ (tooling-pull only refreshes units already installed there).
+#
+# Why it exists (i-20261127-131157): the only other caller of the pull is wattbike.start() in
+# services/forward/polar_fetch.py, gated on Polar reporting a ride. So a ride done with the app
+# paired but no Polar strap, a pull that failed or was killed, and Wattbike closing the anonymous
+# read all waited for "the next Polar ride", which in 2026-10-19..11-27 was 39+ days away. pull() is
+# a whole-store idempotent sync (skips files it holds); a quiet day costs 2 anonymous requests. Its
+# journal line ("WATTBIKE: N sessions, 0 new files") is the standing answer to "quiet or stalled",
+# and a closed route is a failed unit with its cause at err. Deliberately NOT a freshness lane: the
+# store cannot grow without a ride, so a lane would fire on every idle week.
+[Unit]
+Description=moprox Wattbike Hub pull (daily whole-store sync, independent of Polar)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=mikael
+Environment=HOME=/home/mikael
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/moprox-tooling/services/training/wattbike.py
