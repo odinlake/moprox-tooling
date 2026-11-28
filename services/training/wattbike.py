@@ -433,6 +433,23 @@ def pull(dest=None):
         note += " [anon: %s]" % anon_note
     if missed:
         note += ", %d unreadable: %s" % (len(missed), ",".join(missed[:6]))
+        # The note is a PRIORITY=6 success line, so until now a file the Hub refused reached the
+        # journal at no level at all -- and the index above has ALREADY been written naming it, so
+        # sessions.json points at a file the store does not hold, which is the exact invariant the
+        # comment above that write states it keeps. Ordering the write last protects against a
+        # crash, not against a refusal. An unexpected condition reaches the journal at err level
+        # (CLAUDE.md), and a quiet day's note is byte-identical with this route open or shut, so
+        # the "quiet or stalled" oracle wattbike-pull.service documents cannot see it
+        # (moprox-memory/wattbike-pull-files-route-closure-invisible).
+        #
+        # Loud, NOT fatal, which is the same call _anonymous_pass's caller makes above: the user
+        # pass succeeded and landed every other file, and failing the unit would throw that away.
+        # The summary-only rows the serial route recovers cannot reach here -- they carry no
+        # sessionData, so _files_of yields nothing for them, and the store bears that out (13
+        # rows, 47 files named, 47 held), so this does not fire on the known 404 those names take.
+        errlog.err("wattbike: the files route refused %d per-second file(s) the index now names, "
+                   "so sessions.json is ahead of raw/ for %s -- the ride is in the index with no "
+                   "per-revolution data behind it" % (len(missed), ",".join(missed)))
     return len(rows), len(new), note
 
 
