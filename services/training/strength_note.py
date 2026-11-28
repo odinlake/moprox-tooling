@@ -83,6 +83,15 @@ import strength
 LOG = Path(os.environ.get("STRENGTH_LOG",
                           Path.home() / "projects/private-data/training/strength.jsonl"))
 
+# The --agent gate's two registries and its name for itself; see known_agents()/check_agent().
+# `agent` is part of a row's content id, which is what --supersedes takes, so a second spelling of
+# one writer forks the ids too.
+WHO = "strength_note"
+AGENT_DIRS = Path.home() / "projects/private-data/agents"
+SESSION_UNITS = Path(__file__).resolve().parents[1] / "sessions"
+UNKNOWN_AGENT = "unknown"
+NO_AGENT = ("", UNKNOWN_AGENT)
+
 
 # Where the load CAME FROM, as a field rather than as a sentence. A pulldown or row is a pin the
 # operator may never read back, so "35 kg" in this log is sometimes an observation and sometimes the
@@ -289,6 +298,55 @@ def candidates(name, known, limit=8):
 # This LABELS and never drops, the same way health_note.py --show does and for the same reason: the
 # feed drops a retracted row because it is publishing a total, but this output is read to find out
 # what the file says, and a correction is only legible next to what it corrects.
+def known_agents():
+    """This estate's agent ids: the agents/ directories, plus the moprox-dev@ instance ids.
+
+    [] if EITHER registry comes up empty. A half-read vocabulary is not a vocabulary -- with the
+    directories alone the dev sessions are strangers, with the units alone every named agent is --
+    and refusing a legitimate id costs the observation. The caller reports that case at err.
+
+    The same function as health_note.py's and weight_note.py's, copied: this is the third writer
+    their docstrings name, and it is copied anyway because extracting to lib/ rewrites two landed
+    writers for no behaviour (i-20261128-131306). A fourth copy is not defensible; extract then.
+    """
+    try:
+        named = {p.name for p in AGENT_DIRS.iterdir() if p.is_dir()}
+    except OSError:
+        named = set()
+    # moprox-dev@<i>.conf, moprox-dev-cycle@<i>.timer: the instance sits between the @ and the
+    # suffix, and a template (`moprox-dev@.service`) leaves it empty.
+    insts = {f.name.split("@", 1)[1].rsplit(".", 1)[0]
+             for f in SESSION_UNITS.glob("moprox-dev*@*.*")}
+    insts.discard("")
+    if not named or not insts:
+        return []
+    return sorted(named | insts)
+
+
+def check_agent(ap, agent):
+    """Refuse an `agent` this estate has no id for. Nothing is appended on a refusal.
+
+    Unvalidatable is not the same as valid. If the vocabulary cannot be read the observation is
+    still worth more than its provenance, so the row IS written -- but that reaches the journal at
+    err, because a provenance key that quietly stopped being checked is how this field forked in
+    the first place.
+
+    Absence is exempt, and here absence is "" as well as "unknown": this writer's --agent defaults
+    to $AGENT_ID or "", and an empty agent is DROPPED from the row, not written.
+    """
+    if agent in NO_AGENT:
+        return
+    known = known_agents()
+    if not known:
+        errlog.err("%s: cannot read this estate's agent ids (%s + %s), so --agent %r was written "
+                   "UNCHECKED" % (WHO, AGENT_DIRS, SESSION_UNITS, agent))
+        return
+    if agent not in known:
+        ap.error("--agent %s is not an agent id of this estate (%s).\nPass your AGENT_ID, not the "
+                 "persona name a prompt gave you; omitting --agent uses AGENT_ID=%s."
+                 % (agent, ", ".join(known), os.environ.get("AGENT_ID", "") or "(unset)"))
+
+
 def show():
     """Print the log as JSONL, every row carrying its `rid`, retracted rows their `superseded_by`."""
     rows = log_rows()
@@ -409,6 +467,8 @@ def main(argv=None):
 
     if a.show:
         return show()
+    # After --show: a read writes no agent, so it has nothing to refuse.
+    check_agent(ap, a.agent)
     # A RETRACTION ON ITS OWN: --supersedes and not one measurement. The three shape gates below do
     # not apply to it, because it HAS no shape — it asserts only that the named row did not happen
     # as written. Until now they were unconditional, so the sanctioned writer could not express it:
