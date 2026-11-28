@@ -42,6 +42,36 @@ LOG = Path(os.environ.get("WEIGHT_LOG",
 
 KG_MIN, KG_MAX = 40.0, 150.0
 
+# The same gate as health_note.py's, on the same field, for the log next to it. `agent` is this
+# row's only provenance key and took whatever the caller typed; this log has not forked and the
+# only reason is that its one documented invocation spells out `--agent coach`, while both logs
+# are written by the same session. On 2026-11-25 the coach session started typing its PERSONA name --
+# `--agent odinlake-ai-coach`, which is what dev-launch.sh's prompt and agents/coach/CLAUDE.md
+# call it -- in place of its agent id, mid-episode and inside one session instance. The live
+# illness runs to 14 rows: 3 under `coach` (reading as over on the morning of the 25th) and 11
+# under the new spelling (missing the onset row and the 38 C reading), so NEITHER spelling
+# returns the episode. moprox-memory/health-hints-writer-identity-forked.
+#
+# TWO registries, because neither half is this estate's vocabulary on its own and a gate on one
+# half is a regression. `private-data/agents/<id>/` is where a NAMED agent has its directory --
+# coach, analyst, burndown and nine others. The three shared-context dev sessions are not there:
+# moprox-dev@.service exports AGENT_ID=%i, and one|two|three share one working directory and one
+# memory dir, so they have no directory of their own (services/sessions/README.md). They are this
+# log's 2nd and 3rd most prolific writers -- `one` 16 rows, `two` 8 of 132 -- so a gate reading
+# only the directories would refuse the dev sessions their OWN exported id and drop the
+# observation. The instances are declared by the unit files beside this script, which is where
+# %i comes from.
+#
+# "unknown" stays legal. It is not a claim about a writer; it is the absence AGENT_ID leaves when
+# nobody exported one, exactly as `date_source: unknown` is the absence of a date's provenance,
+# and refusing it would cost a hand-run its observation to protect a field nothing reads yet.
+# Read from Path.home() and NOT from LOG, which $WEIGHT_LOG moves for the tests: the registry
+# is a property of the estate, not of wherever the log was pointed.
+WHO = "weight_note"
+AGENT_DIRS = Path.home() / "projects/private-data/agents"
+SESSION_UNITS = Path(__file__).resolve().parents[1] / "sessions"
+UNKNOWN_AGENT = "unknown"
+
 # The first entry is the Tanita in use and the default. When the reference device changes
 # again, add the new model at the front: nothing else needs to change.
 TANITA_MODELS = ("HD-395", "BC-730")
@@ -74,6 +104,52 @@ def reason(s):
     return s
 
 
+def known_agents():
+    """This estate's agent ids: the agents/ directories, plus the moprox-dev@ instance ids.
+
+    [] if EITHER registry comes up empty. A half-read vocabulary is not a vocabulary -- with the
+    directories alone the dev sessions are strangers, with the units alone every named agent is --
+    and refusing a legitimate id costs the observation. The caller reports that case at err.
+
+    Deliberately duplicated in weight_note.py rather than shared, for the same reason rid() is
+    duplicated from strength.py: it is two directory listings, and the alternative is a new module
+    under lib/ that six long-lived daemons import at module scope. Extract at a third writer.
+    """
+    try:
+        named = {p.name for p in AGENT_DIRS.iterdir() if p.is_dir()}
+    except OSError:
+        named = set()
+    # moprox-dev@<i>.conf, moprox-dev-cycle@<i>.timer: the instance sits between the @ and the
+    # suffix, and a template (`moprox-dev@.service`) leaves it empty.
+    insts = {f.name.split("@", 1)[1].rsplit(".", 1)[0]
+             for f in SESSION_UNITS.glob("moprox-dev*@*.*")}
+    insts.discard("")
+    if not named or not insts:
+        return []
+    return sorted(named | insts)
+
+
+def check_agent(ap, agent):
+    """Refuse an `agent` this estate has no id for. Nothing is appended on a refusal.
+
+    Unvalidatable is not the same as valid. If the vocabulary cannot be read the observation is
+    still worth more than its provenance, so the row IS written -- but that reaches the journal at
+    err, because a provenance key that quietly stopped being checked is how this field forked in
+    the first place.
+    """
+    if agent == UNKNOWN_AGENT:
+        return
+    known = known_agents()
+    if not known:
+        errlog.err("%s: cannot read this estate's agent ids (%s + %s), so --agent %r was written "
+                   "UNCHECKED" % (WHO, AGENT_DIRS, SESSION_UNITS, agent))
+        return
+    if agent not in known:
+        ap.error("--agent %s is not an agent id of this estate (%s).\nPass your AGENT_ID, not the "
+                 "persona name a prompt gave you; omitting --agent uses AGENT_ID=%s."
+                 % (agent, ", ".join(known), os.environ.get("AGENT_ID", UNKNOWN_AGENT)))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--kg", type=kg, required=True)
@@ -93,8 +169,12 @@ def main():
                     help="this reading is real but must be left out of means and trends, "
                          "e.g. illness (fever, not eating or drinking normally)")
     ap.add_argument("--note", default="", help="context only; the clock belongs in ts, not here")
-    ap.add_argument("--agent", default=os.environ.get("AGENT_ID", "unknown"))
+    ap.add_argument("--agent", default=os.environ.get("AGENT_ID", UNKNOWN_AGENT),
+                    help="which agent wrote this, by its estate AGENT_ID and not by its persona "
+                         "name; checked against the agent directories in private-data and the "
+                         "moprox-dev@ instances")
     a = ap.parse_args()
+    check_agent(ap, a.agent)
     if a.model and a.scale != "tanita":
         ap.error("--model names a Tanita and needs --scale tanita; "
                  "the Salter's model is not on record")

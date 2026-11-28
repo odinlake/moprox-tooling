@@ -87,6 +87,24 @@ class T(unittest.TestCase):
         self.run_cli("--kg", "74.4", "--time", "evening")
         self.assertEqual([r["kg"] for r in self.rows()], [73.4, 74.4])
 
+    def test_persona_name_is_refused_and_writes_nothing(self):
+        """--agent takes an estate AGENT_ID, not the persona name a prompt gave the session."""
+        if not (Path.home() / "projects/private-data/agents/coach").is_dir():
+            self.skipTest("no agent registry on this host")
+        p = self.run_cli("--kg", "73.4", "--time", "morning", "--agent", "odinlake-ai-coach")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertFalse(self.log.exists())
+        self.assertIn("coach", p.stderr)
+
+    def test_dev_session_instance_ids_are_agent_ids(self):
+        """one|two|three have no agents/ directory: moprox-dev@.service exports them as %i."""
+        if not (Path.home() / "projects/private-data/agents/coach").is_dir():
+            self.skipTest("no agent registry on this host")
+        for inst in ("one", "two", "three"):
+            p = self.run_cli("--kg", "73.4", "--time", "morning", "--agent", inst)
+            self.assertEqual(p.returncode, 0, (inst, p.stderr))
+        self.assertEqual([r["agent"] for r in self.rows()], ["one", "two", "three"])
+
     def test_refusals_write_nothing(self):
         for args in (["--kg", "73.4"],                                        # no --time
                      ["--kg", "73.4", "--time", "noon"],
